@@ -148,6 +148,11 @@ struct ControlPanelView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Text("Friends need Homebrew openai-whisper installed separately unless you bundle a custom runtime.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
