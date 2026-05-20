@@ -68,6 +68,10 @@ final class AppState {
         records.first { $0.status == .transcribed }
     }
 
+    var analytics: TranscriptAnalytics {
+        TranscriptAnalytics(records: records)
+    }
+
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
@@ -212,7 +216,7 @@ final class AppState {
             let text = try await whisperRunner.transcribe(
                 audioURL: URL(fileURLWithPath: record.audioFilePath),
                 configuration: WhisperConfiguration(command: whisperCommand, argumentsTemplate: whisperArguments)
-            )
+            ).plainTranscriptText
             try store.markTranscribed(id: record.id, text: text)
             records = store.records
             selectedRecordID = record.id
@@ -250,6 +254,7 @@ final class AppState {
 
     private func migrateWhisperDefaultsIfNeeded() {
         let oldDefaultArguments = "\"{audio}\" --output_format txt --output_dir \"{output}\""
+        let tinyDefaultArguments = "\"{audio}\" --model tiny --language en --fp16 False --output_format txt --output_dir \"{output}\""
         let currentCommand = UserDefaults.standard.string(forKey: Defaults.whisperCommand)
         let currentArguments = UserDefaults.standard.string(forKey: Defaults.whisperArguments)
 
@@ -257,7 +262,7 @@ final class AppState {
             UserDefaults.standard.set(Self.defaultWhisperCommand, forKey: Defaults.whisperCommand)
         }
 
-        if currentArguments == nil || currentArguments == oldDefaultArguments {
+        if currentArguments == nil || currentArguments == oldDefaultArguments || currentArguments == tinyDefaultArguments {
             UserDefaults.standard.set(Self.defaultWhisperArguments, forKey: Defaults.whisperArguments)
         }
     }
@@ -291,7 +296,7 @@ final class AppState {
     }
 
     private static var defaultWhisperArguments: String {
-        "\"{audio}\" --model tiny --language en --fp16 False --output_format txt --output_dir \"{output}\""
+        "\"{audio}\" --model base --language en --fp16 False --output_format txt --output_dir \"{output}\""
     }
 }
 

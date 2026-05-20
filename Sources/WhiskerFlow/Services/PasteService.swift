@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import WhiskerFlowCore
 
 @MainActor
 struct PasteService {
@@ -17,7 +18,7 @@ struct PasteService {
     func paste(_ text: String, into application: NSRunningApplication?) -> Bool {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        pasteboard.setString(text.plainTranscriptText, forType: .string)
 
         guard hasAccessibilityPermission else {
             requestAccessibilityPermission()

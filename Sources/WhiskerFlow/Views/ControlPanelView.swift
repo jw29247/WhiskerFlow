@@ -1,4 +1,5 @@
 import SwiftUI
+import WhiskerFlowCore
 
 struct ControlPanelView: View {
     @Bindable var appState: AppState
@@ -15,6 +16,8 @@ struct ControlPanelView: View {
                 inputSection
                 Divider()
                 retrySection
+                Divider()
+                statsSection
                 Divider()
                 whisperSection
                 Divider()
@@ -49,7 +52,7 @@ struct ControlPanelView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Fast mode uses Whisper tiny by default.")
+            Text("Fast mode uses Whisper base by default.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -141,10 +144,21 @@ struct ControlPanelView: View {
             TextField("Arguments", text: $appState.whisperArguments)
                 .textFieldStyle(.roundedBorder)
 
-            Text("Default is tiny model for speed. Use {audio} for the recording path and {output} for a temporary output folder.")
+            Text("Default is base model for fast, more accurate dictation. Use {audio} for the recording path and {output} for a temporary output folder.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var statsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Dictation Stats")
+                .font(.headline)
+
+            StatRow(title: "All time", stats: appState.analytics.allTime)
+            StatRow(title: "This week", stats: appState.analytics.thisWeek)
+            StatRow(title: "Last 30 days", stats: appState.analytics.lastMonth)
         }
     }
 
@@ -162,5 +176,34 @@ struct ControlPanelView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+private struct StatRow: View {
+    let title: String
+    let stats: TranscriptStats
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("\(stats.wordCount) words")
+                    .monospacedDigit()
+                Text("\(formattedMinutes) typing saved")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var formattedMinutes: String {
+        let minutes = stats.estimatedTypingMinutes()
+
+        if minutes < 1, stats.wordCount > 0 {
+            return "<1 min"
+        }
+
+        return "\(Int(minutes.rounded())) min"
     }
 }
