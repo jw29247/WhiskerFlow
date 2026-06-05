@@ -15,14 +15,20 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>0.2.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>WhiskerFlow records microphone audio while you hold the fn key so it can transcribe and paste your dictation.</string>
+    <string>WhiskerFlow records microphone audio while you hold your dictation key so it can transcribe and paste what you say.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>WhiskerFlow uses on-device speech recognition as a built-in fallback transcription engine.</string>
 </dict>
 </plist>

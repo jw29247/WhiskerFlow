@@ -3,39 +3,80 @@ import WhiskerFlowCore
 
 struct ContentView: View {
     @Bindable var appState: AppState
+    @State private var showOnboarding = false
+    @State private var showStats = false
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $appState.selectedRecordID) {
-                Section("Transcripts") {
-                    ForEach(appState.records) { record in
+            VStack(spacing: 0) {
+                StatusHeader(appState: appState) { showOnboarding = true }
+                Divider()
+                List(selection: $appState.selectedRecordID) {
+                    ForEach(appState.filteredRecords) { record in
                         TranscriptRow(record: record)
                             .tag(record.id)
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    appState.delete(record)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                    }
+                }
+                .listStyle(.sidebar)
+                .overlay {
+                    if appState.records.isEmpty {
+                        ContentUnavailableView(
+                            "No Transcripts",
+                            systemImage: "waveform",
+                            description: Text("Hold \(appState.settings.hotkey.displayName) to create your first recording.")
+                        )
                     }
                 }
             }
-            .navigationSplitViewColumnWidth(min: 260, ideal: 300)
-            .toolbar {
-                ToolbarItem {
-                    Button {
-                        appState.refreshDevices()
-                    } label: {
-                        Label("Refresh Mics", systemImage: "arrow.clockwise")
-                    }
-                    .help("Refresh Microphones")
-                }
-            }
-        } content: {
-            ControlPanelView(appState: appState)
-                .navigationSplitViewColumnWidth(min: 360, ideal: 420)
+            .navigationSplitViewColumnWidth(min: 280, ideal: 320)
+            .searchable(text: $appState.searchText, placement: .sidebar, prompt: "Search transcripts")
         } detail: {
-            TranscriptDetailView(record: appState.selectedRecord) { text in
-                appState.paste(text)
-            } retry: { record in
-                appState.retry(record)
+            TranscriptDetailView(appState: appState)
+                .navigationSplitViewColumnWidth(min: 420, ideal: 560)
+        }
+        .toolbar {
+            ToolbarItem {
+                Button {
+                    showStats = true
+                } label: {
+                    Label("Stats", systemImage: "chart.bar")
+                }
+                .help("Dictation stats")
+            }
+            ToolbarItem {
+                SettingsLink {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                .help("Settings")
             }
         }
-        .background(.regularMaterial)
+        .task {
+            appState.start()
+            applyDockPolicy(appState.settings.showDockIcon)
+            if appState.records.isEmpty && !appState.hasAccessibilityPermission {
+                showOnboarding = true
+            }
+        }
+        .onChange(of: appState.settings.showDockIcon) { _, newValue in
+            applyDockPolicy(newValue)
+        }
+        .sheet(isPresented: $showOnboarding) {
+            OnboardingView(appState: appState)
+        }
+        .sheet(isPresented: $showStats) {
+            StatsView(appState: appState)
+        }
+    }
+
+    private func applyDockPolicy(_ showDock: Bool) {
+        NSApp.setActivationPolicy(showDock ? .regular : .accessory)
     }
 }
 
@@ -43,47 +84,86 @@ private struct TranscriptRow: View {
     let record: TranscriptRecord
 
     var body: some View {
-        Label {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .top, spacing: 10) {
+            icon
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .lineLimit(1)
-                Text(record.createdAt, style: .date)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .font(.callout)
+                HStack(spacing: 6) {
+                    Text(record.createdAt, style: .date)
+                    if record.status == .transcribed, record.wordCount > 0 {
+                        Text("· \(record.wordCount) words")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
-        } icon: {
-            Image(systemName: icon)
-                .foregroundStyle(color)
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        switch record.status {
+        case .transcribed:
+            Image(systemName: "quote.bubble").foregroundStyle(Color.accentColor)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+        case .transcribing, .recording:
+            ProgressView().controlSize(.small)
         }
     }
 
     private var title: String {
-        if !record.text.isEmpty {
-            return record.text
-        }
-
-        if case .failed(let message) = record.status {
-            return message
-        }
-
-        return "Untitled transcript"
-    }
-
-    private var icon: String {
+        if !record.text.isEmpty { return record.text }
         switch record.status {
-        case .transcribed:
-            "quote.bubble"
-        case .failed:
-            "exclamationmark.arrow.triangle.2.circlepath"
+        case .transcribing: return "Transcribing…"
+        case .recording: return "Recording…"
+        case .failed(let message): return message
+        case .transcribed: return "Untitled transcript"
         }
     }
+}
 
-    private var color: Color {
-        switch record.status {
-        case .transcribed:
-            .accentColor
-        case .failed:
-            .orange
+/// Compact status + permissions banner shown at the top of the sidebar.
+private struct StatusHeader: View {
+    @Bindable var appState: AppState
+    var openOnboarding: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: appState.isRecording ? "waveform.circle.fill" : "waveform.circle")
+                    .font(.title2)
+                    .foregroundStyle(appState.isRecording ? .red : .primary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("WhiskerFlow")
+                        .font(.headline)
+                    Text(appState.statusMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if appState.isRecording {
+                    LevelMeter(level: appState.audioLevel)
+                } else if appState.isTranscribing {
+                    ProgressView().controlSize(.small)
+                }
+            }
+
+            if !appState.hasAccessibilityPermission || !appState.hasMicrophonePermission {
+                Button(action: openOnboarding) {
+                    Label("Finish setup", systemImage: "exclamationmark.shield")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(.orange)
+            }
         }
+        .padding(12)
     }
 }

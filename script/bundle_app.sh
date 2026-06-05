@@ -25,6 +25,18 @@ cp "$BINARY" "$APP_BINARY"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 printf "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 
+if [[ -f "$ROOT_DIR/Resources/AppIcon.icns" ]]; then
+  cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+fi
+
+# Bundle SwiftPM dependency resource bundles (e.g. WhisperKit) so the app is self-contained.
+BUILD_DIR="$(dirname "$BINARY")"
+shopt -s nullglob
+for bundle in "$BUILD_DIR"/*.bundle; do
+  cp -R "$bundle" "$APP_BUNDLE/Contents/Resources/"
+done
+shopt -u nullglob
+
 codesign --force --deep --sign - "$APP_BUNDLE" >/dev/null
 xattr -dr com.apple.quarantine "$APP_BUNDLE" 2>/dev/null || true
 

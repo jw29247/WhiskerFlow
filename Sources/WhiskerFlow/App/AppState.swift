@@ -1,62 +1,95 @@
 import AppKit
-import AVFoundation
 import Foundation
 import Observation
 import WhiskerFlowCore
+
+enum AppStatus: Equatable {
+    case idle
+    case preparingMic
+    case recording
+    case transcribing
+    case success(String)
+    case failure(String)
+
+    var isBusy: Bool {
+        switch self {
+        case .preparingMic, .recording, .transcribing: return true
+        case .idle, .success, .failure: return false
+        }
+    }
+}
+
+enum ModelState: Equatable {
+    case unloaded
+    case preparing
+    case ready
+    case failed(String)
+}
 
 @MainActor
 @Observable
 final class AppState {
     var records: [TranscriptRecord] = []
     var selectedRecordID: TranscriptRecord.ID?
+    var status: AppStatus = .idle
     var isRecording = false
     var isTranscribing = false
-    var statusMessage = "Hold fn to dictate"
-    var lastError: String?
+    var audioLevel: Float = 0
+    var recordingStartedAt: Date?
+    var modelState: ModelState = .unloaded
     var hasAccessibilityPermission = false
+    var hasMicrophonePermission = false
     var devices: [AudioInputDevice] = []
+    var lastError: String?
+    var searchText = ""
 
-    var selectedDeviceID: String {
-        get { UserDefaults.standard.string(forKey: Defaults.selectedDeviceID) ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: Defaults.selectedDeviceID) }
-    }
-
-    var whisperCommand: String {
-        get { UserDefaults.standard.string(forKey: Defaults.whisperCommand) ?? Self.defaultWhisperCommand }
-        set { UserDefaults.standard.set(newValue, forKey: Defaults.whisperCommand) }
-    }
-
-    var whisperArguments: String {
-        get {
-            UserDefaults.standard.string(forKey: Defaults.whisperArguments)
-                ?? Self.defaultWhisperArguments
-        }
-        set { UserDefaults.standard.set(newValue, forKey: Defaults.whisperArguments) }
-    }
+    var settings: AppSettings
 
     private let store: TranscriptStore
     private let recorder = AudioCaptureService()
-    private let whisperRunner = WhisperRunner()
+    private let transcription = TranscriptionService()
     private let pasteService = PasteService()
     private let soundService = SoundService()
-    private var functionKeyMonitor: FunctionKeyMonitor?
+    private var hotkeyMonitor: HotkeyMonitor?
+    private var hudController: RecordingHUDController?
     private var hasStarted = false
     private var isPreparingRecording = false
     private var recordingIntentActive = false
     private var pasteTargetApplication: NSRunningApplication?
-    private var activeTranscriptionIDs: Set<TranscriptRecord.ID> = []
+    private var activeTranscriptionIDs: Set<UUID> = []
 
-    init(store: TranscriptStore = .defaultStore()) {
+    init(settings: AppSettings? = nil, store: TranscriptStore = .defaultStore()) {
+        self.settings = settings ?? AppSettings()
         self.store = store
+        recorder.onLevel = { [weak self] level in
+            self?.audioLevel = level
+        }
+    }
+
+    // MARK: - Derived state
+
+    var statusMessage: String {
+        switch status {
+        case .idle:
+            switch modelState {
+            case .preparing: return "Preparing \(settings.model.displayName.lowercased())…"
+            case .failed(let message): return message
+            default: return "Hold \(settings.hotkey.displayName) to dictate"
+            }
+        case .preparingMic: return "Preparing microphone…"
+        case .recording: return "Recording…"
+        case .transcribing: return "Transcribing…"
+        case .success(let message): return message
+        case .failure(let message): return message
+        }
     }
 
     var retryQueue: [TranscriptRecord] {
-        records.filter { record in
-            if case .failed = record.status {
-                return true
-            }
-            return false
-        }
+        records.filter { $0.status.isFailed }
+    }
+
+    var filteredRecords: [TranscriptRecord] {
+        records.matching(searchText)
     }
 
     var selectedRecord: TranscriptRecord? {
@@ -72,31 +105,62 @@ final class AppState {
         TranscriptAnalytics(records: records)
     }
 
+    var dailyWordCounts: [DailyWordCount] {
+        records.dailyWordCounts(days: 14)
+    }
+
+    var recordingElapsed: TimeInterval {
+        guard let recordingStartedAt else { return 0 }
+        return Date().timeIntervalSince(recordingStartedAt)
+    }
+
+    // MARK: - Lifecycle
+
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
 
         do {
-            migrateWhisperDefaultsIfNeeded()
             try store.load()
             normalizeInterruptedRecords()
             records = store.records
             selectedRecordID = records.first?.id
             refreshAccessibilityPermission()
             refreshDevices()
-            startFunctionKeyMonitor()
+            startHotkeyMonitor()
+            hudController = RecordingHUDController(appState: self)
+            recorder.prewarm(deviceID: settings.selectedDeviceID.isEmpty ? nil : settings.selectedDeviceID)
+            warmUpEngine()
         } catch {
             lastError = error.localizedDescription
-            statusMessage = "Could not load transcript history"
+            status = .failure("Could not load transcript history")
         }
+    }
+
+    func warmUpEngine() {
+        guard settings.engine == .whisperKit else {
+            modelState = .ready
+            return
+        }
+        modelState = .preparing
+        Task {
+            let ready = await transcription.prepare(kind: settings.engine, model: settings.model)
+            modelState = ready ? .ready : .failed("Could not load \(settings.model.displayName). Apple Speech will be used.")
+        }
+    }
+
+    func reloadHotkey() {
+        hotkeyMonitor?.update(trigger: settings.hotkey)
     }
 
     func refreshDevices() {
         devices = AudioCaptureService.availableInputDevices()
-        if selectedDeviceID.isEmpty {
-            selectedDeviceID = devices.first?.id ?? ""
+        if settings.selectedDeviceID.isEmpty || !devices.contains(where: { $0.id == settings.selectedDeviceID }) {
+            settings.selectedDeviceID = devices.first?.id ?? ""
         }
     }
+
+    // MARK: - Permissions
 
     func refreshAccessibilityPermission() {
         hasAccessibilityPermission = pasteService.hasAccessibilityPermission
@@ -107,12 +171,42 @@ final class AppState {
         refreshAccessibilityPermission()
     }
 
+    func requestMicrophonePermission() async {
+        hasMicrophonePermission = await AudioCaptureService.requestMicrophoneAccess()
+        if hasMicrophonePermission {
+            refreshDevices()
+            recorder.prewarm(deviceID: settings.selectedDeviceID.isEmpty ? nil : settings.selectedDeviceID)
+        }
+    }
+
+    func requestSpeechPermission() async -> Bool {
+        await transcription.requestAppleSpeechAuthorization()
+    }
+
+    // MARK: - Manual actions
+
+    func copy(_ text: String) {
+        guard !text.isEmpty else { return }
+        pasteService.copy(text)
+        status = .success("Copied to clipboard")
+    }
+
+    func updateText(_ record: TranscriptRecord, to text: String) {
+        try? store.setText(id: record.id, text: text)
+        records = store.records
+    }
+
+    func delete(_ record: TranscriptRecord) {
+        try? store.delete(id: record.id)
+        records = store.records
+        if selectedRecordID == record.id {
+            selectedRecordID = records.first?.id
+        }
+    }
+
     func retry(_ record: TranscriptRecord) {
         guard !activeTranscriptionIDs.contains(record.id) else { return }
-
-        Task {
-            await transcribeRecording(record)
-        }
+        Task { await transcribeRecording(record) }
     }
 
     func retryAllFailed() {
@@ -121,68 +215,80 @@ final class AppState {
         }
     }
 
-    func paste(_ text: String) {
-        if !pasteService.paste(text, into: nil) {
-            hasAccessibilityPermission = false
-            statusMessage = "Allow Accessibility permission to auto-paste"
-        }
-    }
+    // MARK: - Recording
 
-    private func startFunctionKeyMonitor() {
-        functionKeyMonitor = FunctionKeyMonitor { [weak self] isPressed in
+    private func startHotkeyMonitor() {
+        let monitor = HotkeyMonitor(trigger: settings.hotkey) { [weak self] pressed in
             guard let self else { return }
-            if isPressed {
-                self.recordingIntentActive = true
-                self.pasteTargetApplication = NSWorkspace.shared.frontmostApplication
-                Task { await self.beginRecording() }
-            } else {
-                self.recordingIntentActive = false
-                Task { await self.finishRecording() }
+            switch self.settings.recordingMode {
+            case .holdToTalk:
+                if pressed {
+                    self.recordingIntentActive = true
+                    self.pasteTargetApplication = NSWorkspace.shared.frontmostApplication
+                    Task { await self.beginRecording() }
+                } else {
+                    self.recordingIntentActive = false
+                    Task { await self.finishRecording() }
+                }
+            case .toggle:
+                guard pressed else { return }
+                if self.isRecording {
+                    Task { await self.finishRecording() }
+                } else {
+                    self.recordingIntentActive = true
+                    self.pasteTargetApplication = NSWorkspace.shared.frontmostApplication
+                    Task { await self.beginRecording() }
+                }
             }
         }
-        functionKeyMonitor?.start()
+        monitor.start()
+        hotkeyMonitor = monitor
     }
 
     private func beginRecording() async {
-        guard !isRecording, !isPreparingRecording, !isTranscribing else { return }
+        guard !isRecording, !isPreparingRecording else { return }
         isPreparingRecording = true
 
-        do {
-            let allowed = await AudioCaptureService.requestMicrophoneAccess()
-            guard allowed else {
-                isPreparingRecording = false
-                statusMessage = "Microphone access is required"
-                return
-            }
+        let allowed = await AudioCaptureService.requestMicrophoneAccess()
+        hasMicrophonePermission = allowed
+        guard allowed else {
+            isPreparingRecording = false
+            status = .failure("Microphone access is required")
+            return
+        }
 
-            try recorder.start(deviceID: selectedDeviceID.isEmpty ? nil : selectedDeviceID)
+        do {
+            try recorder.start(deviceID: settings.selectedDeviceID.isEmpty ? nil : settings.selectedDeviceID)
             isPreparingRecording = false
             isRecording = true
+            recordingStartedAt = Date()
             lastError = nil
-            statusMessage = "Recording..."
-            soundService.play(.recordingStarted)
+            status = .recording
+            if settings.playSounds { soundService.play(.recordingStarted) }
 
-            if !recordingIntentActive {
+            // Hold mode: if the key was already released while preparing, stop now.
+            if settings.recordingMode == .holdToTalk, !recordingIntentActive {
                 await finishRecording()
             }
         } catch {
             isPreparingRecording = false
             isRecording = false
             lastError = error.localizedDescription
-            statusMessage = "Could not start recording"
+            status = .failure("Could not start recording")
         }
     }
 
     private func finishRecording() async {
         if isPreparingRecording {
-            statusMessage = "Preparing microphone..."
+            status = .preparingMic
             return
         }
-
         guard isRecording else { return }
+
         isRecording = false
-        statusMessage = "Transcribing..."
-        soundService.play(.recordingStopped)
+        recordingStartedAt = nil
+        status = .transcribing
+        if settings.playSounds { soundService.play(.recordingStopped) }
 
         do {
             let audioURL = try await recorder.stop()
@@ -190,7 +296,10 @@ final class AppState {
                 text: "",
                 audioFilePath: audioURL.path,
                 createdAt: Date(),
-                status: .failed(errorMessage: "Transcribing...")
+                status: .transcribing,
+                model: settings.model.rawValue,
+                engine: settings.engine.rawValue,
+                language: settings.resolvedLanguage
             )
             try store.add(record)
             records = store.records
@@ -198,7 +307,7 @@ final class AppState {
             await transcribeRecording(record)
         } catch {
             lastError = error.localizedDescription
-            statusMessage = "Recording failed"
+            status = .failure("Recording failed")
         }
     }
 
@@ -207,103 +316,75 @@ final class AppState {
 
         activeTranscriptionIDs.insert(record.id)
         isTranscribing = true
+        try? store.markTranscribing(id: record.id)
+        records = store.records
+        status = .transcribing
+
         defer {
             activeTranscriptionIDs.remove(record.id)
             isTranscribing = !activeTranscriptionIDs.isEmpty
         }
 
         do {
-            let text = try await whisperRunner.transcribe(
+            let outcome = try await transcription.transcribe(
                 audioURL: URL(fileURLWithPath: record.audioFilePath),
-                configuration: WhisperConfiguration(command: whisperCommand, argumentsTemplate: whisperArguments)
-            ).plainTranscriptText
-            try store.markTranscribed(id: record.id, text: text)
+                kind: settings.engine,
+                model: settings.model,
+                language: settings.resolvedLanguage,
+                initialPrompt: nil,
+                cliConfiguration: settings.cliConfiguration,
+                allowAppleFallback: settings.allowAppleFallback
+            )
+            let finalText = settings.vocabulary.apply(to: outcome.result.text)
+            try store.markTranscribed(
+                id: record.id,
+                text: finalText,
+                durationSeconds: outcome.result.duration,
+                model: settings.model.rawValue,
+                engine: outcome.engine.rawValue,
+                language: outcome.result.language
+            )
             records = store.records
             selectedRecordID = record.id
-            soundService.play(.transcriptionSucceeded)
-            if pasteService.paste(text, into: pasteTargetApplication) {
-                hasAccessibilityPermission = true
-                statusMessage = "Pasted transcript"
-            } else {
-                hasAccessibilityPermission = false
-                statusMessage = "Transcript copied; allow Accessibility to auto-paste"
-            }
-            pasteTargetApplication = nil
+            if settings.playSounds { soundService.play(.transcriptionSucceeded) }
+            deliver(finalText)
         } catch {
             try? store.markFailed(id: record.id, message: error.localizedDescription)
             records = store.records
             selectedRecordID = record.id
             lastError = error.localizedDescription
-            statusMessage = "Transcription failed; queued for retry"
-            soundService.play(.transcriptionFailed)
+            status = .failure("Transcription failed; queued for retry")
+            if settings.playSounds { soundService.play(.transcriptionFailed) }
+            pasteTargetApplication = nil
+        }
+    }
+
+    private func deliver(_ text: String) {
+        switch settings.delivery {
+        case .copyOnly:
+            pasteService.copy(text)
+            status = .success("Copied to clipboard")
+            pasteTargetApplication = nil
+        case .pasteAtCursor:
+            if pasteService.paste(text, into: pasteTargetApplication) {
+                hasAccessibilityPermission = true
+                status = .success("Pasted transcript")
+            } else {
+                hasAccessibilityPermission = false
+                status = .success("Transcript copied; allow Accessibility to auto-paste")
+            }
             pasteTargetApplication = nil
         }
     }
 
     private func normalizeInterruptedRecords() {
-        for record in store.retryQueue {
-            guard case .failed(let message) = record.status else { continue }
-            guard message == "Transcribing..." || message == "Queued for transcription" else { continue }
-
+        for record in store.records where record.status.isInProgress {
             try? store.markFailed(
                 id: record.id,
-                message: "Interrupted before Whisper finished. Retry this recording."
+                message: "Interrupted before transcription finished. Retry this recording."
             )
         }
     }
-
-    private func migrateWhisperDefaultsIfNeeded() {
-        let oldDefaultArguments = "\"{audio}\" --output_format txt --output_dir \"{output}\""
-        let tinyDefaultArguments = "\"{audio}\" --model tiny --language en --fp16 False --output_format txt --output_dir \"{output}\""
-        let currentCommand = UserDefaults.standard.string(forKey: Defaults.whisperCommand)
-        let currentArguments = UserDefaults.standard.string(forKey: Defaults.whisperArguments)
-
-        if shouldResetWhisperCommand(currentCommand) {
-            UserDefaults.standard.set(Self.defaultWhisperCommand, forKey: Defaults.whisperCommand)
-        }
-
-        if currentArguments == nil || currentArguments == oldDefaultArguments || currentArguments == tinyDefaultArguments {
-            UserDefaults.standard.set(Self.defaultWhisperArguments, forKey: Defaults.whisperArguments)
-        }
-    }
-
-    private static var defaultWhisperCommand: String {
-        let commonPaths = [
-            "/opt/homebrew/bin/whisper",
-            "/usr/local/bin/whisper"
-        ]
-
-        return commonPaths.first { FileManager.default.isExecutableFile(atPath: $0) } ?? "whisper"
-    }
-
-    private func shouldResetWhisperCommand(_ command: String?) -> Bool {
-        guard let command = command?.trimmingCharacters(in: .whitespacesAndNewlines), !command.isEmpty else {
-            return true
-        }
-
-        if command == "whisper" {
-            return true
-        }
-
-        if command.contains("/") {
-            return !FileManager.default.isExecutableFile(atPath: command)
-        }
-
-        let homebrewCommand = "/opt/homebrew/bin/\(command)"
-        let intelHomebrewCommand = "/usr/local/bin/\(command)"
-        return !FileManager.default.isExecutableFile(atPath: homebrewCommand)
-            && !FileManager.default.isExecutableFile(atPath: intelHomebrewCommand)
-    }
-
-    private static var defaultWhisperArguments: String {
-        "\"{audio}\" --model base --language en --fp16 False --output_format txt --output_dir \"{output}\""
-    }
-}
-
-private enum Defaults {
-    static let selectedDeviceID = "selectedDeviceID"
-    static let whisperCommand = "whisperCommand"
-    static let whisperArguments = "whisperArguments"
 }
 
 extension TranscriptStore {
