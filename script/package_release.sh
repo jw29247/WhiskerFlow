@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT="WhiskerFlow"
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-0.3.0}"
 DIST_DIR="$ROOT_DIR/dist"
 STAGING_DIR="$DIST_DIR/$PRODUCT-$VERSION"
 APP_BUNDLE="$STAGING_DIR/$PRODUCT.app"

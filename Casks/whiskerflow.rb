@@ -1,6 +1,6 @@
 cask "whiskerflow" do
-  version "0.2.0"
-  sha256 :no_check # ad-hoc signed build; pin a real checksum once notarized
+  version "0.3.0"
+  sha256 :no_check # script/notarize.sh fills the real checksum when you cut a release
 
   url "https://github.com/jw29247/WhiskerFlow/releases/download/v#{version}/WhiskerFlow-#{version}.dmg"
   name "WhiskerFlow"

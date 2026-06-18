@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Hardened Runtime entitlements for notarized Developer ID distribution.
+      WhiskerFlow is NOT sandboxed (it posts synthetic key events to paste at the
+      cursor, which the sandbox forbids), so only the microphone entitlement is
+      required. Accessibility (event posting / global hotkey tap) and outbound
+      network (one-time model download) are gated by TCC / allowed by default and
+      need no entitlement here.
+    -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>
