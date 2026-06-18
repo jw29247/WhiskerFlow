@@ -1,11 +1,16 @@
-name: Release
+name: Package (verification only)
+
+# CI has no Developer ID certificate, so it can only produce an ad-hoc
+# (unsigned, un-notarized) build that Gatekeeper would block on download.
+# This job therefore only verifies that packaging succeeds — it does NOT publish
+# any release assets. The shareable, notarized DMG is produced locally with
+# `script/notarize.sh` (see Distribution/SIGNING.md). To notarize in CI instead,
+# add Developer ID + App Store Connect secrets and restore a publish step.
 
 on:
   push:
     tags: ["v*"]
-
-permissions:
-  contents: write
+  workflow_dispatch:
 
 jobs:
   package:
@@ -13,13 +18,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Package app (DMG + zip)
+      - name: Build packaging artifacts (unsigned — not published)
         run: |
           VERSION="${GITHUB_REF_NAME#v}" script/package_release.sh
-
-      - name: Publish release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/*.dmg
-            dist/*.zip
