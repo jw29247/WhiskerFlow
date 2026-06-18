@@ -1,6 +1,6 @@
 cask "whiskerflow" do
   version "0.3.0"
-  sha256 :no_check # script/notarize.sh fills the real checksum when you cut a release
+  sha256 "0044fbb7514883c8697225611c2faf405a1ae395c6ed61b4fea01d4e6cce12a0"
 
   url "https://github.com/jw29247/WhiskerFlow/releases/download/v#{version}/WhiskerFlow-#{version}.dmg"
   name "WhiskerFlow"
