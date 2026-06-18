@@ -7,7 +7,7 @@
 #      (Xcode > Settings > Accounts > Manage Certificates > + Developer ID Application).
 #   2. Stored notary credentials under a keychain profile, e.g.:
 #        xcrun notarytool store-credentials "WhiskerFlow-Notary" \
-#          --apple-id "you@example.com" --team-id "DR37YKTXWX" \
+#          --apple-id "you@example.com" --team-id "G9U38P58ZY" \
 #          --password "app-specific-password"
 #      (or use an App Store Connect API key: --key / --key-id / --issuer)
 #

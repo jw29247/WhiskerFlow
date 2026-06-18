@@ -37,7 +37,7 @@ App-Specific Passwords), then:
 ```bash
 xcrun notarytool store-credentials "WhiskerFlow-Notary" \
   --apple-id "you@example.com" \
-  --team-id  "DR37YKTXWX" \
+  --team-id  "G9U38P58ZY" \
   --password "abcd-efgh-ijkl-mnop"
 ```
 
