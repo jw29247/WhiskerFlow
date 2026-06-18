@@ -12,7 +12,15 @@ struct RecordingHUDView: View {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
-                if appState.isRecording {
+                if appState.isRecording, !appState.liveText.isEmpty {
+                    // Live transcript, most-recent words kept visible.
+                    Text(appState.liveText)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(2)
+                        .truncationMode(.head)
+                        .frame(maxWidth: 320, alignment: .leading)
+                } else if appState.isRecording {
                     TimelineView(.periodic(from: .now, by: 0.2)) { _ in
                         Text(elapsedString)
                             .font(.system(size: 11, weight: .regular).monospacedDigit())
@@ -78,6 +86,8 @@ final class RecordingHUDController {
         withObservationTracking {
             _ = appState.isRecording
             _ = appState.isTranscribing
+            // Re-fit the panel as the live transcript grows.
+            _ = appState.liveText
         } onChange: { [weak self] in
             Task { @MainActor in
                 self?.updateVisibility()

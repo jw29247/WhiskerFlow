@@ -33,6 +33,12 @@ actor TranscriptionService {
         await appleSpeech.requestAuthorization()
     }
 
+    /// Transcribe an in-memory 16 kHz mono float buffer with the warm WhisperKit
+    /// pipe (single shared model instance — no extra load). Drives live dictation.
+    func transcribeSamples(_ samples: [Float], language: String?, model: WhisperModel) async throws -> TranscriptionResult {
+        try await whisperKit.transcribe(samples: samples, language: language, model: model)
+    }
+
     func transcribe(
         audioURL: URL,
         kind: TranscriptionEngineKind,

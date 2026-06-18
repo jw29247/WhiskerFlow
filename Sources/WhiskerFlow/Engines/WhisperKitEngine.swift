@@ -38,15 +38,10 @@ actor WhisperKitEngine: TranscriptionEngine {
             throw TranscriptionError.modelUnavailable(request.model.displayName)
         }
 
-        let options = DecodingOptions(
-            task: .transcribe,
-            language: request.language,
-            skipSpecialTokens: true,
-            withoutTimestamps: true,
-            chunkingStrategy: .vad
+        let results = try await pipe.transcribe(
+            audioPath: request.audioURL.path,
+            decodeOptions: Self.decodingOptions(language: request.language)
         )
-
-        let results = try await pipe.transcribe(audioPath: request.audioURL.path, decodeOptions: options)
 
         let text = results.map(\.text)
             .joined(separator: " ")
@@ -62,6 +57,41 @@ actor WhisperKitEngine: TranscriptionEngine {
             segments: segments,
             language: results.first?.language ?? request.language,
             duration: results.first?.timings.inputAudioSeconds
+        )
+    }
+
+    /// Transcribe an in-memory 16 kHz mono float buffer using the warm pipe.
+    /// Used by the live dictation loop. An empty result yields an empty string
+    /// (a partial that hasn't caught any speech yet is not an error).
+    func transcribe(samples: [Float], language: String?, model: WhisperModel) async throws -> WhiskerFlowCore.TranscriptionResult {
+        try await prepare(model: model)
+        guard let pipe else {
+            throw TranscriptionError.modelUnavailable(model.displayName)
+        }
+
+        let results = try await pipe.transcribe(
+            audioArray: samples,
+            decodeOptions: Self.decodingOptions(language: language)
+        )
+
+        let text = results.map(\.text)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return WhiskerFlowCore.TranscriptionResult(
+            text: text.plainTranscriptText,
+            language: results.first?.language ?? language,
+            duration: results.first?.timings.inputAudioSeconds
+        )
+    }
+
+    private static func decodingOptions(language: String?) -> DecodingOptions {
+        DecodingOptions(
+            task: .transcribe,
+            language: language,
+            skipSpecialTokens: true,
+            withoutTimestamps: true,
+            chunkingStrategy: .vad
         )
     }
 }

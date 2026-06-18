@@ -36,8 +36,8 @@ public enum WhisperModel: String, Codable, CaseIterable, Sendable, Identifiable 
 
     public var displayName: String {
         switch self {
-        case .tiny: return "Tiny — fastest"
-        case .base: return "Base — balanced (recommended)"
+        case .tiny: return "Tiny — fastest (recommended)"
+        case .base: return "Base — balanced"
         case .small: return "Small — more accurate"
         case .medium: return "Medium — most accurate, slower"
         }

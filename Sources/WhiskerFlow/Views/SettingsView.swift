@@ -32,6 +32,11 @@ struct SettingsView: View {
                     ForEach(RecordingMode.allCases) { Text($0.displayName).tag($0) }
                 }
 
+                Toggle("Live transcription", isOn: $appState.settings.liveTranscription)
+                Text("Transcribe while you speak so the text pastes the instant you release the key. Uses the WhisperKit engine.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Picker("Microphone", selection: $appState.settings.selectedDeviceID) {
                     ForEach(appState.devices) { Text($0.name).tag($0.id) }
                 }

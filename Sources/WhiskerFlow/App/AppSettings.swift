@@ -14,6 +14,9 @@ final class AppSettings {
     var language: String { didSet { persist() } }
     var hotkey: HotkeyTrigger { didSet { persist() } }
     var recordingMode: RecordingMode { didSet { persist() } }
+    /// Stream and transcribe while speaking so the transcript pastes instantly on
+    /// release. Applies to the WhisperKit engine; other engines stay file-based.
+    var liveTranscription: Bool { didSet { persist() } }
     var delivery: DeliveryMode { didSet { persist() } }
     var playSounds: Bool { didSet { persist() } }
     var allowAppleFallback: Bool { didSet { persist() } }
@@ -35,10 +38,11 @@ final class AppSettings {
         self.defaults = defaults
 
         engine = defaults.string(forKey: Keys.engine).flatMap(TranscriptionEngineKind.init) ?? .whisperKit
-        model = defaults.string(forKey: Keys.model).flatMap(WhisperModel.init) ?? .base
+        model = defaults.string(forKey: Keys.model).flatMap(WhisperModel.init) ?? .tiny
         language = defaults.string(forKey: Keys.language) ?? "en"
         hotkey = defaults.string(forKey: Keys.hotkey).flatMap(HotkeyTrigger.init) ?? .fn
         recordingMode = defaults.string(forKey: Keys.recordingMode).flatMap(RecordingMode.init) ?? .holdToTalk
+        liveTranscription = defaults.object(forKey: Keys.liveTranscription) as? Bool ?? true
         delivery = defaults.string(forKey: Keys.delivery).flatMap(DeliveryMode.init) ?? .pasteAtCursor
         playSounds = defaults.object(forKey: Keys.playSounds) as? Bool ?? true
         allowAppleFallback = defaults.object(forKey: Keys.allowAppleFallback) as? Bool ?? true
@@ -65,6 +69,7 @@ final class AppSettings {
         defaults.set(language, forKey: Keys.language)
         defaults.set(hotkey.rawValue, forKey: Keys.hotkey)
         defaults.set(recordingMode.rawValue, forKey: Keys.recordingMode)
+        defaults.set(liveTranscription, forKey: Keys.liveTranscription)
         defaults.set(delivery.rawValue, forKey: Keys.delivery)
         defaults.set(playSounds, forKey: Keys.playSounds)
         defaults.set(allowAppleFallback, forKey: Keys.allowAppleFallback)
@@ -115,6 +120,7 @@ final class AppSettings {
         static let language = "language"
         static let hotkey = "hotkey"
         static let recordingMode = "recordingMode"
+        static let liveTranscription = "liveTranscription"
         static let delivery = "delivery"
         static let playSounds = "playSounds"
         static let allowAppleFallback = "allowAppleFallback"

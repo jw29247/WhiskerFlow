@@ -35,6 +35,8 @@ final class AppState {
     var isRecording = false
     var isTranscribing = false
     var audioLevel: Float = 0
+    /// Live transcript shown in the HUD while streaming dictation is active.
+    var liveText = ""
     var recordingStartedAt: Date?
     var modelState: ModelState = .unloaded
     var hasAccessibilityPermission = false
@@ -46,8 +48,8 @@ final class AppState {
     var settings: AppSettings
 
     private let store: TranscriptStore
-    private let recorder = AudioCaptureService()
     private let transcription = TranscriptionService()
+    private let live: LiveDictationSession
     private let pasteService = PasteService()
     private let soundService = SoundService()
     private var hotkeyMonitor: HotkeyMonitor?
@@ -57,13 +59,15 @@ final class AppState {
     private var recordingIntentActive = false
     private var pasteTargetApplication: NSRunningApplication?
     private var activeTranscriptionIDs: Set<UUID> = []
+    /// Whether the most recent recording streamed live (vs. file-based capture).
+    private var streamingActive = false
 
     init(settings: AppSettings? = nil, store: TranscriptStore = .defaultStore()) {
         self.settings = settings ?? AppSettings()
         self.store = store
-        recorder.onLevel = { [weak self] level in
-            self?.audioLevel = level
-        }
+        self.live = LiveDictationSession(transcription: transcription)
+        live.onLevel = { [weak self] level in self?.audioLevel = level }
+        live.onPartial = { [weak self] text in self?.liveText = text }
     }
 
     // MARK: - Derived state
@@ -129,7 +133,6 @@ final class AppState {
             refreshDevices()
             startHotkeyMonitor()
             hudController = RecordingHUDController(appState: self)
-            recorder.prewarm(deviceID: settings.selectedDeviceID.isEmpty ? nil : settings.selectedDeviceID)
             warmUpEngine()
         } catch {
             lastError = error.localizedDescription
@@ -154,7 +157,7 @@ final class AppState {
     }
 
     func refreshDevices() {
-        devices = AudioCaptureService.availableInputDevices()
+        devices = Microphone.availableInputDevices()
         if settings.selectedDeviceID.isEmpty || !devices.contains(where: { $0.id == settings.selectedDeviceID }) {
             settings.selectedDeviceID = devices.first?.id ?? ""
         }
@@ -172,10 +175,9 @@ final class AppState {
     }
 
     func requestMicrophonePermission() async {
-        hasMicrophonePermission = await AudioCaptureService.requestMicrophoneAccess()
+        hasMicrophonePermission = await Microphone.requestAccess()
         if hasMicrophonePermission {
             refreshDevices()
-            recorder.prewarm(deviceID: settings.selectedDeviceID.isEmpty ? nil : settings.selectedDeviceID)
         }
     }
 
@@ -249,7 +251,7 @@ final class AppState {
         guard !isRecording, !isPreparingRecording else { return }
         isPreparingRecording = true
 
-        let allowed = await AudioCaptureService.requestMicrophoneAccess()
+        let allowed = await Microphone.requestAccess()
         hasMicrophonePermission = allowed
         guard allowed else {
             isPreparingRecording = false
@@ -258,7 +260,17 @@ final class AppState {
         }
 
         do {
-            try recorder.start(deviceID: settings.selectedDeviceID.isEmpty ? nil : settings.selectedDeviceID)
+            liveText = ""
+            // Stream + decode live for the WhisperKit engine; other engines stay
+            // file-based (captured here, transcribed from the WAV on release).
+            streamingActive = settings.engine == .whisperKit && settings.liveTranscription
+            try live.start(
+                deviceID: settings.selectedDeviceID,
+                language: settings.resolvedLanguage,
+                model: settings.model,
+                vocabulary: settings.vocabulary,
+                streaming: streamingActive
+            )
             isPreparingRecording = false
             isRecording = true
             recordingStartedAt = Date()
@@ -273,6 +285,7 @@ final class AppState {
         } catch {
             isPreparingRecording = false
             isRecording = false
+            streamingActive = false
             lastError = error.localizedDescription
             status = .failure("Could not start recording")
         }
@@ -287,14 +300,89 @@ final class AppState {
 
         isRecording = false
         recordingStartedAt = nil
-        status = .transcribing
         if settings.playSounds { soundService.play(.recordingStopped) }
 
+        let wasStreaming = streamingActive
+        streamingActive = false
+        let result = await live.finish()
+        liveText = ""
+
+        if wasStreaming, !result.text.isEmpty {
+            // Streaming already produced the transcript — paste immediately, then
+            // persist the audio + record off the critical path.
+            status = .transcribing
+            deliver(result.text)
+            persistLiveRecording(text: result.text, samples: result.samples)
+        } else {
+            // Non-streaming engine, or streaming caught no speech: fall back to the
+            // standard file-based path (includes the Apple Speech fallback).
+            status = .transcribing
+            await transcribeCapturedSamples(result.samples)
+        }
+    }
+
+    /// Save a finished streaming transcript + its audio without blocking the
+    /// paste. The WAV is encoded off the main actor; the store update hops back.
+    private func persistLiveRecording(text: String, samples: [Float]) {
+        let createdAt = Date()
+        let duration = Double(samples.count) / 16_000
+        let model = settings.model.rawValue
+        let engine = settings.engine.rawValue
+        let language = settings.resolvedLanguage
+        guard let url = try? AudioFileWriter.makeRecordingURL() else { return }
+
+        Task.detached(priority: .utility) { [weak self] in
+            try? AudioFileWriter.writeWAV(samples: samples, to: url)
+            await self?.appendRecord(
+                text: text,
+                audioPath: url.path,
+                createdAt: createdAt,
+                duration: duration,
+                model: model,
+                engine: engine,
+                language: language
+            )
+        }
+    }
+
+    private func appendRecord(
+        text: String,
+        audioPath: String,
+        createdAt: Date,
+        duration: Double,
+        model: String,
+        engine: String,
+        language: String?
+    ) {
+        let record = TranscriptRecord(
+            text: text,
+            audioFilePath: audioPath,
+            createdAt: createdAt,
+            status: .transcribed,
+            durationSeconds: duration,
+            model: model,
+            engine: engine,
+            language: language,
+            updatedAt: createdAt
+        )
+        try? store.add(record)
+        records = store.records
+        selectedRecordID = record.id
+    }
+
+    /// Write captured samples to a WAV and transcribe via the standard engine
+    /// path (used for non-streaming engines and the streaming-empty fallback).
+    private func transcribeCapturedSamples(_ samples: [Float]) async {
+        guard !samples.isEmpty else {
+            status = .failure("No speech was detected")
+            return
+        }
         do {
-            let audioURL = try await recorder.stop()
+            let url = try AudioFileWriter.makeRecordingURL()
+            try AudioFileWriter.writeWAV(samples: samples, to: url)
             let record = TranscriptRecord(
                 text: "",
-                audioFilePath: audioURL.path,
+                audioFilePath: url.path,
                 createdAt: Date(),
                 status: .transcribing,
                 model: settings.model.rawValue,
