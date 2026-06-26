@@ -133,5 +133,5 @@ the appcast + cask go live on main:
 
 Existing users on $PRODUCT 0.4.0+ receive this automatically via Sparkle.
 First-time installs (or anyone still on <= 0.3.0, which has no auto-update):
-    brew install --cask "https://raw.githubusercontent.com/$REPO/main/Casks/whiskerflow.rb"
+    curl -fsSL https://raw.githubusercontent.com/$REPO/main/script/install.sh | bash
 MSG

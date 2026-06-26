@@ -16,20 +16,25 @@ transcribes locally and pastes the text wherever your cursor is.
 
 ## Install
 
-**Homebrew cask** (from this repo's tap/`Casks`):
-
-```sh
-brew install --cask ./Casks/whiskerflow.rb
-```
-
-**One-line installer** (downloads the latest release DMG):
+**One-line installer** (recommended — downloads and installs the latest notarized release):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/script/install.sh | bash
 ```
 
-**Manual** — download `WhiskerFlow-x.y.z.dmg` from Releases, drag the app to Applications.
-This build is ad-hoc signed (not notarized), so the first launch is right-click → Open.
+**Manual** — download `WhiskerFlow-x.y.z.dmg` from [Releases](https://github.com/jw29247/WhiskerFlow/releases/latest),
+open it, and drag the app to Applications. Builds are Developer-ID signed and notarized,
+so they open normally — no right-click → Open needed.
+
+**Homebrew cask** — modern Homebrew no longer installs casks from a raw URL, so use the tap:
+
+```sh
+brew tap jw29247/whiskerflow https://github.com/jw29247/WhiskerFlow
+brew install --cask jw29247/whiskerflow/whiskerflow   # Homebrew may first ask you to `brew trust` the tap
+```
+
+Once installed, **updates are automatic** — WhiskerFlow checks for and installs new
+releases in place (Sparkle), so the install step above is one-time.
 
 After launching, the onboarding screen walks you through Microphone and Accessibility
 permissions (Accessibility is what lets WhiskerFlow paste at the cursor).

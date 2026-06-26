@@ -7,7 +7,7 @@ cask "whiskerflow" do
   desc "On-device push-to-talk dictation for macOS"
   homepage "https://github.com/jw29247/WhiskerFlow"
 
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "WhiskerFlow.app"
 

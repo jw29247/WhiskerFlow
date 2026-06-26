@@ -9,7 +9,7 @@ set -euo pipefail
 REPO="${WHISKERFLOW_REPO:-jw29247/WhiskerFlow}"
 APP="WhiskerFlow"
 
-echo "Looking up the latest $APP release in $REPO…"
+echo "Looking up the latest ${APP} release in ${REPO}..."
 DMG_URL=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
   | grep -oE '"browser_download_url": *"[^"]+\.dmg"' \
   | head -1 \
@@ -33,7 +33,7 @@ if [[ -z "${MOUNT:-}" || ! -d "$MOUNT/$APP.app" ]]; then
   exit 1
 fi
 
-echo "Installing to /Applications…"
+echo "Installing to /Applications..."
 rm -rf "/Applications/$APP.app"
 cp -R "$MOUNT/$APP.app" /Applications/
 hdiutil detach "$MOUNT" >/dev/null

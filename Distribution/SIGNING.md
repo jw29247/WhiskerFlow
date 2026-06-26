@@ -106,14 +106,21 @@ git commit -am "release: WhiskerFlow 0.4.0" && git push   # ships appcast.xml + 
 
 ## Team install & auto-updates
 
-The repo is **public** so Sparkle and Homebrew can fetch `appcast.xml`, the cask,
-and the release binaries without authentication.
+The repo is **public** so the installer, Sparkle, and Homebrew can fetch
+`appcast.xml`, the cask, and the release binaries without authentication.
 
-**First install** (or anyone still on ≤ 0.3.0, which predates auto-update):
+**First install** (or anyone still on ≤ 0.3.0, which predates auto-update) — send
+the team the one-line installer; it grabs and installs the latest notarized DMG:
 
 ```bash
-brew install --cask "https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/Casks/whiskerflow.rb"
+curl -fsSL https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/script/install.sh | bash
 ```
+
+> Note: `brew install --cask "<raw URL>"` no longer works — modern Homebrew
+> removed URL installs and requires `brew trust` for third-party taps. Homebrew
+> users can instead `brew tap jw29247/whiskerflow https://github.com/jw29247/WhiskerFlow`
+> then `brew install --cask jw29247/whiskerflow/whiskerflow`. The one-liner above
+> is simpler and needs no Homebrew.
 
 **After that, updates are automatic.** Every build from 0.4.0 onward embeds
 Sparkle, checks `appcast.xml` daily (and via *Check for Updates…* in the menu-bar
