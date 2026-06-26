@@ -57,7 +57,12 @@ struct ContentView: View {
                 .help("Settings")
             }
         }
-        .task {
+        .onAppear {
+            // Synchronous, one-shot startup. Deliberately NOT `.task`: that runs via
+            // `Task.immediate`, whose executor check crashes when SwiftUI rebuilds this
+            // view during an AppKit reopen event (Dock click / relaunch while running
+            // with no window). `.onAppear` avoids the concurrency path; `start()` is
+            // idempotent so re-appearing is harmless.
             appState.start()
             applyDockPolicy(appState.settings.showDockIcon)
             if appState.records.isEmpty && !appState.hasAccessibilityPermission {

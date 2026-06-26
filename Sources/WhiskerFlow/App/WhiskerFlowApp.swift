@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct WhiskerFlowApp: App {
     @State private var appState = AppState()
+    @StateObject private var updaterService = UpdaterService()
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -11,6 +12,9 @@ struct WhiskerFlowApp: App {
         }
         .windowStyle(.titleBar)
         .commands {
+            CommandGroup(after: .appInfo) {
+                CheckForUpdatesButton(updaterService: updaterService)
+            }
             CommandGroup(after: .newItem) {
                 Button("Copy Selected Transcript") {
                     if let text = appState.selectedRecord?.text, !text.isEmpty {
@@ -23,7 +27,7 @@ struct WhiskerFlowApp: App {
         }
 
         Settings {
-            SettingsView(appState: appState)
+            SettingsView(appState: appState, updaterService: updaterService)
         }
 
         MenuBarExtra(
@@ -31,7 +35,7 @@ struct WhiskerFlowApp: App {
             systemImage: appState.isRecording ? "waveform.circle.fill" : "waveform.circle",
             isInserted: $appState.settings.showMenuBarExtra
         ) {
-            MenuBarView(appState: appState)
+            MenuBarView(appState: appState, updaterService: updaterService)
         }
         .menuBarExtraStyle(.window)
     }

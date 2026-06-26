@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>WhiskerFlow</title>
+    <link>https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/appcast.xml</link>
+    <description>Automatic updates for WhiskerFlow.</description>
+    <language>en</language>
+    <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
+    <item>
+      <title>0.4.0</title>
+      <pubDate>Fri, 26 Jun 2026 20:06:53 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Auto-updates + fix dock-reopen crash]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v0.4.0/WhiskerFlow-0.4.0.zip" sparkle:version="4" sparkle:shortVersionString="0.4.0" sparkle:edSignature="6hjfUMpD4pvIMfYVFw5pLKG1dPU9jddYD31A9waNZH6EHyOAhbZIgDn1nsVDIPk4pqM2GO4/UfQt1qtxDfSzBw==" length="3667008" type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>

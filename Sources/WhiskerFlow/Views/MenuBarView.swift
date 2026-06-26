@@ -4,6 +4,7 @@ import WhiskerFlowCore
 
 struct MenuBarView: View {
     @Bindable var appState: AppState
+    @ObservedObject var updaterService: UpdaterService
     @Environment(\.openWindow) private var openWindow
 
     private var recents: [TranscriptRecord] {
@@ -70,6 +71,9 @@ struct MenuBarView: View {
                 Text("Settings…")
             }
             .buttonStyle(.plain)
+
+            CheckForUpdatesButton(updaterService: updaterService)
+                .buttonStyle(.plain)
 
             Button("Quit WhiskerFlow") {
                 NSApplication.shared.terminate(nil)

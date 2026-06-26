@@ -46,28 +46,55 @@ xcrun notarytool store-credentials "WhiskerFlow-Notary" \
 The profile name `WhiskerFlow-Notary` is what `notarize.sh` expects (override with
 `NOTARY_PROFILE`).
 
+### 3. Generate the Sparkle auto-update signing key (one-time)
+
+Auto-updates are EdDSA-signed. Generate the key once — the **private** key stays
+in your login Keychain, and the **public** key is written into `Info.plist`:
+
+```bash
+script/sparkle_keygen.sh        # sets SUPublicEDKey in Resources/Info.plist
+```
+
+Commit the updated `Info.plist`, and **back up the private key** somewhere safe
+(losing it means you can't ship updates that existing installs will accept):
+
+```bash
+.build/artifacts/sparkle/Sparkle/bin/generate_keys -x sparkle_private_key.txt
+# store that file securely — NOT in git
+```
+
+`notarize.sh` refuses to build until `SUPublicEDKey` is set.
+
 ---
 
 ## Cut a release
 
+Bump `CFBundleShortVersionString` **and** `CFBundleVersion` in
+`Resources/Info.plist` first (Sparkle compares `CFBundleVersion`, so it must
+increase every release), then:
+
 ```bash
-VERSION=0.3.0 script/notarize.sh
+VERSION=0.4.0 script/notarize.sh        # optional: NOTES="One-line changelog"
 ```
 
 This will:
 
-1. build a **release** binary and sign it (hardened runtime + `Resources/WhiskerFlow.entitlements`),
+1. build a **release** binary, embed + sign `Sparkle.framework`, and Developer-ID
+   sign the app (hardened runtime + `Resources/WhiskerFlow.entitlements`),
 2. notarize the app and staple its ticket,
 3. build `dist/WhiskerFlow-<version>.dmg`, notarize and staple it,
-4. verify Gatekeeper acceptance, and
-5. update `Casks/whiskerflow.rb` with the new version and the DMG's real `sha256`.
+4. zip the notarized app to `dist/WhiskerFlow-<version>.zip` (the Sparkle update
+   archive) and add a signed entry to `appcast.xml`,
+5. verify Gatekeeper acceptance, and
+6. update `Casks/whiskerflow.rb` with the new version and the DMG's real `sha256`.
 
-Then publish the DMG and commit the cask:
+Then publish **both** assets (the appcast points at the `.zip`) and commit the
+appcast + cask so they go live on `main`:
 
 ```bash
-gh release create "v0.3.0" "dist/WhiskerFlow-0.3.0.dmg" \
-  --title "WhiskerFlow 0.3.0" --notes "Live transcription release"
-git commit -am "release: WhiskerFlow 0.3.0" && git push
+gh release create "v0.4.0" "dist/WhiskerFlow-0.4.0.dmg" "dist/WhiskerFlow-0.4.0.zip" \
+  --title "WhiskerFlow 0.4.0" --notes "What changed…"
+git commit -am "release: WhiskerFlow 0.4.0" && git push   # ships appcast.xml + cask
 ```
 
 > The tag-triggered GitHub Actions workflow (`.github/workflows/release.yml`)
@@ -77,17 +104,21 @@ git commit -am "release: WhiskerFlow 0.3.0" && git push
 
 ---
 
-## Team install (Homebrew Cask)
+## Team install & auto-updates
 
-Once the release is published and the cask is pushed to `main`:
+The repo is **public** so Sparkle and Homebrew can fetch `appcast.xml`, the cask,
+and the release binaries without authentication.
+
+**First install** (or anyone still on ≤ 0.3.0, which predates auto-update):
 
 ```bash
 brew install --cask "https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/Casks/whiskerflow.rb"
 ```
 
-Upgrades use the same command after you publish a new version. (This assumes the
-repo is public so Homebrew can fetch the cask and the DMG; for a private repo,
-distribute the notarized DMG directly or set up an authenticated tap.)
+**After that, updates are automatic.** Every build from 0.4.0 onward embeds
+Sparkle, checks `appcast.xml` daily (and via *Check for Updates…* in the menu-bar
+menu / app menu / Settings → Updates), and installs new signed releases in place.
+Teammates only need the one-time install above to get on the auto-update track.
 
 First launch still asks the user to grant **Microphone** and **Accessibility**
 permissions in System Settings → Privacy & Security — that's expected and

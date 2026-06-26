@@ -3,6 +3,7 @@ import WhiskerFlowCore
 
 struct SettingsView: View {
     @Bindable var appState: AppState
+    @ObservedObject var updaterService: UpdaterService
 
     var body: some View {
         TabView {
@@ -54,6 +55,12 @@ struct SettingsView: View {
                 Toggle("Show in menu bar", isOn: $appState.settings.showMenuBarExtra)
                 Toggle("Show Dock icon", isOn: $appState.settings.showDockIcon)
                 Toggle("Launch at login", isOn: $appState.settings.launchAtLogin)
+            }
+
+            Section("Updates") {
+                Toggle("Automatically check for updates",
+                       isOn: $updaterService.automaticallyChecksForUpdates)
+                CheckForUpdatesButton(updaterService: updaterService)
             }
         }
         .formStyle(.grouped)

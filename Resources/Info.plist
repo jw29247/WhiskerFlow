@@ -2,33 +2,41 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>$(DEVELOPMENT_LANGUAGE)</string>
-    <key>CFBundleExecutable</key>
-    <string>WhiskerFlow</string>
-    <key>CFBundleIdentifier</key>
-    <string>agency.thatworks.WhiskerFlow</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>WhiskerFlow</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.3.0</string>
-    <key>CFBundleVersion</key>
-    <string>3</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>LSApplicationCategoryType</key>
-    <string>public.app-category.productivity</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>WhiskerFlow records microphone audio while you hold your dictation key so it can transcribe and paste what you say.</string>
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>WhiskerFlow uses on-device speech recognition as a built-in fallback transcription engine.</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>WhiskerFlow</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>agency.thatworks.WhiskerFlow</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>WhiskerFlow</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.4.0</string>
+	<key>CFBundleVersion</key>
+	<string>4</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>WhiskerFlow records microphone audio while you hold your dictation key so it can transcribe and paste what you say.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>WhiskerFlow uses on-device speech recognition as a built-in fallback transcription engine.</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>SbsHwrrXtfgDoJaOa+GfIroSpUjyMn+Z9+Odq1qGj/Y=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>

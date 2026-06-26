@@ -23,7 +23,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT="WhiskerFlow"
-VERSION="${VERSION:-0.3.0}"
+VERSION="${VERSION:-0.4.0}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-WhiskerFlow-Notary}"
 REPO="${REPO:-jw29247/WhiskerFlow}"
 
@@ -32,6 +32,18 @@ STAGING_DIR="$DIST_DIR/$PRODUCT-$VERSION"
 APP_BUNDLE="$STAGING_DIR/$PRODUCT.app"
 APP_ZIP="$DIST_DIR/$PRODUCT-$VERSION-app.zip"
 DMG_PATH="$DIST_DIR/$PRODUCT-$VERSION.dmg"
+SPARKLE_ZIP="$DIST_DIR/$PRODUCT-$VERSION.zip"
+DOWNLOAD_URL="https://github.com/$REPO/releases/download/v$VERSION/$PRODUCT-$VERSION.zip"
+
+# --- Auto-update preflight: a Sparkle public key must be set, or shipped builds
+#     would reject every update. Generate it once with script/sparkle_keygen.sh.
+INFO_PLIST="$ROOT_DIR/Resources/Info.plist"
+SU_KEY="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$INFO_PLIST" 2>/dev/null || true)"
+if [[ -z "$SU_KEY" || "$SU_KEY" == "__SPARKLE_PUBLIC_ED_KEY__" ]]; then
+  echo "ERROR: SUPublicEDKey is not set in Resources/Info.plist." >&2
+  echo "       Run script/sparkle_keygen.sh once, commit the result, then retry." >&2
+  exit 1
+fi
 
 # --- Resolve the Developer ID Application signing identity --------------------
 SIGN_IDENTITY="${DEVELOPER_ID:-}"
@@ -88,6 +100,17 @@ xcrun stapler staple "$DMG_PATH"
 xcrun stapler validate "$DMG_PATH"
 echo "==> Notarized & stapled $DMG_PATH"
 
+# --- 4b. Sparkle update archive + appcast -------------------------------------
+# Sparkle updates from a zipped copy of the *notarized, stapled* app (the ticket
+# travels inside the zip, so Gatekeeper validates offline after the in-place
+# swap). The enclosure URL points at the GitHub release asset uploaded below.
+BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_BUNDLE/Contents/Info.plist")"
+rm -f "$SPARKLE_ZIP"
+ditto -c -k --keepParent "$APP_BUNDLE" "$SPARKLE_ZIP"
+ZIP="$SPARKLE_ZIP" VERSION="$VERSION" BUILD="$BUILD_NUMBER" URL="$DOWNLOAD_URL" \
+  NOTES="${NOTES:-}" "$ROOT_DIR/script/update_appcast.sh"
+echo "==> Built $SPARKLE_ZIP and updated appcast.xml (build $BUILD_NUMBER)"
+
 # --- 5. Update the Homebrew cask with the real version + checksum -------------
 SHA="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
 CASK="$ROOT_DIR/Casks/whiskerflow.rb"
@@ -97,15 +120,18 @@ CASK="$ROOT_DIR/Casks/whiskerflow.rb"
 cat <<MSG
 
 ==> Done.
-    DMG:    $DMG_PATH
-    sha256: $SHA
-    Cask:   $CASK (version + sha256 updated)
+    DMG (fresh installs):  $DMG_PATH
+    ZIP (auto-update):     $SPARKLE_ZIP
+    sha256 (DMG):          $SHA
+    Updated:               appcast.xml + $CASK
 
-Publish the release, then commit the updated cask:
-    gh release create "v$VERSION" "$DMG_PATH" \\
-      --repo "$REPO" --title "$PRODUCT $VERSION" --notes "Live transcription release"
+Publish BOTH assets (the appcast enclosure points at the .zip), then commit so
+the appcast + cask go live on main:
+    gh release create "v$VERSION" "$DMG_PATH" "$SPARKLE_ZIP" \\
+      --repo "$REPO" --title "$PRODUCT $VERSION" --notes "What changed…"
     git commit -am "release: $PRODUCT $VERSION" && git push
 
-Your team installs (or upgrades) with:
+Existing users on $PRODUCT 0.4.0+ receive this automatically via Sparkle.
+First-time installs (or anyone still on <= 0.3.0, which has no auto-update):
     brew install --cask "https://raw.githubusercontent.com/$REPO/main/Casks/whiskerflow.rb"
 MSG
