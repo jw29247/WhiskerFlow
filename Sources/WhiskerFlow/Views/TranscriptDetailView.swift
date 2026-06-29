@@ -17,7 +17,7 @@ struct TranscriptDetailView: View {
                 ContentUnavailableView(
                     "No Transcripts",
                     systemImage: "waveform",
-                    description: Text("Hold \(appState.settings.hotkey.displayName) to create your first recording.")
+                    description: Text("Hold \(appState.settings.hotkeyDisplayName) to create your first recording.")
                 )
             }
         }

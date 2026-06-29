@@ -29,6 +29,16 @@ struct SettingsView: View {
                 }
                 .onChange(of: appState.settings.hotkey) { _, _ in appState.reloadHotkey() }
 
+                if appState.settings.hotkey == .custom {
+                    LabeledContent("Shortcut") {
+                        KeyRecorderView(
+                            combo: $appState.settings.customHotkey,
+                            onChange: { appState.reloadHotkey() },
+                            onRecordingChange: { appState.setHotkeyCaptureActive($0) }
+                        )
+                    }
+                }
+
                 Picker("Mode", selection: $appState.settings.recordingMode) {
                     ForEach(RecordingMode.allCases) { Text($0.displayName).tag($0) }
                 }
@@ -123,17 +133,26 @@ struct SettingsView: View {
 
     private var vocabularyTab: some View {
         Form {
-            Section {
-                Text("Replace recognized words automatically — e.g. fix names or jargon Whisper gets wrong.")
+            sharedLibrarySection
+
+            Section("Your replacements") {
+                Text("Replace recognized words automatically — e.g. fix names or jargon Whisper gets wrong. These apply on top of the shared library and win on conflicts.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-            Section("Replacements") {
+
                 ForEach($appState.settings.vocabulary.rules) { $rule in
                     HStack {
                         TextField("Heard", text: $rule.find)
                         Image(systemName: "arrow.right").foregroundStyle(.secondary)
                         TextField("Replace with", text: $rule.replaceWith)
+                        Button {
+                            appState.settings.vocabulary.rules.removeAll { $0.id == rule.id }
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundStyle(.red)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Remove replacement")
                     }
                 }
                 .onDelete { appState.settings.vocabulary.rules.remove(atOffsets: $0) }
@@ -146,6 +165,56 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var sharedLibrarySection: some View {
+        Section("Shared library") {
+            Text("Pull a team glossary from a URL you host (e.g. client names with specific spellings). It applies for everyone automatically and refreshes on launch.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextField("Glossary URL (https://…)", text: $appState.settings.sharedVocabularyURL)
+                .onSubmit { appState.reloadSharedVocabulary() }
+
+            HStack {
+                sharedStatusView
+                Spacer()
+                Button("Refresh") { appState.refreshSharedVocabulary() }
+                    .disabled(appState.settings.sharedVocabularyURL
+                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            if !appState.sharedVocabulary.rules.isEmpty {
+                DisclosureGroup("\(appState.sharedVocabulary.rules.count) shared replacements") {
+                    ForEach(appState.sharedVocabulary.rules) { rule in
+                        HStack {
+                            Text(rule.find)
+                            Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                            Text(rule.replaceWith)
+                            Spacer()
+                        }
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var sharedStatusView: some View {
+        switch appState.sharedVocabulary.status {
+        case .idle:
+            Text("Not configured").font(.caption).foregroundStyle(.secondary)
+        case .loading:
+            Label("Updating…", systemImage: "arrow.triangle.2.circlepath")
+                .font(.caption).foregroundStyle(.secondary)
+        case .loaded(let count, _):
+            Label("\(count) terms loaded", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.green)
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.caption).foregroundStyle(.orange).lineLimit(1)
+        }
     }
 
     // MARK: - Advanced

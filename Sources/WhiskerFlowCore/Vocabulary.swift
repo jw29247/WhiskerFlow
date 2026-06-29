@@ -21,6 +21,21 @@ public struct VocabularyRule: Codable, Equatable, Hashable, Identifiable, Sendab
         self.caseSensitive = caseSensitive
         self.wholeWord = wholeWord
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, find, replaceWith, caseSensitive, wholeWord
+    }
+
+    /// Tolerant decoding so a hand-maintained shared glossary can be terse:
+    /// only `find` and `replaceWith` are required; `id` and the flags default.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        find = try container.decode(String.self, forKey: .find)
+        replaceWith = try container.decode(String.self, forKey: .replaceWith)
+        caseSensitive = try container.decodeIfPresent(Bool.self, forKey: .caseSensitive) ?? false
+        wholeWord = try container.decodeIfPresent(Bool.self, forKey: .wholeWord) ?? true
+    }
 }
 
 public struct Vocabulary: Codable, Equatable, Sendable {
@@ -35,6 +50,20 @@ public struct Vocabulary: Codable, Equatable, Sendable {
         rules.reduce(text) { partial, rule in
             Vocabulary.apply(rule, to: partial)
         }
+    }
+
+    /// Combine a shared (read-only, team-wide) vocabulary with the user's
+    /// personal rules. Shared rules apply first; a personal rule whose `find`
+    /// matches a shared rule's (case-insensitively) overrides it, and any other
+    /// personal rules layer on top — so personal always wins on conflict.
+    public static func effective(shared: Vocabulary, personal: Vocabulary) -> Vocabulary {
+        let overridden = Set(
+            personal.rules
+                .map { $0.find.lowercased() }
+                .filter { !$0.isEmpty }
+        )
+        let keptShared = shared.rules.filter { !overridden.contains($0.find.lowercased()) }
+        return Vocabulary(rules: keptShared + personal.rules)
     }
 
     static func apply(_ rule: VocabularyRule, to text: String) -> String {

@@ -52,6 +52,7 @@ final class AppState {
     private let live: LiveDictationSession
     private let pasteService = PasteService()
     private let soundService = SoundService()
+    let sharedVocabulary = SharedVocabularyService()
     private var hotkeyMonitor: HotkeyMonitor?
     private var hudController: RecordingHUDController?
     private var hasStarted = false
@@ -78,7 +79,7 @@ final class AppState {
             switch modelState {
             case .preparing: return "Preparing \(settings.model.displayName.lowercased())…"
             case .failed(let message): return message
-            default: return "Hold \(settings.hotkey.displayName) to dictate"
+            default: return "Hold \(settings.hotkeyDisplayName) to dictate"
             }
         case .preparingMic: return "Preparing microphone…"
         case .recording: return "Recording…"
@@ -131,6 +132,8 @@ final class AppState {
             selectedRecordID = records.first?.id
             refreshAccessibilityPermission()
             refreshDevices()
+            sharedVocabulary.configure(urlString: settings.sharedVocabularyURL)
+            sharedVocabulary.startPeriodicRefresh()
             startHotkeyMonitor()
             hudController = RecordingHUDController(appState: self)
             warmUpEngine()
@@ -153,7 +156,31 @@ final class AppState {
     }
 
     func reloadHotkey() {
-        hotkeyMonitor?.update(trigger: settings.hotkey)
+        hotkeyMonitor?.update(combo: settings.activeHotkeyCombo)
+    }
+
+    /// Suspend the live hotkey while the user is recording a new shortcut, so the
+    /// keys they press to record don't start a real dictation session.
+    func setHotkeyCaptureActive(_ active: Bool) {
+        hotkeyMonitor?.setSuspended(active)
+    }
+
+    /// The team glossary plus the user's personal rules, applied to every
+    /// transcript. Personal rules override shared ones on conflict.
+    var effectiveVocabulary: Vocabulary {
+        Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: settings.vocabulary)
+    }
+
+    /// Re-point the shared-glossary service after the URL setting changes.
+    func reloadSharedVocabulary() {
+        sharedVocabulary.configure(urlString: settings.sharedVocabularyURL)
+    }
+
+    /// Force a re-fetch (manual "Refresh"), picking up any just-edited URL.
+    func refreshSharedVocabulary() {
+        if !sharedVocabulary.configure(urlString: settings.sharedVocabularyURL) {
+            sharedVocabulary.refresh()
+        }
     }
 
     func refreshDevices() {
@@ -220,7 +247,7 @@ final class AppState {
     // MARK: - Recording
 
     private func startHotkeyMonitor() {
-        let monitor = HotkeyMonitor(trigger: settings.hotkey) { [weak self] pressed in
+        let monitor = HotkeyMonitor(combo: settings.activeHotkeyCombo) { [weak self] pressed in
             guard let self else { return }
             switch self.settings.recordingMode {
             case .holdToTalk:
@@ -268,7 +295,7 @@ final class AppState {
                 deviceID: settings.selectedDeviceID,
                 language: settings.resolvedLanguage,
                 model: settings.model,
-                vocabulary: settings.vocabulary,
+                vocabulary: effectiveVocabulary,
                 streaming: streamingActive
             )
             isPreparingRecording = false
@@ -423,7 +450,7 @@ final class AppState {
                 cliConfiguration: settings.cliConfiguration,
                 allowAppleFallback: settings.allowAppleFallback
             )
-            let finalText = settings.vocabulary.apply(to: outcome.result.text)
+            let finalText = effectiveVocabulary.apply(to: outcome.result.text)
             try store.markTranscribed(
                 id: record.id,
                 text: finalText,

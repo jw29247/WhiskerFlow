@@ -10,7 +10,7 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Welcome to WhiskerFlow")
                     .font(.largeTitle.bold())
-                Text("Hold \(appState.settings.hotkey.displayName) anywhere to dictate. Release to transcribe and paste at your cursor. Grant a couple of permissions to get going.")
+                Text("Hold \(appState.settings.hotkeyDisplayName) anywhere to dictate. Release to transcribe and paste at your cursor. Grant a couple of permissions to get going.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

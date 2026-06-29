@@ -13,6 +13,8 @@ final class AppSettings {
     /// BCP-47 code, or "auto" to let the engine detect.
     var language: String { didSet { persist() } }
     var hotkey: HotkeyTrigger { didSet { persist() } }
+    /// The key combination used when `hotkey == .custom`.
+    var customHotkey: KeyCombo { didSet { persist() } }
     var recordingMode: RecordingMode { didSet { persist() } }
     /// Stream and transcribe while speaking so the transcript pastes instantly on
     /// release. Applies to the WhisperKit engine; other engines stay file-based.
@@ -26,6 +28,8 @@ final class AppSettings {
     var whisperCommand: String { didSet { persist() } }
     var whisperArguments: String { didSet { persist() } }
     var vocabulary: Vocabulary { didSet { persist() } }
+    /// URL of a team-wide glossary fetched and applied for everyone. Empty = off.
+    var sharedVocabularyURL: String { didSet { persist() } }
 
     var launchAtLogin: Bool {
         didSet {
@@ -41,6 +45,7 @@ final class AppSettings {
         model = defaults.string(forKey: Keys.model).flatMap(WhisperModel.init) ?? .tiny
         language = defaults.string(forKey: Keys.language) ?? "en"
         hotkey = defaults.string(forKey: Keys.hotkey).flatMap(HotkeyTrigger.init) ?? .fn
+        customHotkey = Self.loadCustomHotkey(from: defaults) ?? .default
         recordingMode = defaults.string(forKey: Keys.recordingMode).flatMap(RecordingMode.init) ?? .holdToTalk
         liveTranscription = defaults.object(forKey: Keys.liveTranscription) as? Bool ?? true
         delivery = defaults.string(forKey: Keys.delivery).flatMap(DeliveryMode.init) ?? .pasteAtCursor
@@ -52,11 +57,23 @@ final class AppSettings {
         whisperCommand = defaults.string(forKey: Keys.whisperCommand) ?? Self.defaultWhisperCommand
         whisperArguments = defaults.string(forKey: Keys.whisperArguments) ?? Self.defaultWhisperArguments
         vocabulary = Self.loadVocabulary(from: defaults) ?? Vocabulary()
+        sharedVocabularyURL = defaults.string(forKey: Keys.sharedVocabularyURL) ?? ""
         launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
     }
 
     var resolvedLanguage: String? {
         language.lowercased() == "auto" ? nil : language
+    }
+
+    /// The key combination the monitor should watch for, resolving presets and
+    /// the custom shortcut to a single value.
+    var activeHotkeyCombo: KeyCombo {
+        hotkey.presetCombo ?? customHotkey
+    }
+
+    /// Human-readable name for the active hotkey, for status text and prompts.
+    var hotkeyDisplayName: String {
+        hotkey == .custom ? customHotkey.displayName : hotkey.displayName
     }
 
     var cliConfiguration: WhisperConfiguration {
@@ -68,6 +85,9 @@ final class AppSettings {
         defaults.set(model.rawValue, forKey: Keys.model)
         defaults.set(language, forKey: Keys.language)
         defaults.set(hotkey.rawValue, forKey: Keys.hotkey)
+        if let data = try? JSONEncoder().encode(customHotkey) {
+            defaults.set(data, forKey: Keys.customHotkey)
+        }
         defaults.set(recordingMode.rawValue, forKey: Keys.recordingMode)
         defaults.set(liveTranscription, forKey: Keys.liveTranscription)
         defaults.set(delivery.rawValue, forKey: Keys.delivery)
@@ -82,6 +102,7 @@ final class AppSettings {
         if let data = try? JSONEncoder().encode(vocabulary) {
             defaults.set(data, forKey: Keys.vocabulary)
         }
+        defaults.set(sharedVocabularyURL, forKey: Keys.sharedVocabularyURL)
     }
 
     private func applyLaunchAtLogin(_ enabled: Bool) {
@@ -105,6 +126,11 @@ final class AppSettings {
         return try? JSONDecoder().decode(Vocabulary.self, from: data)
     }
 
+    private static func loadCustomHotkey(from defaults: UserDefaults) -> KeyCombo? {
+        guard let data = defaults.data(forKey: Keys.customHotkey) else { return nil }
+        return try? JSONDecoder().decode(KeyCombo.self, from: data)
+    }
+
     static var defaultWhisperCommand: String {
         let candidates = ["/opt/homebrew/bin/whisper", "/usr/local/bin/whisper"]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? "whisper"
@@ -119,6 +145,7 @@ final class AppSettings {
         static let model = "model"
         static let language = "language"
         static let hotkey = "hotkey"
+        static let customHotkey = "customHotkey"
         static let recordingMode = "recordingMode"
         static let liveTranscription = "liveTranscription"
         static let delivery = "delivery"
@@ -130,6 +157,7 @@ final class AppSettings {
         static let whisperCommand = "whisperCommand"
         static let whisperArguments = "whisperArguments"
         static let vocabulary = "vocabulary"
+        static let sharedVocabularyURL = "sharedVocabularyURL"
         static let launchAtLogin = "launchAtLogin"
     }
 }

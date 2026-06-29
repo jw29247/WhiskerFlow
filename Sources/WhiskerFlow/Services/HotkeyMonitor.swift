@@ -3,34 +3,34 @@ import WhiskerFlowCore
 
 /// Watches for the configured push-to-talk key globally and locally, reporting
 /// pressed/released transitions. Mode (hold vs toggle) is interpreted by the caller.
+///
+/// All matching logic lives in `HotkeyMatcher`; this type just translates
+/// `NSEvent`s into matcher calls and emits the resulting transitions.
 @MainActor
 final class HotkeyMonitor {
     private let onChange: (Bool) -> Void
-    private var trigger: HotkeyTrigger
+    private var matcher: HotkeyMatcher
+    private var isSuspended = false
     private var flagsLocalMonitor: Any?
     private var flagsGlobalMonitor: Any?
     private var keyLocalMonitor: Any?
     private var keyGlobalMonitor: Any?
-    private var isPressed = false
 
-    // Virtual key codes.
-    private static let fnKey: UInt16 = 63
-    private static let rightCommandKey: UInt16 = 54
-    private static let rightOptionKey: UInt16 = 61
-    private static let f5Key: UInt16 = 96
-
-    init(trigger: HotkeyTrigger, onChange: @escaping (Bool) -> Void) {
-        self.trigger = trigger
+    init(combo: KeyCombo, onChange: @escaping (Bool) -> Void) {
+        self.matcher = HotkeyMatcher(combo: combo)
         self.onChange = onChange
     }
 
-    func update(trigger: HotkeyTrigger) {
-        guard trigger != self.trigger else { return }
-        self.trigger = trigger
-        if isPressed {
-            isPressed = false
-            onChange(false)
-        }
+    func update(combo: KeyCombo) {
+        emitIfChanged(matcher.update(combo: combo))
+    }
+
+    /// Pause matching while the user records a new shortcut, so the keys they
+    /// press to record can't also trigger a real dictation session.
+    func setSuspended(_ suspended: Bool) {
+        guard suspended != isSuspended else { return }
+        isSuspended = suspended
+        if suspended { emitIfChanged(matcher.reset()) }
     }
 
     func start() {
@@ -57,34 +57,23 @@ final class HotkeyMonitor {
     }
 
     private func handleFlags(_ event: NSEvent) {
-        let pressed: Bool
-        switch trigger {
-        case .fn:
-            // Require the actual fn/Globe key — the .function flag alone is also
-            // set by arrow/F keys, which would cause false triggers.
-            guard event.keyCode == Self.fnKey else { return }
-            pressed = event.modifierFlags.contains(.function)
-        case .rightCommand:
-            guard event.keyCode == Self.rightCommandKey else { return }
-            pressed = event.modifierFlags.contains(.command)
-        case .rightOption:
-            guard event.keyCode == Self.rightOptionKey else { return }
-            pressed = event.modifierFlags.contains(.option)
-        case .f5:
-            return
-        }
-        emit(pressed)
+        guard !isSuspended else { return }
+        let modifiers = KeyModifiers(rawValue: UInt(event.modifierFlags.rawValue))
+        emitIfChanged(matcher.handleFlags(keyCode: event.keyCode, modifiers: modifiers))
     }
 
     private func handleKey(_ event: NSEvent) {
-        guard trigger == .f5, event.keyCode == Self.f5Key else { return }
-        guard !event.isARepeat else { return }
-        emit(event.type == .keyDown)
+        guard !isSuspended else { return }
+        let modifiers = KeyModifiers(rawValue: UInt(event.modifierFlags.rawValue))
+        emitIfChanged(matcher.handleKey(
+            keyCode: event.keyCode,
+            modifiers: modifiers,
+            isKeyDown: event.type == .keyDown,
+            isRepeat: event.isARepeat
+        ))
     }
 
-    private func emit(_ pressed: Bool) {
-        guard pressed != isPressed else { return }
-        isPressed = pressed
-        onChange(pressed)
+    private func emitIfChanged(_ pressed: Bool?) {
+        if let pressed { onChange(pressed) }
     }
 }
