@@ -146,7 +146,11 @@ struct SettingsView: View {
                         Image(systemName: "arrow.right").foregroundStyle(.secondary)
                         TextField("Replace with", text: $rule.replaceWith)
                         Button {
-                            appState.settings.vocabulary.rules.removeAll { $0.id == rule.id }
+                            // Capture the id first: reading `rule` (a Binding into
+                            // settings.vocabulary) inside removeAll's mutating closure
+                            // overlaps its write access and traps on exclusivity.
+                            let ruleID = rule.id
+                            appState.settings.vocabulary.rules.removeAll { $0.id == ruleID }
                         } label: {
                             Image(systemName: "minus.circle.fill")
                                 .foregroundStyle(.red)
