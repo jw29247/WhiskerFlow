@@ -19,6 +19,13 @@ enum AppStatus: Equatable {
     }
 }
 
+extension AppStatus {
+    var hudNotificationMessage: String? {
+        guard case .success(let message) = self else { return nil }
+        return message
+    }
+}
+
 enum ModelState: Equatable {
     case unloaded
     case preparing
@@ -87,6 +94,14 @@ final class AppState {
         case .success(let message): return message
         case .failure(let message): return message
         }
+    }
+
+    var hudPresentation: FloatingHUDPresentation {
+        FloatingHUDPresentation.current(
+            isRecording: isRecording,
+            isTranscribing: isTranscribing,
+            successMessage: status.hudNotificationMessage
+        )
     }
 
     var retryQueue: [TranscriptRecord] {
