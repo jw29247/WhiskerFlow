@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WhiskerFlowCore
 
 /// The content shown inside the floating HUD panel.
 struct RecordingHUDView: View {
@@ -12,7 +13,7 @@ struct RecordingHUDView: View {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
-                if appState.isRecording, !appState.liveText.isEmpty {
+                if presentation == .recording, !appState.liveText.isEmpty {
                     // Live transcript, most-recent words kept visible.
                     Text(appState.liveText)
                         .font(.system(size: 12))
@@ -20,7 +21,7 @@ struct RecordingHUDView: View {
                         .lineLimit(2)
                         .truncationMode(.head)
                         .frame(maxWidth: 320, alignment: .leading)
-                } else if appState.isRecording {
+                } else if presentation == .recording {
                     TimelineView(.periodic(from: .now, by: 0.2)) { _ in
                         Text(elapsedString)
                             .font(.system(size: 11, weight: .regular).monospacedDigit())
@@ -32,9 +33,9 @@ struct RecordingHUDView: View {
                         .foregroundStyle(.white.opacity(0.7))
                 }
             }
-            if appState.isRecording {
+            if presentation == .recording {
                 LevelMeter(level: appState.audioLevel, tint: .white)
-            } else if appState.isTranscribing {
+            } else if presentation == .transcribing {
                 ProgressView()
                     .controlSize(.small)
                     .tint(.white)
@@ -52,16 +53,40 @@ struct RecordingHUDView: View {
     }
 
     private var icon: some View {
-        Image(systemName: appState.isRecording ? "waveform" : "ellipsis")
+        Image(systemName: iconName)
             .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(appState.isRecording ? Color.red : Color.white)
-            .symbolEffect(.variableColor.iterative, isActive: appState.isTranscribing)
+            .foregroundStyle(iconTint)
+            .symbolEffect(.variableColor.iterative, isActive: presentation == .transcribing)
+    }
+
+    private var presentation: FloatingHUDPresentation {
+        appState.hudPresentation
+    }
+
+    private var iconName: String {
+        switch presentation {
+        case .recording: return "waveform"
+        case .transcribing: return "ellipsis"
+        case .notification: return "checkmark.circle.fill"
+        case .hidden: return "ellipsis"
+        }
+    }
+
+    private var iconTint: Color {
+        switch presentation {
+        case .recording: return .red
+        case .notification: return .green
+        case .transcribing, .hidden: return .white
+        }
     }
 
     private var title: String {
-        if appState.isRecording { return "Listening…" }
-        if appState.isTranscribing { return "Transcribing…" }
-        return appState.statusMessage
+        switch presentation {
+        case .recording: return "Listening…"
+        case .transcribing: return "Transcribing…"
+        case .notification(let message): return message
+        case .hidden: return appState.statusMessage
+        }
     }
 
     private var elapsedString: String {
@@ -86,6 +111,7 @@ final class RecordingHUDController {
         withObservationTracking {
             _ = appState.isRecording
             _ = appState.isTranscribing
+            _ = appState.status
             // Re-fit the panel as the live transcript grows.
             _ = appState.liveText
         } onChange: { [weak self] in
@@ -98,9 +124,13 @@ final class RecordingHUDController {
     }
 
     private func updateVisibility() {
-        if appState.isRecording || appState.isTranscribing {
+        switch appState.hudPresentation {
+        case .recording, .transcribing:
             show()
-        } else {
+        case .notification:
+            show()
+            scheduleHide()
+        case .hidden:
             scheduleHide()
         }
     }
