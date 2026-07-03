@@ -15,7 +15,7 @@ For a real release:
 3. Run the signed local release command:
 
    ```bash
-   VERSION=0.5.2 NOTES="Short release note" script/notarize.sh
+   VERSION=<version> NOTES="Short release note" script/notarize.sh
    ```
 
    This requires a Developer ID Application certificate, the
@@ -24,10 +24,10 @@ For a real release:
 4. Publish both generated assets:
 
    ```bash
-   gh release create "v0.5.2" \
-     "dist/WhiskerFlow-0.5.2.dmg" \
-     "dist/WhiskerFlow-0.5.2.zip" \
-     --title "WhiskerFlow 0.5.2" \
+   gh release create "v<version>" \
+     "dist/WhiskerFlow-<version>.dmg" \
+     "dist/WhiskerFlow-<version>.zip" \
+     --title "WhiskerFlow <version>" \
      --notes "Short release note"
    ```
 
