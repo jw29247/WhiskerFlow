@@ -1,5 +1,6 @@
 import Foundation
-import Speech
+@preconcurrency import Speech
+import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
 /// Built-in, zero-download fallback using the on-device Speech framework.
@@ -39,25 +40,36 @@ actor AppleSpeechEngine: TranscriptionEngine {
             speechRequest.requiresOnDeviceRecognition = true
         }
 
-        return try await withCheckedThrowingContinuation { continuation in
-            let guardOnce = ResumeGuard()
-            // Capture `recognizer` so it outlives this scope until the task finishes.
-            recognizer.recognitionTask(with: speechRequest) { result, error in
-                _ = recognizer
-                if let error {
-                    if guardOnce.fire() {
-                        continuation.resume(throwing: TranscriptionError.underlying(error.localizedDescription))
+        return try await withTimeout(seconds: 90) {
+            let taskBox = SpeechRecognitionTaskBox()
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    let guardOnce = ResumeGuard()
+                    let task = recognizer.recognitionTask(with: speechRequest) { result, error in
+                        _ = recognizer
+                        if let error {
+                            if guardOnce.fire() {
+                                continuation.resume(throwing: TranscriptionError.underlying(error.localizedDescription))
+                            }
+                            return
+                        }
+                        guard let result, result.isFinal else { return }
+                        let text = result.bestTranscription.formattedString
+                        if guardOnce.fire() {
+                            continuation.resume(returning: TranscriptionResult(
+                                text: text.plainTranscriptText,
+                                language: request.language
+                            ))
+                        }
                     }
-                    return
+                    taskBox.set(task) {
+                        if guardOnce.fire() {
+                            continuation.resume(throwing: CancellationError())
+                        }
+                    }
                 }
-                guard let result, result.isFinal else { return }
-                let text = result.bestTranscription.formattedString
-                if guardOnce.fire() {
-                    continuation.resume(returning: TranscriptionResult(
-                        text: text.plainTranscriptText,
-                        language: request.language
-                    ))
-                }
+            } onCancel: {
+                taskBox.cancel()
             }
         }
     }
@@ -69,5 +81,41 @@ actor AppleSpeechEngine: TranscriptionEngine {
         case "en": return "en-US"
         default: return code
         }
+    }
+}
+
+private final class SpeechRecognitionTaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: SFSpeechRecognitionTask?
+    private var cancellationHandler: (@Sendable () -> Void)?
+    private var isCancelled = false
+
+    func set(
+        _ task: SFSpeechRecognitionTask,
+        onCancellation: @escaping @Sendable () -> Void
+    ) {
+        lock.lock()
+        let cancelImmediately = isCancelled
+        if !cancelImmediately {
+            self.task = task
+            cancellationHandler = onCancellation
+        }
+        lock.unlock()
+        if cancelImmediately {
+            task.cancel()
+            onCancellation()
+        }
+    }
+
+    func cancel() {
+        lock.lock()
+        isCancelled = true
+        let task = task
+        let handler = cancellationHandler
+        self.task = nil
+        cancellationHandler = nil
+        lock.unlock()
+        task?.cancel()
+        handler?()
     }
 }

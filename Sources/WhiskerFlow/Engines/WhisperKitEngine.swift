@@ -1,5 +1,5 @@
 import Foundation
-import WhisperKit
+@preconcurrency import WhisperKit
 import WhiskerFlowCore
 
 /// Primary engine: on-device Whisper via CoreML / Neural Engine. The model is

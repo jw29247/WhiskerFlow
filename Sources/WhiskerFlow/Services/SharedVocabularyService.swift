@@ -1,9 +1,10 @@
 import Foundation
 import Observation
+import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
-/// Fetches a team-wide vocabulary glossary from a URL the user configures, so
-/// client names and jargon spell correctly for everyone without per-user setup.
+/// Fetches the agency-managed vocabulary glossary so client names and jargon
+/// spell correctly for everyone without per-user setup.
 ///
 /// The glossary is read-only and the payload is the same JSON shape as a local
 /// `Vocabulary` (`{ "rules": [ { "find": …, "replaceWith": … } ] }`). The last
@@ -17,6 +18,7 @@ import WhiskerFlowCore
 @MainActor
 @Observable
 final class SharedVocabularyService {
+    static let agencyURLString = "https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/shared-vocabulary.json"
     enum Status: Equatable {
         case idle
         case loading
@@ -39,7 +41,7 @@ final class SharedVocabularyService {
     init(session: URLSession = .shared, cacheURL: URL = SharedVocabularyService.defaultCacheURL) {
         self.session = session
         self.cacheURL = cacheURL
-        loadCache()
+        loadInitialVocabulary()
     }
 
     deinit {
@@ -65,6 +67,10 @@ final class SharedVocabularyService {
         }
         startFetch()
         return true
+    }
+
+    func configureAgencyLibrary() {
+        _ = configure(urlString: Self.agencyURLString)
     }
 
     /// Re-fetch the current URL, superseding any in-flight fetch.
@@ -110,24 +116,52 @@ final class SharedVocabularyService {
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                 throw URLError(.badServerResponse)
             }
-            let vocab = try JSONDecoder().decode(Vocabulary.self, from: data)
+            let vocab = try AgencyVocabularyPolicy.decode(data)
             guard myGeneration == generation else { return }
             rules = vocab.rules
             status = .loaded(count: rules.count, at: Date())
-            try? data.write(to: cacheURL, options: .atomic)
+            do {
+                try data.write(to: cacheURL, options: .atomic)
+            } catch {
+                DiagnosticsService.capture(
+                    error: error,
+                    category: "storage",
+                    code: String((error as NSError).code)
+                )
+            }
         } catch {
             // A superseded/cancelled fetch (newer generation) stays silent and
             // leaves state to the fetch that replaced it. Otherwise surface the
             // error but keep the last good rules so dictation still benefits.
             guard myGeneration == generation else { return }
             status = .failed(error.localizedDescription)
+            DiagnosticsService.capture(
+                error: error,
+                category: "glossary",
+                code: String((error as NSError).code)
+            )
         }
     }
 
-    private func loadCache() {
-        guard let data = try? Data(contentsOf: cacheURL),
-              let vocab = try? JSONDecoder().decode(Vocabulary.self, from: data) else { return }
-        rules = vocab.rules
+    private func loadInitialVocabulary() {
+        if let cache = try? Data(contentsOf: cacheURL),
+           let vocabulary = try? AgencyVocabularyPolicy.decode(cache) {
+            let modified = (try? cacheURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? Date()
+            rules = vocabulary.rules
+            status = .loaded(count: rules.count, at: modified)
+            return
+        }
+
+        guard let seedURL = Bundle.module.url(
+            forResource: "shared-vocabulary",
+            withExtension: "json"
+        ), let seed = try? Data(contentsOf: seedURL),
+           let vocabulary = try? AgencyVocabularyPolicy.decode(seed) else { return }
+        let modified = (try? seedURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate ?? Date()
+        rules = vocabulary.rules
+        status = .loaded(count: rules.count, at: modified)
     }
 
     nonisolated static var defaultCacheURL: URL {

@@ -5,6 +5,10 @@ struct WhiskerFlowApp: App {
     @State private var appState = AppState()
     @StateObject private var updaterService = UpdaterService()
 
+    init() {
+        DiagnosticsService.start()
+    }
+
     var body: some Scene {
         WindowGroup(id: "main") {
             ContentView(appState: appState)

@@ -15,7 +15,14 @@ ENTITLEMENTS="${ENTITLEMENTS:-$ROOT_DIR/Resources/WhiskerFlow.entitlements}"
 cd "$ROOT_DIR"
 
 echo "Building $PRODUCT ($CONFIGURATION)"
-swift build --configuration "$CONFIGURATION"
+if [[ "$CONFIGURATION" == "release" ]]; then
+  # Keep developer/workspace paths out of both the executable and its dSYM.
+  swift build --configuration "$CONFIGURATION" \
+    -Xswiftc -debug-prefix-map -Xswiftc "$ROOT_DIR=." \
+    -Xswiftc -Xfrontend -Xswiftc -no-clang-module-breadcrumbs
+else
+  swift build --configuration "$CONFIGURATION"
+fi
 
 BINARY="$ROOT_DIR/.build/$CONFIGURATION/$PRODUCT"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$PRODUCT"
@@ -29,6 +36,10 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$BINARY" "$APP_BINARY"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
+if [[ -n "${WHISKERFLOW_SENTRY_DSN:-}" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :WhiskerFlowSentryDSN $WHISKERFLOW_SENTRY_DSN" \
+    "$APP_BUNDLE/Contents/Info.plist"
+fi
 printf "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 
 if [[ -f "$ROOT_DIR/Resources/AppIcon.icns" ]]; then

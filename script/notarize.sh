@@ -12,18 +12,21 @@
 #      (or use an App Store Connect API key: --key / --key-id / --issuer)
 #
 # Usage:
-#   VERSION=0.3.0 script/notarize.sh
+#   VERSION=0.6.0 script/notarize.sh
 #
 # Env overrides:
 #   DEVELOPER_ID    full signing identity (default: first "Developer ID Application" in keychain)
 #   NOTARY_PROFILE  notarytool keychain profile name (default: WhiskerFlow-Notary)
-#   VERSION         release version (default: 0.3.0)
+#   VERSION         release version (default: 0.6.0)
+#   WHISKERFLOW_SENTRY_DSN  public DSN embedded in the packaged app
+#   SENTRY_AUTH_TOKEN       release-only token used by sentry-cli
+#   SENTRY_ORG / SENTRY_PROJECT  destination for dSYMs and release metadata
 #
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT="WhiskerFlow"
-VERSION="${VERSION:-0.4.0}"
+VERSION="${VERSION:-0.6.0}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-WhiskerFlow-Notary}"
 REPO="${REPO:-jw29247/WhiskerFlow}"
 
@@ -33,7 +36,33 @@ APP_BUNDLE="$STAGING_DIR/$PRODUCT.app"
 APP_ZIP="$DIST_DIR/$PRODUCT-$VERSION-app.zip"
 DMG_PATH="$DIST_DIR/$PRODUCT-$VERSION.dmg"
 SPARKLE_ZIP="$DIST_DIR/$PRODUCT-$VERSION.zip"
+DSYM_PATH="$DIST_DIR/$PRODUCT-$VERSION.dSYM"
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/v$VERSION/$PRODUCT-$VERSION.zip"
+
+require_env() {
+  local name="$1"
+  if [[ -z "${!name:-}" ]]; then
+    echo "ERROR: Required release credential $name is not set." >&2
+    exit 1
+  fi
+}
+
+require_env WHISKERFLOW_SENTRY_DSN
+require_env SENTRY_AUTH_TOKEN
+require_env SENTRY_ORG
+require_env SENTRY_PROJECT
+if ! command -v sentry-cli >/dev/null 2>&1; then
+  echo "ERROR: sentry-cli is required to upload the release dSYM and metadata." >&2
+  exit 1
+fi
+
+PLIST_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT_DIR/Resources/Info.plist")"
+BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$ROOT_DIR/Resources/Info.plist")"
+if [[ "$PLIST_VERSION" != "$VERSION" ]]; then
+  echo "ERROR: VERSION=$VERSION does not match Info.plist version $PLIST_VERSION." >&2
+  exit 1
+fi
+SENTRY_RELEASE="agency.thatworks.WhiskerFlow@$VERSION+$BUILD_NUMBER"
 
 # --- Auto-update preflight: a Sparkle public key must be set, or shipped builds
 #     would reject every update. Generate it once with script/sparkle_keygen.sh.
@@ -67,7 +96,7 @@ fi
 echo "==> Signing identity: $SIGN_IDENTITY"
 
 # --- Clean staging ------------------------------------------------------------
-rm -rf "$STAGING_DIR" "$APP_ZIP" "$DMG_PATH"
+rm -rf "$STAGING_DIR" "$APP_ZIP" "$DMG_PATH" "$SPARKLE_ZIP" "$DSYM_PATH"
 mkdir -p "$STAGING_DIR"
 export COPYFILE_DISABLE=1
 
@@ -75,6 +104,18 @@ export COPYFILE_DISABLE=1
 CONFIGURATION=release SIGN_IDENTITY="$SIGN_IDENTITY" \
   "$ROOT_DIR/script/bundle_app.sh" "$APP_BUNDLE" >/dev/null
 echo "==> Built & signed $APP_BUNDLE"
+xcrun dsymutil "$APP_BUNDLE/Contents/MacOS/$PRODUCT" -o "$DSYM_PATH"
+APP_UUIDS="$(xcrun dwarfdump --uuid "$APP_BUNDLE/Contents/MacOS/$PRODUCT" | awk '{print $2}' | sort)"
+DSYM_UUIDS="$(xcrun dwarfdump --uuid "$DSYM_PATH" | awk '{print $2}' | sort)"
+if [[ -z "$APP_UUIDS" || "$APP_UUIDS" != "$DSYM_UUIDS" ]]; then
+  echo "ERROR: Generated dSYM UUID does not match the release executable." >&2
+  exit 1
+fi
+if strings "$DSYM_PATH/Contents/Resources/DWARF/$PRODUCT" | grep -F "$HOME/" >/dev/null; then
+  echo "ERROR: Generated dSYM contains a local home-directory path." >&2
+  exit 1
+fi
+echo "==> Generated matching dSYM at $DSYM_PATH"
 
 # --- 2. Notarize the app and staple the ticket onto it (works offline) --------
 ditto -c -k --keepParent "$APP_BUNDLE" "$APP_ZIP"
@@ -82,7 +123,8 @@ echo "==> Submitting app for notarization (a few minutes)…"
 xcrun notarytool submit "$APP_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$APP_BUNDLE"
 rm -f "$APP_ZIP"
-spctl --assess --type execute --verbose=4 "$APP_BUNDLE" || true
+codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+spctl --assess --type execute --verbose=4 "$APP_BUNDLE"
 echo "==> Notarized & stapled the app"
 
 # --- 3. Stage DMG contents ----------------------------------------------------
@@ -98,13 +140,13 @@ echo "==> Submitting DMG for notarization…"
 xcrun notarytool submit "$DMG_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$DMG_PATH"
 xcrun stapler validate "$DMG_PATH"
+spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"
 echo "==> Notarized & stapled $DMG_PATH"
 
 # --- 4b. Sparkle update archive + appcast -------------------------------------
 # Sparkle updates from a zipped copy of the *notarized, stapled* app (the ticket
 # travels inside the zip, so Gatekeeper validates offline after the in-place
 # swap). The enclosure URL points at the GitHub release asset uploaded below.
-BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_BUNDLE/Contents/Info.plist")"
 rm -f "$SPARKLE_ZIP"
 ditto -c -k --keepParent "$APP_BUNDLE" "$SPARKLE_ZIP"
 ZIP="$SPARKLE_ZIP" VERSION="$VERSION" BUILD="$BUILD_NUMBER" URL="$DOWNLOAD_URL" \
@@ -117,11 +159,23 @@ CASK="$ROOT_DIR/Casks/whiskerflow.rb"
 /usr/bin/sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/" "$CASK"
 /usr/bin/sed -i '' -E "s/^  sha256 .*/  sha256 \"$SHA\"/" "$CASK"
 
+# --- 6. Publish symbolication data only after the signed artifacts validate --
+sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+  debug-files upload "$DSYM_PATH"
+sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+  releases new "$SENTRY_RELEASE"
+sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+  releases set-commits "$SENTRY_RELEASE" --auto
+sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+  releases finalize "$SENTRY_RELEASE"
+echo "==> Uploaded dSYM and finalized Sentry release $SENTRY_RELEASE"
+
 cat <<MSG
 
 ==> Done.
     DMG (fresh installs):  $DMG_PATH
     ZIP (auto-update):     $SPARKLE_ZIP
+    dSYM (Sentry):         $DSYM_PATH
     sha256 (DMG):          $SHA
     Updated:               appcast.xml + $CASK
 

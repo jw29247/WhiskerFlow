@@ -101,6 +101,7 @@ final class RecordingHUDController {
     private unowned let appState: AppState
     private var panel: NSPanel?
     private var hideWorkItem: DispatchWorkItem?
+    private var showTask: Task<Void, Never>?
 
     init(appState: AppState) {
         self.appState = appState
@@ -162,12 +163,20 @@ final class RecordingHUDController {
     private func show() {
         hideWorkItem?.cancel()
         let panel = makePanelIfNeeded()
-        positionNearBottomCenter(panel)
         panel.alphaValue = 1
-        panel.orderFrontRegardless()
+        showTask?.cancel()
+        showTask = Task { @MainActor [weak self, weak panel] in
+            // SwiftUI can notify while AppKit is already laying out the hosting view.
+            // Position on the next actor turn instead of forcing nested layout.
+            await Task.yield()
+            guard !Task.isCancelled, let self, let panel else { return }
+            self.positionNearBottomCenter(panel)
+            panel.orderFrontRegardless()
+        }
     }
 
     private func scheduleHide() {
+        showTask?.cancel()
         hideWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.panel?.orderOut(nil)
@@ -178,7 +187,6 @@ final class RecordingHUDController {
 
     private func positionNearBottomCenter(_ panel: NSPanel) {
         guard let screen = NSScreen.main else { return }
-        panel.layoutIfNeeded()
         let size = panel.contentView?.fittingSize ?? NSSize(width: 260, height: 56)
         panel.setContentSize(size)
         let frame = screen.visibleFrame

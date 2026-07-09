@@ -48,10 +48,13 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Picker("Microphone", selection: $appState.settings.selectedDeviceID) {
-                    ForEach(appState.devices) { Text($0.name).tag($0.id) }
+                Picker("Microphone", selection: $appState.settings.selectedInputUID) {
+                    Text("System Default").tag("system-default")
+                    ForEach(appState.devices) { Text($0.name).tag($0.uid) }
                 }
+                .disabled(appState.microphoneControlsLocked)
                 Button("Refresh microphones") { appState.refreshDevices() }
+                    .disabled(appState.microphoneControlsLocked)
             }
 
             Section("Output") {
@@ -71,6 +74,13 @@ struct SettingsView: View {
                 Toggle("Automatically check for updates",
                        isOn: $updaterService.automaticallyChecksForUpdates)
                 CheckForUpdatesButton(updaterService: updaterService)
+            }
+
+            if let persistenceError = appState.settings.persistenceError {
+                Section {
+                    Label(persistenceError, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
             }
         }
         .formStyle(.grouped)
@@ -173,19 +183,14 @@ struct SettingsView: View {
 
     private var sharedLibrarySection: some View {
         Section("Shared library") {
-            Text("Pull a team glossary from a URL you host (e.g. client names with specific spellings). It applies for everyone automatically and refreshes on launch.")
+            Text("Agency-managed client names and phrases refresh automatically and remain available offline.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-            TextField("Glossary URL (https://…)", text: $appState.settings.sharedVocabularyURL)
-                .onSubmit { appState.reloadSharedVocabulary() }
 
             HStack {
                 sharedStatusView
                 Spacer()
                 Button("Refresh") { appState.refreshSharedVocabulary() }
-                    .disabled(appState.settings.sharedVocabularyURL
-                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
             if !appState.sharedVocabulary.rules.isEmpty {
@@ -212,9 +217,14 @@ struct SettingsView: View {
         case .loading:
             Label("Updating…", systemImage: "arrow.triangle.2.circlepath")
                 .font(.caption).foregroundStyle(.secondary)
-        case .loaded(let count, _):
-            Label("\(count) terms loaded", systemImage: "checkmark.circle.fill")
-                .font(.caption).foregroundStyle(.green)
+        case .loaded(let count, let date):
+            VStack(alignment: .leading, spacing: 2) {
+                Label("\(count) terms loaded", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("Updated \(date.formatted(date: .abbreviated, time: .shortened))")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle")
                 .font(.caption).foregroundStyle(.orange).lineLimit(1)

@@ -50,10 +50,14 @@ final class HotkeyMonitor {
         }
     }
 
-    deinit {
+    func stop() {
         for monitor in [flagsLocalMonitor, flagsGlobalMonitor, keyLocalMonitor, keyGlobalMonitor] {
             if let monitor { NSEvent.removeMonitor(monitor) }
         }
+        flagsLocalMonitor = nil
+        flagsGlobalMonitor = nil
+        keyLocalMonitor = nil
+        keyGlobalMonitor = nil
     }
 
     private func handleFlags(_ event: NSEvent) {

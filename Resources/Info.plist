@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>WhiskerFlow records microphone audio while you hold your dictation key so it can transcribe and paste what you say.</string>
+	<key>WhiskerFlowSentryDSN</key>
+	<string></string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>WhiskerFlow uses on-device speech recognition as a built-in fallback transcription engine.</string>
 	<key>SUEnableAutomaticChecks</key>

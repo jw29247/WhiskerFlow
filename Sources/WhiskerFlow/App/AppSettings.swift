@@ -1,39 +1,48 @@
 import Foundation
 import Observation
+import OSLog
 import ServiceManagement
+import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
 @MainActor
 @Observable
 final class AppSettings {
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "agency.thatworks.WhiskerFlow",
+        category: "Settings"
+    )
 
-    var engine: TranscriptionEngineKind { didSet { persist() } }
-    var model: WhisperModel { didSet { persist() } }
+    private(set) var persistenceError: String?
+
+    var engine: TranscriptionEngineKind { didSet { defaults.set(engine.rawValue, forKey: Keys.engine) } }
+    var model: WhisperModel { didSet { defaults.set(model.rawValue, forKey: Keys.model) } }
     /// BCP-47 code, or "auto" to let the engine detect.
-    var language: String { didSet { persist() } }
-    var hotkey: HotkeyTrigger { didSet { persist() } }
+    var language: String { didSet { defaults.set(language, forKey: Keys.language) } }
+    var hotkey: HotkeyTrigger { didSet { defaults.set(hotkey.rawValue, forKey: Keys.hotkey) } }
     /// The key combination used when `hotkey == .custom`.
-    var customHotkey: KeyCombo { didSet { persist() } }
-    var recordingMode: RecordingMode { didSet { persist() } }
+    var customHotkey: KeyCombo { didSet { persist(customHotkey, key: Keys.customHotkey) } }
+    var recordingMode: RecordingMode { didSet { defaults.set(recordingMode.rawValue, forKey: Keys.recordingMode) } }
     /// Stream and transcribe while speaking so the transcript pastes instantly on
     /// release. Applies to the WhisperKit engine; other engines stay file-based.
-    var liveTranscription: Bool { didSet { persist() } }
-    var delivery: DeliveryMode { didSet { persist() } }
-    var playSounds: Bool { didSet { persist() } }
-    var allowAppleFallback: Bool { didSet { persist() } }
-    var showMenuBarExtra: Bool { didSet { persist() } }
-    var showDockIcon: Bool { didSet { persist() } }
-    var selectedDeviceID: String { didSet { persist() } }
-    var whisperCommand: String { didSet { persist() } }
-    var whisperArguments: String { didSet { persist() } }
-    var vocabulary: Vocabulary { didSet { persist() } }
-    /// URL of a team-wide glossary fetched and applied for everyone. Empty = off.
-    var sharedVocabularyURL: String { didSet { persist() } }
+    var liveTranscription: Bool { didSet { defaults.set(liveTranscription, forKey: Keys.liveTranscription) } }
+    var delivery: DeliveryMode { didSet { defaults.set(delivery.rawValue, forKey: Keys.delivery) } }
+    var playSounds: Bool { didSet { defaults.set(playSounds, forKey: Keys.playSounds) } }
+    var allowAppleFallback: Bool { didSet { defaults.set(allowAppleFallback, forKey: Keys.allowAppleFallback) } }
+    var showMenuBarExtra: Bool { didSet { defaults.set(showMenuBarExtra, forKey: Keys.showMenuBarExtra) } }
+    var showDockIcon: Bool { didSet { defaults.set(showDockIcon, forKey: Keys.showDockIcon) } }
+    /// Stable CoreAudio UID, or `system-default`. Numeric AudioDeviceIDs are never persisted here.
+    var selectedInputUID: String { didSet { defaults.set(selectedInputUID, forKey: Keys.selectedInputUID) } }
+    var whisperCommand: String { didSet { defaults.set(whisperCommand, forKey: Keys.whisperCommand) } }
+    var whisperArguments: String { didSet { defaults.set(whisperArguments, forKey: Keys.whisperArguments) } }
+    var vocabulary: Vocabulary { didSet { persist(vocabulary, key: Keys.vocabulary) } }
+
+    @ObservationIgnored private(set) var legacySelectedDeviceID: String?
 
     var launchAtLogin: Bool {
         didSet {
-            persist()
+            defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
             applyLaunchAtLogin(launchAtLogin)
         }
     }
@@ -53,16 +62,29 @@ final class AppSettings {
         allowAppleFallback = defaults.object(forKey: Keys.allowAppleFallback) as? Bool ?? true
         showMenuBarExtra = defaults.object(forKey: Keys.showMenuBarExtra) as? Bool ?? true
         showDockIcon = defaults.object(forKey: Keys.showDockIcon) as? Bool ?? true
-        selectedDeviceID = defaults.string(forKey: Keys.selectedDeviceID) ?? ""
+        selectedInputUID = defaults.string(forKey: Keys.selectedInputUID) ?? "system-default"
         whisperCommand = defaults.string(forKey: Keys.whisperCommand) ?? Self.defaultWhisperCommand
         whisperArguments = defaults.string(forKey: Keys.whisperArguments) ?? Self.defaultWhisperArguments
         vocabulary = Self.loadVocabulary(from: defaults) ?? Vocabulary()
-        sharedVocabularyURL = defaults.string(forKey: Keys.sharedVocabularyURL) ?? ""
+        legacySelectedDeviceID = defaults.string(forKey: Keys.selectedDeviceID)
         launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
+        defaults.removeObject(forKey: Keys.sharedVocabularyURL)
     }
 
     var resolvedLanguage: String? {
         language.lowercased() == "auto" ? nil : language
+    }
+
+    var selectedInput: AudioInputSelection {
+        get { AudioInputSelection(persistedValue: selectedInputUID) }
+        set { selectedInputUID = newValue.persistedValue }
+    }
+
+    func finishLegacyMicrophoneMigration(_ selection: AudioInputSelection) {
+        guard legacySelectedDeviceID != nil else { return }
+        selectedInput = selection
+        defaults.removeObject(forKey: Keys.selectedDeviceID)
+        legacySelectedDeviceID = nil
     }
 
     /// The key combination the monitor should watch for, resolving presets and
@@ -80,29 +102,14 @@ final class AppSettings {
         WhisperConfiguration(command: whisperCommand, argumentsTemplate: whisperArguments)
     }
 
-    private func persist() {
-        defaults.set(engine.rawValue, forKey: Keys.engine)
-        defaults.set(model.rawValue, forKey: Keys.model)
-        defaults.set(language, forKey: Keys.language)
-        defaults.set(hotkey.rawValue, forKey: Keys.hotkey)
-        if let data = try? JSONEncoder().encode(customHotkey) {
-            defaults.set(data, forKey: Keys.customHotkey)
+    private func persist<T: Encodable>(_ value: T, key: String) {
+        do {
+            let data = try JSONEncoder().encode(value)
+            defaults.set(data, forKey: key)
+            persistenceError = nil
+        } catch {
+            reportPersistenceFailure(error)
         }
-        defaults.set(recordingMode.rawValue, forKey: Keys.recordingMode)
-        defaults.set(liveTranscription, forKey: Keys.liveTranscription)
-        defaults.set(delivery.rawValue, forKey: Keys.delivery)
-        defaults.set(playSounds, forKey: Keys.playSounds)
-        defaults.set(allowAppleFallback, forKey: Keys.allowAppleFallback)
-        defaults.set(showMenuBarExtra, forKey: Keys.showMenuBarExtra)
-        defaults.set(showDockIcon, forKey: Keys.showDockIcon)
-        defaults.set(selectedDeviceID, forKey: Keys.selectedDeviceID)
-        defaults.set(whisperCommand, forKey: Keys.whisperCommand)
-        defaults.set(whisperArguments, forKey: Keys.whisperArguments)
-        defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
-        if let data = try? JSONEncoder().encode(vocabulary) {
-            defaults.set(data, forKey: Keys.vocabulary)
-        }
-        defaults.set(sharedVocabularyURL, forKey: Keys.sharedVocabularyURL)
     }
 
     private func applyLaunchAtLogin(_ enabled: Bool) {
@@ -117,8 +124,18 @@ final class AppSettings {
                 }
             }
         } catch {
-            // Non-fatal — surfaced indirectly; the toggle simply won't stick.
+            reportPersistenceFailure(error)
         }
+    }
+
+    private func reportPersistenceFailure(_ error: Error) {
+        persistenceError = "A setting could not be saved. Try again."
+        logger.error("Settings persistence failed code=\((error as NSError).code, privacy: .public)")
+        DiagnosticsService.capture(
+            error: error,
+            category: "storage",
+            code: String((error as NSError).code)
+        )
     }
 
     private static func loadVocabulary(from defaults: UserDefaults) -> Vocabulary? {
@@ -154,6 +171,7 @@ final class AppSettings {
         static let showMenuBarExtra = "showMenuBarExtra"
         static let showDockIcon = "showDockIcon"
         static let selectedDeviceID = "selectedDeviceID"
+        static let selectedInputUID = "selectedInputUID"
         static let whisperCommand = "whisperCommand"
         static let whisperArguments = "whisperArguments"
         static let vocabulary = "vocabulary"

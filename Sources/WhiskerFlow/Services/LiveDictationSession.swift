@@ -1,8 +1,8 @@
 import Foundation
-import WhisperKit
+import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
-/// Live, low-latency dictation built on WhisperKit's `AudioProcessor`.
+/// Live, low-latency dictation using the app-owned AVAudioEngine capture service.
 ///
 /// While the key is held, audio streams into a 16 kHz float buffer and a decode
 /// loop continuously re-transcribes the growing buffer off the warm pipe, so the
@@ -11,12 +11,14 @@ import WhiskerFlowCore
 @MainActor
 final class LiveDictationSession {
     private let transcription: TranscriptionService
-    private let audioProcessor = AudioProcessor()
+    private let audioCapture = AudioCaptureService()
 
     /// Called on the main actor whenever a fresher partial transcript is ready.
     var onPartial: ((String) -> Void)?
     /// Called on the main actor with a normalized 0...1 input level.
     var onLevel: ((Float) -> Void)?
+    /// Called after AVFoundation reports that the active input configuration changed.
+    var onConfigurationChange: (() -> Void)?
 
     private var decodeLoop: Task<Void, Never>?
     private var language: String?
@@ -27,7 +29,7 @@ final class LiveDictationSession {
     private var isRunning = false
     private var isStreaming = false
 
-    private static let sampleRate = Double(WhisperKit.sampleRate) // 16 kHz
+    private static let sampleRate = 16_000.0
     /// Re-decode once this much new audio has accumulated since the last pass.
     private static let minNewSamples = Int(sampleRate * 0.4)
     /// On release, if more than this much audio went undecoded (only happens when
@@ -36,12 +38,14 @@ final class LiveDictationSession {
 
     init(transcription: TranscriptionService) {
         self.transcription = transcription
+        audioCapture.onLevel = { [weak self] level in self?.onLevel?(level) }
+        audioCapture.onConfigurationChange = { [weak self] in self?.onConfigurationChange?() }
     }
 
     /// Begin capturing and (if `streaming`) live-decoding. Throws if the mic
     /// engine can't start. Requires microphone permission to already be granted.
     func start(
-        deviceID: String,
+        selection: AudioInputSelection,
         language: String?,
         model: WhisperModel,
         vocabulary: Vocabulary,
@@ -52,12 +56,14 @@ final class LiveDictationSession {
         self.vocabulary = vocabulary
         latestText = ""
         lastDecodedSampleCount = 0
-        isRunning = true
         isStreaming = streaming
-
-        try audioProcessor.startRecordingLive(inputDeviceID: Microphone.deviceID(from: deviceID)) { [weak self] buffer in
-            let level = Self.level(from: buffer)
-            Task { @MainActor [weak self] in self?.onLevel?(level) }
+        do {
+            try audioCapture.start(selection: selection)
+            isRunning = true
+        } catch {
+            isRunning = false
+            isStreaming = false
+            throw error
         }
 
         if streaming {
@@ -66,13 +72,13 @@ final class LiveDictationSession {
     }
 
     /// Stop capture and return the freshest transcript plus the captured samples.
-    func finish() async -> (text: String, samples: [Float]) {
+    func finish(reason: CaptureStopReason = .userReleased) async -> (text: String, samples: [Float]) {
         isRunning = false
-        audioProcessor.stopRecording()           // freeze the buffer
-        await decodeLoop?.value                   // let any in-flight decode settle
+        let loop = decodeLoop
         decodeLoop = nil
-
-        let samples = Array(audioProcessor.audioSamples)
+        let captured = audioCapture.stop(reason: reason)
+        await loop?.value
+        let samples = captured.samples
 
         // Fall back to a final decode only when we have no partial yet (utterance
         // shorter than the first decode) or decoding lagged badly on a long hold.
@@ -95,7 +101,7 @@ final class LiveDictationSession {
         isRunning = false
         decodeLoop?.cancel()
         decodeLoop = nil
-        audioProcessor.stopRecording()
+        audioCapture.cancel()
         latestText = ""
         lastDecodedSampleCount = 0
         onLevel?(0)
@@ -106,7 +112,7 @@ final class LiveDictationSession {
     private func startDecodeLoop() {
         decodeLoop = Task { @MainActor [weak self] in
             while let self, self.isRunning, !Task.isCancelled {
-                let samples = Array(self.audioProcessor.audioSamples)
+                let samples = self.audioCapture.snapshot()
                 if samples.count - self.lastDecodedSampleCount >= Self.minNewSamples {
                     self.lastDecodedSampleCount = samples.count
                     await self.decode(samples)
@@ -131,18 +137,4 @@ final class LiveDictationSession {
         }
     }
 
-    // MARK: - Level metering
-
-    /// Normalized 0...1 level from a buffer of float samples, using the same
-    /// dBFS mapping the old AVCapture meter used so the HUD looks unchanged.
-    private static func level(from buffer: [Float]) -> Float {
-        guard !buffer.isEmpty else { return 0 }
-        var sum: Float = 0
-        for sample in buffer { sum += sample * sample }
-        let rms = (sum / Float(buffer.count)).squareRoot()
-        let db = 20 * log10(max(rms, 1e-7))
-        let floor: Float = -50
-        let clamped = max(floor, min(0, db))
-        return (clamped - floor) / -floor
-    }
 }
