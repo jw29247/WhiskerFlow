@@ -19,7 +19,7 @@ let package = Package(
         // In-app auto-updates (appcast + EdDSA-signed updates). Sparkle ships as a
         // binary XCFramework; `script/bundle_app.sh` embeds & re-signs it.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
-        .package(url: "https://github.com/getsentry/sentry-cocoa", exact: "9.13.0")
+        .package(url: "https://github.com/getsentry/sentry-cocoa", exact: "9.21.0")
     ],
     targets: [
         .target(name: "WhiskerFlowCore"),

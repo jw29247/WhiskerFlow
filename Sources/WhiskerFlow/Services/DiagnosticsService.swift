@@ -15,9 +15,11 @@ enum DiagnosticsService {
             logger.info("Sentry disabled because no DSN is configured")
             return
         }
+        let verificationRequested = CommandLine.arguments.contains("--verify-sentry")
 
         SentrySDK.start { options in
             options.dsn = dsn
+            options.debug = verificationRequested
             options.sendDefaultPii = false
             options.tracesSampleRate = 0
             options.enableAutoPerformanceTracing = false
@@ -44,6 +46,15 @@ enum DiagnosticsService {
             }
         }
         logger.info("Sentry crash reporting enabled with privacy filters")
+        if verificationRequested {
+            capture(
+                error: SanitizedDiagnosticError(category: "model", code: "verification"),
+                category: "model",
+                code: "verification"
+            )
+            SentrySDK.flush(timeout: 5)
+            logger.info("Sentry verification event flushed")
+        }
     }
 
     static func breadcrumb(category: String, metadata: [String: String] = [:]) {
