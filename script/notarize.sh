@@ -41,19 +41,12 @@ SPARKLE_ZIP="$DIST_DIR/$PRODUCT-$VERSION.zip"
 DSYM_PATH="$DIST_DIR/$PRODUCT-$VERSION.dSYM"
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/v$VERSION/$PRODUCT-$VERSION.zip"
 
-require_env() {
-  local name="$1"
-  if [[ -z "${!name:-}" ]]; then
-    echo "ERROR: Required release credential $name is not set." >&2
-    exit 1
-  fi
-}
-
-require_env SENTRY_AUTH_TOKEN
-require_env SENTRY_ORG
-require_env SENTRY_PROJECT
-if ! command -v sentry-cli >/dev/null 2>&1; then
-  echo "ERROR: sentry-cli is required to upload the release dSYM and metadata." >&2
+SENTRY_UPLOAD_ENABLED=true
+if [[ -z "${SENTRY_AUTH_TOKEN:-}" || -z "${SENTRY_ORG:-}" || -z "${SENTRY_PROJECT:-}" ]]; then
+  SENTRY_UPLOAD_ENABLED=false
+  echo "==> Sentry credentials are not configured; retaining the dSYM locally without uploading it"
+elif ! command -v sentry-cli >/dev/null 2>&1; then
+  echo "ERROR: sentry-cli is required when Sentry release credentials are configured." >&2
   exit 1
 fi
 
@@ -161,15 +154,19 @@ CASK="$ROOT_DIR/Casks/whiskerflow.rb"
 /usr/bin/sed -i '' -E "s/^  sha256 .*/  sha256 \"$SHA\"/" "$CASK"
 
 # --- 6. Publish symbolication data only after the signed artifacts validate --
-sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
-  debug-files upload "$DSYM_PATH"
-sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
-  releases new "$SENTRY_RELEASE"
-sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
-  releases set-commits "$SENTRY_RELEASE" --auto
-sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
-  releases finalize "$SENTRY_RELEASE"
-echo "==> Uploaded dSYM and finalized Sentry release $SENTRY_RELEASE"
+if [[ "$SENTRY_UPLOAD_ENABLED" == true ]]; then
+  sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+    debug-files upload "$DSYM_PATH"
+  sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+    releases new "$SENTRY_RELEASE"
+  sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+    releases set-commits "$SENTRY_RELEASE" --auto
+  sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+    releases finalize "$SENTRY_RELEASE"
+  echo "==> Uploaded dSYM and finalized Sentry release $SENTRY_RELEASE"
+else
+  echo "==> Skipped Sentry upload; dSYM retained at $DSYM_PATH"
+fi
 
 cat <<MSG
 
