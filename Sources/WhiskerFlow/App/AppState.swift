@@ -173,7 +173,10 @@ final class AppState {
             records = store.records
             selectedRecordID = records.first?.id
             refreshAccessibilityPermission()
-            refreshDevicesNow()
+            // SwiftUI's settings Form is backed by NSTableView. Publishing the
+            // initial catalog synchronously while scene restoration is laying it
+            // out can re-enter its delegate and crash AppKit; defer one actor turn.
+            refreshDevices()
             sharedVocabulary.configureAgencyLibrary()
             sharedVocabulary.startPeriodicRefresh()
             startAudioDeviceMonitor()
@@ -237,22 +240,24 @@ final class AppState {
         deviceRefreshTask?.cancel()
         deviceRefreshTask = Task { @MainActor [weak self] in
             await Task.yield()
-            guard !Task.isCancelled else { return }
-            self?.refreshDevicesNow()
-        }
-    }
+            guard !Task.isCancelled, let self else { return }
+            let refreshed = Microphone.availableInputDevices()
+            self.devices = refreshed
 
-    private func refreshDevicesNow() {
-        devices = Microphone.availableInputDevices()
-        if let legacyID = settings.legacySelectedDeviceID {
-            settings.finishLegacyMicrophoneMigration(
-                MicrophoneSelection.migrate(legacyDeviceID: legacyID, devices: devices)
-            )
-        } else {
-            settings.selectedInput = MicrophoneSelection.reconcile(
-                settings.selectedInput,
-                devices: devices
-            )
+            // Picker option and selection changes must not occur in the same
+            // NSTableView delegate stack. Publish the selection one turn later.
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            if let legacyID = self.settings.legacySelectedDeviceID {
+                self.settings.finishLegacyMicrophoneMigration(
+                    MicrophoneSelection.migrate(legacyDeviceID: legacyID, devices: refreshed)
+                )
+            } else {
+                self.settings.selectedInput = MicrophoneSelection.reconcile(
+                    self.settings.selectedInput,
+                    devices: refreshed
+                )
+            }
         }
     }
 
@@ -380,7 +385,20 @@ final class AppState {
         }
 
         do {
-            refreshDevicesNow()
+            let currentDevices = Microphone.availableInputDevices()
+            let inputSelection: AudioInputSelection
+            if let legacyID = settings.legacySelectedDeviceID {
+                inputSelection = MicrophoneSelection.migrate(
+                    legacyDeviceID: legacyID,
+                    devices: currentDevices
+                )
+            } else {
+                inputSelection = MicrophoneSelection.reconcile(
+                    settings.selectedInput,
+                    devices: currentDevices
+                )
+            }
+            refreshDevices()
             guard recordingCoordinator.phase == .preparing(sessionID) else { return }
             liveText = ""
             let configuration = makeTranscriptionConfiguration()
@@ -389,7 +407,7 @@ final class AppState {
             // file-based (captured here, transcribed from the WAV on release).
             streamingActive = configuration.engine == .whisperKit && settings.liveTranscription
             try live.start(
-                selection: settings.selectedInput,
+                selection: inputSelection,
                 language: configuration.language,
                 model: configuration.model,
                 vocabulary: configuration.vocabulary,
@@ -405,7 +423,7 @@ final class AppState {
                 metadata: [
                     "phase": "recording",
                     "engine": settings.engine.rawValue,
-                    "input_kind": settings.selectedInput == .systemDefault ? "default" : "specific"
+                    "input_kind": inputSelection == .systemDefault ? "default" : "specific"
                 ]
             )
             recordingStartedAt = Date()

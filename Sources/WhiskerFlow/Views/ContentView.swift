@@ -11,20 +11,36 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 StatusHeader(appState: appState) { showOnboarding = true }
                 Divider()
-                List(selection: $appState.selectedRecordID) {
-                    ForEach(appState.filteredRecords) { record in
-                        TranscriptRow(record: record)
-                            .tag(record.id)
-                            .swipeActions(edge: .trailing) {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(appState.filteredRecords) { record in
+                            Button {
+                                appState.selectedRecordID = record.id
+                            } label: {
+                                TranscriptRow(record: record)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .background(
+                                appState.selectedRecordID == record.id
+                                    ? Color.accentColor.opacity(0.16)
+                                    : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 6)
+                            )
+                            .contextMenu {
                                 Button(role: .destructive) {
                                     appState.delete(record)
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
                             }
+                        }
                     }
+                    .padding(6)
                 }
-                .listStyle(.sidebar)
                 .overlay {
                     if appState.records.isEmpty {
                         ContentUnavailableView(
@@ -58,15 +74,16 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            // Synchronous, one-shot startup. Deliberately NOT `.task`: that runs via
-            // `Task.immediate`, whose executor check crashes when SwiftUI rebuilds this
-            // view during an AppKit reopen event (Dock click / relaunch while running
-            // with no window). `.onAppear` avoids the concurrency path; `start()` is
-            // idempotent so re-appearing is harmless.
-            appState.start()
-            applyDockPolicy(appState.settings.showDockIcon)
-            if appState.records.isEmpty && !appState.hasAccessibilityPermission {
-                showOnboarding = true
+            // Startup changes List rows, app activation policy, and potentially
+            // sheet presentation. `onAppear` can run while NSTableView is still
+            // inside its initial layout/restoration delegate callback, so defer
+            // the complete bootstrap to the next main-queue turn.
+            DispatchQueue.main.async {
+                appState.start()
+                applyDockPolicy(appState.settings.showDockIcon)
+                if appState.records.isEmpty && !appState.hasAccessibilityPermission {
+                    showOnboarding = true
+                }
             }
         }
         .onChange(of: appState.settings.showDockIcon) { _, newValue in

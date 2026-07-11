@@ -27,4 +27,15 @@ final class DiagnosticPrivacyTests: XCTestCase {
             "error_code": "-10877"
         ])
     }
+
+    func testDebugImagePathsAreReducedToBasenames() {
+        XCTAssertEqual(
+            DiagnosticPrivacy.safeDebugImageName(
+                "/private/tmp/WhiskerFlow.app/Contents/MacOS/WhiskerFlow"
+            ),
+            "WhiskerFlow"
+        )
+        XCTAssertEqual(DiagnosticPrivacy.safeDebugImageName("dyld"), "dyld")
+        XCTAssertNil(DiagnosticPrivacy.safeDebugImageName(nil))
+    }
 }

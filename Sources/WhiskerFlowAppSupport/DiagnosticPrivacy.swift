@@ -16,4 +16,9 @@ public enum DiagnosticPrivacy {
     public static func safeMetadata(from metadata: [String: String]) -> [String: String] {
         metadata.filter { metadataKeys.contains($0.key) }
     }
+
+    public static func safeDebugImageName(_ path: String?) -> String? {
+        guard let path, !path.isEmpty else { return nil }
+        return URL(fileURLWithPath: path).lastPathComponent
+    }
 }

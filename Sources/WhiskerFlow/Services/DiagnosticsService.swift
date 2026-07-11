@@ -23,6 +23,8 @@ enum DiagnosticsService {
             options.sendDefaultPii = false
             options.tracesSampleRate = 0
             options.enableAutoPerformanceTracing = false
+            options.enableAutoSessionTracking = false
+            options.enableMetrics = false
             options.enableNetworkTracking = false
             options.enableNetworkBreadcrumbs = false
             options.enableAutoBreadcrumbTracking = false
@@ -58,6 +60,7 @@ enum DiagnosticsService {
     }
 
     static func breadcrumb(category: String, metadata: [String: String] = [:]) {
+        guard SentrySDK.isEnabled else { return }
         guard DiagnosticPrivacy.allowsBreadcrumb(category: category) else { return }
         let breadcrumb = Breadcrumb(level: .info, category: category)
         breadcrumb.data = DiagnosticPrivacy.safeMetadata(from: metadata)
@@ -65,6 +68,7 @@ enum DiagnosticsService {
     }
 
     static func capture(error: Error, category: String, code: String? = nil) {
+        guard SentrySDK.isEnabled else { return }
         breadcrumb(
             category: category,
             metadata: code.map { ["error_code": $0] } ?? [:]
@@ -85,6 +89,9 @@ enum DiagnosticsService {
         event.logger = nil
         event.transaction = nil
         event.tags = nil
+        event.debugMeta?.forEach { image in
+            image.codeFile = DiagnosticPrivacy.safeDebugImageName(image.codeFile)
+        }
 
         event.threads?.forEach { thread in
             thread.name = nil
