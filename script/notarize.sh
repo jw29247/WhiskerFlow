@@ -130,6 +130,7 @@ ln -s /Applications "$STAGING_DIR/Applications"
 # --- 4. Build, notarize, and staple the DMG (the artifact the team downloads) -
 hdiutil create -volname "$PRODUCT $VERSION" -srcfolder "$STAGING_DIR" \
   -ov -format UDZO "$DMG_PATH" >/dev/null
+codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"
 echo "==> Submitting DMG for notarization…"
 xcrun notarytool submit "$DMG_PATH" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$DMG_PATH"
