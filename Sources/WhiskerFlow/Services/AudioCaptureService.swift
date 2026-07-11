@@ -190,6 +190,8 @@ final class AudioCaptureService: AudioCapturing {
     private var engine: AVAudioEngine?
     private var tapInstalled = false
     private var configurationObserver: NSObjectProtocol?
+    private var configurationArmTask: Task<Void, Never>?
+    private var configurationObservationGate = AudioConfigurationObservationGate()
 
     var onLevel: ((Float) -> Void)?
     var onConfigurationChange: (() -> Void)?
@@ -278,23 +280,15 @@ final class AudioCaptureService: AudioCapturing {
         }
         tapInstalled = true
 
-        configurationObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: engine,
-            queue: nil
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.onConfigurationChange?() }
-        }
-
         engine.prepare()
         do {
             try engine.start()
             self.engine = engine
+            armConfigurationObservation(for: engine)
             logger.info("Capture started selection=\(selection.persistedValue == "system-default" ? "default" : "specific", privacy: .public)")
         } catch {
             inputNode.removeTap(onBus: 0)
             tapInstalled = false
-            removeConfigurationObserver()
             throw error
         }
     }
@@ -321,6 +315,9 @@ final class AudioCaptureService: AudioCapturing {
     }
 
     private func stopEngine() {
+        configurationArmTask?.cancel()
+        configurationArmTask = nil
+        configurationObservationGate.captureStopped()
         removeConfigurationObserver()
         if tapInstalled {
             engine?.inputNode.removeTap(onBus: 0)
@@ -328,6 +325,34 @@ final class AudioCaptureService: AudioCapturing {
         }
         engine?.stop()
         engine = nil
+    }
+
+    private func armConfigurationObservation(for engine: AVAudioEngine) {
+        let generation = configurationObservationGate.captureStarted()
+        configurationArmTask?.cancel()
+        configurationArmTask = Task { @MainActor [weak self] in
+            // AVAudioEngine emits configuration changes while constructing its
+            // default-device aggregate. Those are startup mechanics, not a hot-plug.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled,
+                  let self,
+                  self.engine === engine,
+                  self.configurationObservationGate.arm(generation) else { return }
+
+            self.configurationObserver = NotificationCenter.default.addObserver(
+                forName: .AVAudioEngineConfigurationChange,
+                object: engine,
+                queue: nil
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.configurationObservationGate.shouldHandleChange(for: generation)
+                    else { return }
+                    self.onConfigurationChange?()
+                }
+            }
+            self.configurationArmTask = nil
+        }
     }
 
     private func removeConfigurationObserver() {

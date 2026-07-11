@@ -52,6 +52,17 @@ public enum MicrophoneSelection {
         guard case .device(let uid) = selection else { return .systemDefault }
         return devices.contains(where: { $0.uid == uid }) ? selection : .systemDefault
     }
+
+    public static func captureCandidates(
+        for preferred: AudioInputSelection
+    ) -> [AudioInputSelection] {
+        switch preferred {
+        case .systemDefault:
+            return [.systemDefault]
+        case .device:
+            return [preferred, .systemDefault]
+        }
+    }
 }
 
 @MainActor

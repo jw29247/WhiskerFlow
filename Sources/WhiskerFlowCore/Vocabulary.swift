@@ -74,10 +74,13 @@ public struct Vocabulary: Codable, Equatable, Sendable {
         if !rule.caseSensitive { options.insert(.caseInsensitive) }
 
         let escaped = NSRegularExpression.escapedPattern(for: find)
-        // \b only works at word characters; for symbol-y terms fall back to a plain match.
+        // A word boundary only exists next to a word character. Add it separately
+        // at each eligible edge so terms such as "C++" and ".NET" still match.
         let pattern: String
-        if rule.wholeWord, find.range(of: "^\\w", options: .regularExpression) != nil {
-            pattern = "\\b\(escaped)\\b"
+        if rule.wholeWord {
+            let leadingBoundary = find.range(of: "^\\w", options: .regularExpression) == nil ? "" : "\\b"
+            let trailingBoundary = find.range(of: "\\w$", options: .regularExpression) == nil ? "" : "\\b"
+            pattern = leadingBoundary + escaped + trailingBoundary
         } else {
             pattern = escaped
         }

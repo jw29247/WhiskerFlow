@@ -12,6 +12,11 @@ final class VocabularyTests: XCTestCase {
         XCTAssertEqual(vocab.apply(to: "the category cat"), "the category dog")
     }
 
+    func testWholeWordReplacementMatchesTermEndingInSymbols() {
+        let vocab = Vocabulary(rules: [VocabularyRule(find: "C++", replaceWith: "C plus plus")])
+        XCTAssertEqual(vocab.apply(to: "I use C++ daily"), "I use C plus plus daily")
+    }
+
     func testCaseSensitiveRuleRespectsCase() {
         let vocab = Vocabulary(rules: [
             VocabularyRule(find: "Swift", replaceWith: "Swift🦅", caseSensitive: true)

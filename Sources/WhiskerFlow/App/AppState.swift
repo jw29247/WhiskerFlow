@@ -386,14 +386,14 @@ final class AppState {
 
         do {
             let currentDevices = Microphone.availableInputDevices()
-            let inputSelection: AudioInputSelection
+            let preferredInputSelection: AudioInputSelection
             if let legacyID = settings.legacySelectedDeviceID {
-                inputSelection = MicrophoneSelection.migrate(
+                preferredInputSelection = MicrophoneSelection.migrate(
                     legacyDeviceID: legacyID,
                     devices: currentDevices
                 )
             } else {
-                inputSelection = MicrophoneSelection.reconcile(
+                preferredInputSelection = MicrophoneSelection.reconcile(
                     settings.selectedInput,
                     devices: currentDevices
                 )
@@ -406,13 +406,35 @@ final class AppState {
             // Stream + decode live for the WhisperKit engine; other engines stay
             // file-based (captured here, transcribed from the WAV on release).
             streamingActive = configuration.engine == .whisperKit && settings.liveTranscription
-            try live.start(
-                selection: inputSelection,
-                language: configuration.language,
-                model: configuration.model,
-                vocabulary: configuration.vocabulary,
-                streaming: streamingActive
-            )
+            var inputSelection: AudioInputSelection?
+            var lastStartError: Error?
+            for candidate in MicrophoneSelection.captureCandidates(for: preferredInputSelection) {
+                do {
+                    try live.start(
+                        selection: candidate,
+                        language: configuration.language,
+                        model: configuration.model,
+                        vocabulary: configuration.vocabulary,
+                        streaming: streamingActive
+                    )
+                    inputSelection = candidate
+                    break
+                } catch {
+                    live.cancel()
+                    lastStartError = error
+                }
+            }
+            guard let inputSelection else {
+                throw lastStartError ?? AudioCaptureServiceError.deviceUnavailable
+            }
+            if inputSelection == .systemDefault, preferredInputSelection != .systemDefault {
+                if settings.legacySelectedDeviceID != nil {
+                    settings.finishLegacyMicrophoneMigration(.systemDefault)
+                } else {
+                    settings.selectedInput = .systemDefault
+                }
+                refreshDevices()
+            }
             guard recordingCoordinator.didStart(sessionID) else {
                 live.cancel()
                 return

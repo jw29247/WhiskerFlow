@@ -31,5 +31,18 @@ final class MicrophoneSelectionTests: XCTestCase {
             .systemDefault
         )
     }
-}
 
+    func testSpecificDeviceRetriesOnceWithSystemDefault() {
+        XCTAssertEqual(
+            MicrophoneSelection.captureCandidates(for: .device(uid: "usb-uid")),
+            [.device(uid: "usb-uid"), .systemDefault]
+        )
+    }
+
+    func testSystemDefaultIsAttemptedOnlyOnce() {
+        XCTAssertEqual(
+            MicrophoneSelection.captureCandidates(for: .systemDefault),
+            [.systemDefault]
+        )
+    }
+}
