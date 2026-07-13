@@ -12,9 +12,9 @@
     { "find": "comfybeds", "replaceWith": "Comfybedss" },
     { "find": "comfy beds", "replaceWith": "Comfybedss" },
 
-    { "find": "frima stella", "replaceWith": "Frima Stella" },
-    { "find": "prima stella", "replaceWith": "Frima Stella" },
-    { "find": "freema stella", "replaceWith": "Frima Stella" },
+    { "find": "frima stella", "replaceWith": "Firma Stella" },
+    { "find": "prima stella", "replaceWith": "Firma Stella" },
+    { "find": "freema stella", "replaceWith": "Firma Stella" },
 
     { "find": "manukora", "replaceWith": "Manukora" },
     { "find": "manuka ora", "replaceWith": "Manukora" },
