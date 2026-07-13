@@ -153,10 +153,11 @@ final class SharedVocabularyService {
             return
         }
 
-        guard let seedURL = Bundle.module.url(
-            forResource: "shared-vocabulary",
-            withExtension: "json"
-        ), let seed = try? Data(contentsOf: seedURL),
+        guard let resourcesURL = Bundle.main.resourceURL else { return }
+        let seedURL = resourcesURL
+            .appendingPathComponent("WhiskerFlow_WhiskerFlow.bundle", isDirectory: true)
+            .appendingPathComponent("shared-vocabulary.json")
+        guard let seed = try? Data(contentsOf: seedURL),
            let vocabulary = try? AgencyVocabularyPolicy.decode(seed) else { return }
         let modified = (try? seedURL.resourceValues(forKeys: [.contentModificationDateKey]))?
             .contentModificationDate ?? Date()
