@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import WhisperKit
+import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
 /// Primary engine: on-device Whisper via CoreML / Neural Engine. The model is
@@ -16,13 +17,31 @@ actor WhisperKitEngine: TranscriptionEngine {
         if pipe != nil, loadedModel == model { return }
 
         do {
-            let kit = try await WhisperKit(
-                model: model.whisperKitIdentifier,
-                verbose: false,
-                prewarm: true,
-                load: true,
-                download: true
+            let downloadBase = try ModelStoragePaths.prepareWhisperKitDownloadBase()
+            let localAssets = try ModelStoragePaths.prepareLocalAssets(
+                modelIdentifier: model.whisperKitIdentifier
             )
+            let kit: WhisperKit
+            if let localAssets {
+                kit = try await WhisperKit(
+                    modelFolder: localAssets.modelFolder.path,
+                    tokenizerFolder: localAssets.tokenizerDownloadBase,
+                    verbose: false,
+                    prewarm: true,
+                    load: true,
+                    download: false
+                )
+            } else {
+                kit = try await WhisperKit(
+                    model: model.whisperKitIdentifier,
+                    downloadBase: downloadBase,
+                    tokenizerFolder: downloadBase,
+                    verbose: false,
+                    prewarm: true,
+                    load: true,
+                    download: true
+                )
+            }
             pipe = kit
             loadedModel = model
         } catch {

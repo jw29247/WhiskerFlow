@@ -50,6 +50,11 @@ struct SettingsView: View {
 
                 Picker("Microphone", selection: $appState.settings.selectedInputUID) {
                     Text("System Default").tag("system-default")
+                    if appState.settings.selectedInputUID != "system-default",
+                       !appState.devices.contains(where: { $0.uid == appState.settings.selectedInputUID }) {
+                        Text("Preferred microphone (disconnected)")
+                            .tag(appState.settings.selectedInputUID)
+                    }
                     ForEach(appState.devices) { Text($0.name).tag($0.uid) }
                 }
                 .disabled(appState.microphoneControlsLocked)

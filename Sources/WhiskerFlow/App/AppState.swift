@@ -408,7 +408,10 @@ final class AppState {
             streamingActive = configuration.engine == .whisperKit && settings.liveTranscription
             var inputSelection: AudioInputSelection?
             var lastStartError: Error?
-            for candidate in MicrophoneSelection.captureCandidates(for: preferredInputSelection) {
+            for candidate in MicrophoneSelection.captureCandidates(
+                for: preferredInputSelection,
+                devices: currentDevices
+            ) {
                 do {
                     try live.start(
                         selection: candidate,
@@ -426,14 +429,6 @@ final class AppState {
             }
             guard let inputSelection else {
                 throw lastStartError ?? AudioCaptureServiceError.deviceUnavailable
-            }
-            if inputSelection == .systemDefault, preferredInputSelection != .systemDefault {
-                if settings.legacySelectedDeviceID != nil {
-                    settings.finishLegacyMicrophoneMigration(.systemDefault)
-                } else {
-                    settings.selectedInput = .systemDefault
-                }
-                refreshDevices()
             }
             guard recordingCoordinator.didStart(sessionID) else {
                 live.cancel()
@@ -499,11 +494,6 @@ final class AppState {
         _ = recordingCoordinator.didFinish(sessionID)
         if configuration.playSounds { soundService.play(.recordingStopped) }
         liveText = ""
-
-        if reason == .deviceDisconnected {
-            settings.selectedInput = .systemDefault
-            refreshDevices()
-        }
 
         if wasStreaming, !result.text.isEmpty {
             // Streaming already produced the transcript — paste immediately, then

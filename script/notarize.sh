@@ -12,12 +12,12 @@
 #      (or use an App Store Connect API key: --key / --key-id / --issuer)
 #
 # Usage:
-#   VERSION=0.6.1 script/notarize.sh
+#   VERSION=0.6.2 script/notarize.sh
 #
 # Env overrides:
 #   DEVELOPER_ID    full signing identity (default: first "Developer ID Application" in keychain)
 #   NOTARY_PROFILE  notarytool keychain profile name (default: WhiskerFlow-Notary)
-#   VERSION         release version (default: 0.6.1)
+#   VERSION         release version (default: 0.6.2)
 #   WHISKERFLOW_SENTRY_DSN  public DSN embedded in the packaged app
 #   SENTRY_AUTH_TOKEN       release-only token used by sentry-cli
 #   SENTRY_ORG / SENTRY_PROJECT  destination for dSYMs and release metadata
@@ -26,7 +26,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT="WhiskerFlow"
-VERSION="${VERSION:-0.6.1}"
+VERSION="${VERSION:-0.6.2}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-WhiskerFlow-Notary}"
 REPO="${REPO:-jw29247/WhiskerFlow}"
 WHISKERFLOW_SENTRY_DSN="${WHISKERFLOW_SENTRY_DSN:-https://e933f92c9d1aeb052c5e27580575e46c@o4511347438583808.ingest.de.sentry.io/4511710099013712}"
@@ -97,6 +97,7 @@ export COPYFILE_DISABLE=1
 # --- 1. Build + Developer ID sign (hardened runtime + entitlements) -----------
 CONFIGURATION=release SIGN_IDENTITY="$SIGN_IDENTITY" \
   "$ROOT_DIR/script/bundle_app.sh" "$APP_BUNDLE" >/dev/null
+"$ROOT_DIR/script/verify_upgrade_identity.sh" "$APP_BUNDLE"
 echo "==> Built & signed $APP_BUNDLE"
 xcrun dsymutil "$APP_BUNDLE/Contents/MacOS/$PRODUCT" -o "$DSYM_PATH"
 APP_UUIDS="$(xcrun dwarfdump --uuid "$APP_BUNDLE/Contents/MacOS/$PRODUCT" | awk '{print $2}' | sort)"

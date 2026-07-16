@@ -33,6 +33,11 @@ if [[ -z "${MOUNT:-}" || ! -d "$MOUNT/$APP.app" ]]; then
   exit 1
 fi
 
+VERIFY_SCRIPT="$TMP/verify_upgrade_identity.sh"
+curl -fsSL "https://raw.githubusercontent.com/$REPO/main/script/verify_upgrade_identity.sh" \
+  -o "$VERIFY_SCRIPT"
+bash "$VERIFY_SCRIPT" "$MOUNT/$APP.app" "/Applications/$APP.app"
+
 echo "Installing to /Applications..."
 rm -rf "/Applications/$APP.app"
 cp -R "$MOUNT/$APP.app" /Applications/

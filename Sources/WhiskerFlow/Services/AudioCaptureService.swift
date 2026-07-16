@@ -233,7 +233,10 @@ final class AudioCaptureService: AudioCapturing {
             }
         }
 
-        let inputFormat = inputNode.outputFormat(forBus: 0)
+        let inputFormat = AudioTapFormatPolicy.captureFormat(
+            hardwareInput: inputNode.inputFormat(forBus: 0),
+            nodeOutput: inputNode.outputFormat(forBus: 0)
+        )
         do {
             try AudioFormatValidator.validate(
                 sampleRate: inputFormat.sampleRate,

@@ -9,6 +9,12 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>0.6.2</title>
+      <pubDate>Thu, 16 Jul 2026 10:14:02 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v0.6.2/WhiskerFlow-0.6.2.zip" sparkle:version="10" sparkle:shortVersionString="0.6.2" sparkle:edSignature="EDxdRhVOMiIdkCOxGiHScyttSfoAh1kAoyrm2VYvmLVAo4UsmKURwlUzrIbM9gDbJPFWpkOf3NBpcfKVksWzAA==" length="4728148" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>0.6.1</title>
       <pubDate>Mon, 13 Jul 2026 08:30:44 +0000</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>

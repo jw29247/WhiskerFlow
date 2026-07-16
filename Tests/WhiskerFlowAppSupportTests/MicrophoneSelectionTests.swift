@@ -21,27 +21,49 @@ final class MicrophoneSelectionTests: XCTestCase {
         )
     }
 
-    func testReconcileKeepsAvailableUIDAndFallsBackWhenItDisappears() {
+    func testPreferredDeviceRemainsRememberedWhenItDisappears() {
         XCTAssertEqual(
-            MicrophoneSelection.reconcile(.device(uid: "usb-uid"), devices: devices),
+            MicrophoneSelection.reconcile(
+                .device(uid: "usb-uid"),
+                devices: [devices[0]]
+            ),
             .device(uid: "usb-uid")
-        )
-        XCTAssertEqual(
-            MicrophoneSelection.reconcile(.device(uid: "missing"), devices: devices),
-            .systemDefault
         )
     }
 
-    func testSpecificDeviceRetriesOnceWithSystemDefault() {
+    func testConnectedPreferredDeviceIsTriedBeforeSystemDefault() {
         XCTAssertEqual(
-            MicrophoneSelection.captureCandidates(for: .device(uid: "usb-uid")),
+            MicrophoneSelection.captureCandidates(
+                for: .device(uid: "usb-uid"),
+                devices: devices
+            ),
             [.device(uid: "usb-uid"), .systemDefault]
+        )
+    }
+
+    func testDisconnectedPreferredDeviceUsesSystemDefaultWithoutForgettingIt() {
+        XCTAssertEqual(
+            MicrophoneSelection.captureCandidates(
+                for: .device(uid: "usb-uid"),
+                devices: [devices[0]]
+            ),
+            [.systemDefault]
+        )
+        XCTAssertEqual(
+            MicrophoneSelection.reconcile(
+                .device(uid: "usb-uid"),
+                devices: [devices[0]]
+            ),
+            .device(uid: "usb-uid")
         )
     }
 
     func testSystemDefaultIsAttemptedOnlyOnce() {
         XCTAssertEqual(
-            MicrophoneSelection.captureCandidates(for: .systemDefault),
+            MicrophoneSelection.captureCandidates(
+                for: .systemDefault,
+                devices: devices
+            ),
             [.systemDefault]
         )
     }

@@ -11,6 +11,8 @@ APP_BUNDLE="${1:-$ROOT_DIR/.build/$CONFIGURATION/$PRODUCT.app}"
 # secure timestamp. Otherwise it falls back to ad-hoc signing for local use.
 SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 ENTITLEMENTS="${ENTITLEMENTS:-$ROOT_DIR/Resources/WhiskerFlow.entitlements}"
+BUNDLE_IDENTIFIER_OVERRIDE="${BUNDLE_IDENTIFIER_OVERRIDE:-}"
+BUNDLE_NAME_OVERRIDE="${BUNDLE_NAME_OVERRIDE:-}"
 
 cd "$ROOT_DIR"
 
@@ -36,6 +38,14 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$BINARY" "$APP_BINARY"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
+if [[ -n "$BUNDLE_IDENTIFIER_OVERRIDE" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_IDENTIFIER_OVERRIDE" \
+    "$APP_BUNDLE/Contents/Info.plist"
+fi
+if [[ -n "$BUNDLE_NAME_OVERRIDE" ]]; then
+  /usr/libexec/PlistBuddy -c "Set :CFBundleName $BUNDLE_NAME_OVERRIDE" \
+    "$APP_BUNDLE/Contents/Info.plist"
+fi
 if [[ -n "${WHISKERFLOW_SENTRY_DSN:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :WhiskerFlowSentryDSN $WHISKERFLOW_SENTRY_DSN" \
     "$APP_BUNDLE/Contents/Info.plist"

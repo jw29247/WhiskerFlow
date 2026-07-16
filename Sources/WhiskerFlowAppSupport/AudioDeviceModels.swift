@@ -45,22 +45,27 @@ public enum MicrophoneSelection {
         return .device(uid: device.uid)
     }
 
+    /// Keeps the user's preferred device even while it is disconnected. Capture
+    /// can temporarily use the current system default and return to this UID when
+    /// the device reappears.
     public static func reconcile(
         _ selection: AudioInputSelection,
-        devices: [AudioInputDescriptor]
+        devices _: [AudioInputDescriptor]
     ) -> AudioInputSelection {
-        guard case .device(let uid) = selection else { return .systemDefault }
-        return devices.contains(where: { $0.uid == uid }) ? selection : .systemDefault
+        selection
     }
 
     public static func captureCandidates(
-        for preferred: AudioInputSelection
+        for preferred: AudioInputSelection,
+        devices: [AudioInputDescriptor]
     ) -> [AudioInputSelection] {
         switch preferred {
         case .systemDefault:
             return [.systemDefault]
-        case .device:
-            return [preferred, .systemDefault]
+        case .device(let uid):
+            return devices.contains(where: { $0.uid == uid })
+                ? [preferred, .systemDefault]
+                : [.systemDefault]
         }
     }
 }

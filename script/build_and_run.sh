@@ -4,11 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-debug}"
 PRODUCT="WhiskerFlow"
-APP_BUNDLE="$ROOT_DIR/.build/$CONFIGURATION/$PRODUCT.app"
+APP_BUNDLE="$ROOT_DIR/.build/$CONFIGURATION/$PRODUCT Dev.app"
+BUNDLE_IDENTIFIER_OVERRIDE="agency.thatworks.WhiskerFlow.dev"
 MODE="${1:-}"
 
 pkill -x "$PRODUCT" 2>/dev/null || true
-"$ROOT_DIR/script/bundle_app.sh" "$APP_BUNDLE" >/dev/null
+BUNDLE_IDENTIFIER_OVERRIDE="$BUNDLE_IDENTIFIER_OVERRIDE" \
+  BUNDLE_NAME_OVERRIDE="$PRODUCT Dev" \
+  "$ROOT_DIR/script/bundle_app.sh" "$APP_BUNDLE" >/dev/null
 
 echo "Launching $APP_BUNDLE"
 /usr/bin/open -n "$APP_BUNDLE"
