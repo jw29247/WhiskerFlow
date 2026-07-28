@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WhiskerFlowCore
 
@@ -31,6 +32,11 @@ struct ContentView: View {
                                 in: RoundedRectangle(cornerRadius: 6)
                             )
                             .contextMenu {
+                                Button {
+                                    appState.copy(record.text)
+                                } label: {
+                                    Label("Copy", systemImage: "doc.on.doc")
+                                }
                                 Button(role: .destructive) {
                                     appState.delete(record)
                                 } label: {
@@ -58,6 +64,17 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 420, ideal: 560)
         }
         .toolbar {
+            ToolbarItem {
+                Menu {
+                    Button("Markdown") { export(.markdown) }
+                    Button("CSV") { export(.csv) }
+                    Button("JSON") { export(.json) }
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .disabled(appState.records.isEmpty)
+                .help("Export transcript history")
+            }
             ToolbarItem {
                 Button {
                     showStats = true
@@ -95,6 +112,21 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showStats) {
             StatsView(appState: appState)
+        }
+    }
+
+    /// Rendering happens in the core exporter; the panel and the write stay here so
+    /// `AppState` never touches the file system on the user's behalf.
+    private func export(_ format: TranscriptExportFormat) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "WhiskerFlow History.\(format.fileExtension)"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data = try appState.exportHistory(as: format)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            appState.status = .failure("Could not export history")
         }
     }
 }

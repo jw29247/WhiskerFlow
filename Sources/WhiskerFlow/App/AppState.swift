@@ -61,6 +61,8 @@ final class AppState {
     var isRecording = false
     var isTranscribing = false
     var audioLevel: Float = 0
+    /// Rolling verdict on the live input, surfaced as a HUD warning.
+    var signalQuality: AudioSignalQuality = .unknown
     /// Live transcript shown in the HUD while streaming dictation is active.
     var liveText = ""
     var recordingStartedAt: Date?
@@ -70,6 +72,9 @@ final class AppState {
     var devices: [AudioInputDescriptor] = []
     var lastError: String?
     var searchText = ""
+    /// Corrections spotted in the user's last transcript edit, offered as
+    /// personal vocabulary rules until accepted or dismissed.
+    var pendingVocabularySuggestions: [VocabularyCorrection] = []
 
     var settings: AppSettings
 
@@ -98,12 +103,19 @@ final class AppState {
     private var activeRecordingConfiguration: TranscriptionJobConfiguration?
     /// Whether the most recent recording streamed live (vs. file-based capture).
     private var streamingActive = false
+    private var signalAssessor = AudioSignalAssessor()
 
     init(settings: AppSettings? = nil, store: TranscriptStore = .defaultStore()) {
         self.settings = settings ?? AppSettings()
         self.store = store
         self.live = LiveDictationSession(transcription: transcription)
-        live.onLevel = { [weak self] level in self?.audioLevel = level }
+        live.onLevel = { [weak self] level, peak in
+            guard let self else { return }
+            audioLevel = level
+            guard isRecording else { return }
+            signalAssessor.ingest(level: level, peak: peak)
+            signalQuality = signalAssessor.quality
+        }
         live.onPartial = { [weak self] text in self?.liveText = text }
         live.onConfigurationChange = { [weak self] in self?.handleAudioConfigurationChange() }
     }
@@ -352,13 +364,34 @@ final class AppState {
         status = .success("Copied to clipboard")
     }
 
+    func exportHistory(as format: TranscriptExportFormat) throws -> Data {
+        try TranscriptExporter.export(records, as: format)
+    }
+
     func updateText(_ record: TranscriptRecord, to text: String) {
+        let suggestions = VocabularyCorrectionDetector.corrections(
+            original: record.text,
+            edited: text,
+            existingRules: effectiveVocabulary
+        )
         do {
             try store.setText(id: record.id, text: text)
             records = store.records
+            pendingVocabularySuggestions = suggestions
         } catch {
             handleStorageError(error, message: "Could not save transcript changes")
         }
+    }
+
+    func acceptVocabularySuggestion(_ suggestion: VocabularyCorrection) {
+        settings.vocabulary.rules.append(
+            VocabularyRule(find: suggestion.find, replaceWith: suggestion.replaceWith)
+        )
+        pendingVocabularySuggestions.removeAll { $0 == suggestion }
+    }
+
+    func dismissVocabularySuggestions() {
+        pendingVocabularySuggestions = []
     }
 
     func delete(_ record: TranscriptRecord) {
@@ -456,6 +489,8 @@ final class AppState {
             refreshDevices()
             guard recordingCoordinator.phase == .preparing(sessionID) else { return }
             liveText = ""
+            signalAssessor.reset()
+            signalQuality = .unknown
             let configuration = makeTranscriptionConfiguration()
             activeRecordingConfiguration = configuration
             // Stream + decode live for the WhisperKit engine; other engines stay
@@ -588,6 +623,7 @@ final class AppState {
             status = .transcribing
             await transcribeCapturedSamples(
                 result.samples,
+                conversionFailures: result.conversionFailures,
                 pasteTarget: pasteTarget,
                 configuration: configuration,
                 sessionID: sessionID
@@ -714,13 +750,28 @@ final class AppState {
     /// path (used for non-streaming engines and the streaming-empty fallback).
     private func transcribeCapturedSamples(
         _ samples: [Float],
+        conversionFailures: Int,
         pasteTarget: NSRunningApplication?,
         configuration: TranscriptionJobConfiguration,
         sessionID: UUID
     ) async {
         guard !samples.isEmpty else {
+            // Buffers that all failed to convert look identical to silence at this
+            // point, so the failure count is the only way to tell the user why.
+            if conversionFailures > 0 {
+                logger.error("Capture yielded no usable audio failures=\(conversionFailures, privacy: .public)")
+                DiagnosticsService.capture(
+                    error: AudioCaptureServiceError.conversionFailed("all buffers"),
+                    category: "audio",
+                    code: String(conversionFailures)
+                )
+            }
             if canUpdateLifecycleUI(for: sessionID) {
-                status = .failure("No speech was detected")
+                status = .failure(
+                    conversionFailures > 0
+                        ? "Microphone audio could not be converted — try another microphone"
+                        : "No speech was detected"
+                )
             }
             return
         }

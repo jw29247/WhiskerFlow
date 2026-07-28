@@ -17,8 +17,9 @@ final class LiveDictationSession {
 
     /// Called on the main actor whenever a fresher partial transcript is ready.
     var onPartial: ((String) -> Void)?
-    /// Called on the main actor with a normalized 0...1 input level.
-    var onLevel: ((Float) -> Void)?
+    /// Called on the main actor with a normalized 0...1 input level and the
+    /// buffer's absolute peak.
+    var onLevel: ((Float, Float) -> Void)?
     /// Called after AVFoundation reports that the active input configuration changed.
     var onConfigurationChange: (() -> Void)?
 
@@ -44,7 +45,7 @@ final class LiveDictationSession {
 
     init(transcription: TranscriptionService) {
         self.transcription = transcription
-        audioCapture.onLevel = { [weak self] level in self?.onLevel?(level) }
+        audioCapture.onLevel = { [weak self] level, peak in self?.onLevel?(level, peak) }
         audioCapture.onConfigurationChange = { [weak self] in self?.onConfigurationChange?() }
     }
 
@@ -79,7 +80,9 @@ final class LiveDictationSession {
     }
 
     /// Stop capture and return the freshest transcript plus the captured samples.
-    func finish(reason: CaptureStopReason = .userReleased) async -> (text: String, samples: [Float]) {
+    func finish(
+        reason: CaptureStopReason = .userReleased
+    ) async -> (text: String, samples: [Float], conversionFailures: Int) {
         isRunning = false
         let loop = decodeLoop
         decodeLoop = nil
@@ -99,8 +102,8 @@ final class LiveDictationSession {
 
         let finalText = emittedText()
         resetTranscript()
-        onLevel?(0)
-        return (finalText, samples)
+        onLevel?(0, 0)
+        return (finalText, samples, captured.conversionFailureCount)
     }
 
     /// Abort without producing a transcript (e.g. permission revoked mid-flight).
@@ -110,7 +113,7 @@ final class LiveDictationSession {
         decodeLoop = nil
         audioCapture.cancel()
         resetTranscript()
-        onLevel?(0)
+        onLevel?(0, 0)
     }
 
     // MARK: - Decode loop
