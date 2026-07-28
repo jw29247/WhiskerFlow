@@ -60,11 +60,26 @@ public struct TranscriptRecord: Codable, Equatable, Hashable, Identifiable, Send
     public var wordCount: Int { text.transcriptWordCount }
 }
 
+public enum TranscriptStoreError: LocalizedError, Equatable {
+    case corruptFileUnrecoverable(path: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .corruptFileUnrecoverable(let path):
+            return "Transcript history at \(path) could not be read and could not be backed up. "
+                + "The file was left untouched; move it aside manually to start a new history."
+        }
+    }
+}
+
 public final class TranscriptStore {
     private let fileURL: URL
     private let now: () -> Date
     private let removeAudioFile: (String) -> Void
     private let retentionInterval: TimeInterval
+    private let moveItem: (URL, URL) throws -> Void
+    private let copyItem: (URL, URL) throws -> Void
+    private var persistenceSuspended = false
 
     public private(set) var records: [TranscriptRecord] = []
 
@@ -75,12 +90,20 @@ public final class TranscriptStore {
         removeAudioFile: @escaping (String) -> Void = { path in
             guard !path.isEmpty else { return }
             try? FileManager.default.removeItem(atPath: path)
+        },
+        moveItem: @escaping (URL, URL) throws -> Void = { source, destination in
+            try FileManager.default.moveItem(at: source, to: destination)
+        },
+        copyItem: @escaping (URL, URL) throws -> Void = { source, destination in
+            try FileManager.default.copyItem(at: source, to: destination)
         }
     ) {
         self.fileURL = fileURL
         self.now = now
         self.retentionInterval = retentionInterval
         self.removeAudioFile = removeAudioFile
+        self.moveItem = moveItem
+        self.copyItem = copyItem
     }
 
     public var retryQueue: [TranscriptRecord] {
@@ -88,6 +111,7 @@ public final class TranscriptStore {
     }
 
     public func load() throws {
+        persistenceSuspended = false
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             records = []
             return
@@ -98,9 +122,14 @@ public final class TranscriptStore {
             records = try JSONDecoder.whiskerFlow.decode([TranscriptRecord].self, from: data)
         } catch {
             // Don't silently overwrite a file we can't parse — preserve it so the
-            // user (or a future migration) can recover, then start clean.
-            try? backupCorruptFile()
+            // user (or a future migration) can recover, then start clean. Without a
+            // backup on disk, writing would destroy the only copy, so suspend
+            // persistence instead of clobbering the original bytes.
             records = []
+            guard backupCorruptFile() else {
+                persistenceSuspended = true
+                throw TranscriptStoreError.corruptFileUnrecoverable(path: fileURL.path)
+            }
             try persist()
             return
         }
@@ -114,6 +143,7 @@ public final class TranscriptStore {
 
     public func replaceAll(_ records: [TranscriptRecord]) throws {
         self.records = records
+        persistenceSuspended = false
         try persist()
     }
 
@@ -181,15 +211,24 @@ public final class TranscriptStore {
         try persist()
     }
 
-    private func backupCorruptFile() throws {
+    private func backupCorruptFile() -> Bool {
         let stamp = Int(now().timeIntervalSince1970)
         let backupURL = fileURL.deletingPathExtension()
             .appendingPathExtension("corrupt-\(stamp).json")
         try? FileManager.default.removeItem(at: backupURL)
-        try FileManager.default.moveItem(at: fileURL, to: backupURL)
+        do {
+            try moveItem(fileURL, backupURL)
+        } catch {
+            try? copyItem(fileURL, backupURL)
+        }
+        return FileManager.default.fileExists(atPath: backupURL.path)
     }
 
     private func persist() throws {
+        if persistenceSuspended {
+            throw TranscriptStoreError.corruptFileUnrecoverable(path: fileURL.path)
+        }
+
         let folder = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 

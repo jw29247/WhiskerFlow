@@ -47,9 +47,7 @@ public struct Vocabulary: Codable, Equatable, Sendable {
 
     /// Apply every rule, in order, to `text`.
     public func apply(to text: String) -> String {
-        rules.reduce(text) { partial, rule in
-            Vocabulary.apply(rule, to: partial)
-        }
+        CompiledVocabulary(self).apply(to: text)
     }
 
     /// Combine a shared (read-only, team-wide) vocabulary with the user's
@@ -65,10 +63,43 @@ public struct Vocabulary: Codable, Equatable, Sendable {
         let keptShared = shared.rules.filter { !overridden.contains($0.find.lowercased()) }
         return Vocabulary(rules: keptShared + personal.rules)
     }
+}
 
-    static func apply(_ rule: VocabularyRule, to text: String) -> String {
+/// A `Vocabulary` with every rule's regex compiled once up front. Live dictation
+/// applies the vocabulary to each partial result (a few times a second), so the
+/// compiled form is built once per session and reused.
+public struct CompiledVocabulary: Sendable {
+    private let rules: [CompiledRule]
+
+    public init(_ vocabulary: Vocabulary) {
+        rules = vocabulary.rules.compactMap(CompiledRule.init)
+    }
+
+    public func apply(to text: String) -> String {
+        rules.reduce(text) { partial, rule in
+            rule.apply(to: partial)
+        }
+    }
+}
+
+/// NSRegularExpression is immutable once built and safe to match from any
+/// thread, but it is not annotated `Sendable`.
+private final class RegexBox: @unchecked Sendable {
+    let regex: NSRegularExpression
+
+    init(_ regex: NSRegularExpression) {
+        self.regex = regex
+    }
+}
+
+private struct CompiledRule: Sendable {
+    private let regex: RegexBox
+    private let replaceWith: String
+    private let caseSensitive: Bool
+
+    init?(_ rule: VocabularyRule) {
         let find = rule.find
-        guard !find.isEmpty else { return text }
+        guard !find.isEmpty else { return nil }
 
         var options: NSRegularExpression.Options = []
         if !rule.caseSensitive { options.insert(.caseInsensitive) }
@@ -85,12 +116,49 @@ public struct Vocabulary: Codable, Equatable, Sendable {
             pattern = escaped
         }
 
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
-            return text
+        guard let compiled = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return nil
         }
 
-        let range = NSRange(text.startIndex..., in: text)
-        let template = NSRegularExpression.escapedTemplate(for: rule.replaceWith)
-        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: template)
+        regex = RegexBox(compiled)
+        replaceWith = rule.replaceWith
+        caseSensitive = rule.caseSensitive
+    }
+
+    func apply(to text: String) -> String {
+        let source = text as NSString
+        var result = ""
+        var copiedUpTo = 0
+        var didMatch = false
+
+        regex.regex.enumerateMatches(
+            in: text,
+            options: [],
+            range: NSRange(location: 0, length: source.length)
+        ) { match, _, _ in
+            guard let match else { return }
+            didMatch = true
+            let range = match.range
+            result += source.substring(with: NSRange(location: copiedUpTo, length: range.location - copiedUpTo))
+            result += replacement(forMatched: source.substring(with: range))
+            copiedUpTo = range.location + range.length
+        }
+
+        guard didMatch else { return text }
+        result += source.substring(from: copiedUpTo)
+        return result
+    }
+
+    /// The replacement is inserted literally — never as a regex template — so a
+    /// replacement containing "$1" or "\" survives verbatim. A case-insensitive
+    /// rule that fired on a capitalised word (sentence start, say) keeps that
+    /// capitalisation; brand-name replacements that already lead with an
+    /// uppercase letter are left alone.
+    private func replacement(forMatched matched: String) -> String {
+        guard !caseSensitive,
+              let matchedFirst = matched.first, matchedFirst.isUppercase,
+              let replacementFirst = replaceWith.first, replacementFirst.isLowercase
+        else { return replaceWith }
+        return replacementFirst.uppercased() + replaceWith.dropFirst()
     }
 }

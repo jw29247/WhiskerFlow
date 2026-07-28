@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 @preconcurrency import WhisperKit
 import WhiskerFlowAppSupport
@@ -57,10 +58,14 @@ actor WhisperKitEngine: TranscriptionEngine {
             throw TranscriptionError.modelUnavailable(request.model.displayName)
         }
 
-        let results = try await pipe.transcribe(
-            audioPath: request.audioURL.path,
-            decodeOptions: Self.decodingOptions(language: request.language)
-        )
+        let deadline = Self.audioSeconds(at: request.audioURL)
+            .map(DecodeTimeoutPolicy.timeout(forAudioSeconds:)) ?? DecodeTimeoutPolicy.maximumTimeout
+        let results = try await decode(seconds: deadline) {
+            try await pipe.transcribe(
+                audioPath: request.audioURL.path,
+                decodeOptions: Self.decodingOptions(language: request.language)
+            )
+        }
 
         let text = results.map(\.text)
             .joined(separator: " ")
@@ -88,10 +93,13 @@ actor WhisperKitEngine: TranscriptionEngine {
             throw TranscriptionError.modelUnavailable(model.displayName)
         }
 
-        let results = try await pipe.transcribe(
-            audioArray: samples,
-            decodeOptions: Self.decodingOptions(language: language)
-        )
+        let deadline = DecodeTimeoutPolicy.timeout(forAudioSeconds: Double(samples.count) / 16_000)
+        let results = try await decode(seconds: deadline) {
+            try await pipe.transcribe(
+                audioArray: samples,
+                decodeOptions: Self.decodingOptions(language: language)
+            )
+        }
 
         let text = results.map(\.text)
             .joined(separator: " ")
@@ -102,6 +110,28 @@ actor WhisperKitEngine: TranscriptionEngine {
             language: results.first?.language ?? language,
             duration: results.first?.timings.inputAudioSeconds
         )
+    }
+
+    /// Run a decode under an abandoning deadline. A timed-out decode leaves the
+    /// pipe wedged, so drop it and force a fresh load next time.
+    private func decode<T: Sendable>(
+        seconds: Double,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        do {
+            return try await withAbandoningDeadline(seconds: seconds, operation: operation)
+        } catch AsyncTimeoutError.timedOut {
+            pipe = nil
+            loadedModel = nil
+            throw TranscriptionError.timedOut(seconds: Int(seconds))
+        }
+    }
+
+    private static func audioSeconds(at url: URL) -> Double? {
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        let sampleRate = file.fileFormat.sampleRate
+        guard sampleRate > 0 else { return nil }
+        return Double(file.length) / sampleRate
     }
 
     private static func decodingOptions(language: String?) -> DecodingOptions {

@@ -10,12 +10,20 @@ For a real release:
 
 1. Start from the code intended for release, normally after the feature PR has
    landed on `main`.
-2. Bump both `CFBundleShortVersionString` and `CFBundleVersion` in
-   `Resources/Info.plist`. `CFBundleVersion` must increase every release.
-3. Run the signed local release command:
+2. Bump the version in the one place that defines it:
 
    ```bash
-   VERSION=<version> NOTES="Short release note" script/notarize.sh
+   script/bump_version.sh <version>
+   ```
+
+   `Resources/Info.plist` is the single source of the version; the script sets
+   `CFBundleShortVersionString` and increments `CFBundleVersion`, which must
+   increase every release.
+3. Run the signed local release command. Do not pass `VERSION` — it is read
+   from `Resources/Info.plist`, and an override that disagrees is rejected:
+
+   ```bash
+   NOTES="Short release note" script/notarize.sh
    ```
 
    This requires a Developer ID Application certificate, the

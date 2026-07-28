@@ -49,6 +49,9 @@ final class AppState {
         let playSounds: Bool
     }
 
+    /// How long a `.finishing` session may take before the UI is force-recovered.
+    private static let finishWatchdogSeconds = 45
+
     var records: [TranscriptRecord] = []
     var selectedRecordID: TranscriptRecord.ID?
     var status: AppStatus = .idle
@@ -432,6 +435,8 @@ final class AppState {
             }
             guard recordingCoordinator.didStart(sessionID) else {
                 live.cancel()
+                streamingActive = false
+                activeRecordingConfiguration = nil
                 return
             }
             isRecording = true
@@ -483,6 +488,13 @@ final class AppState {
             category: "recording",
             metadata: ["phase": "finishing", "stop_reason": String(describing: reason)]
         )
+        // A wedged CoreML decode never returns, so nothing below can unstick the
+        // UI on its own — this watchdog is the only way back to idle.
+        let watchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.finishWatchdogSeconds) * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.abandonStuckFinish(sessionID: sessionID)
+        }
 
         let wasStreaming = streamingActive
         streamingActive = false
@@ -491,6 +503,7 @@ final class AppState {
         let pasteTarget = pasteTargetApplication
         pasteTargetApplication = nil
         let result = await live.finish(reason: reason)
+        watchdog.cancel()
         _ = recordingCoordinator.didFinish(sessionID)
         if configuration.playSounds { soundService.play(.recordingStopped) }
         liveText = ""
@@ -532,6 +545,25 @@ final class AppState {
                 status = .success("Microphone changed; partial transcript saved")
             }
         }
+    }
+
+    private func abandonStuckFinish(sessionID: UUID) {
+        guard recordingCoordinator.phase == .finishing(sessionID) else { return }
+        recordingCoordinator.forceIdle()
+        isRecording = false
+        isTranscribing = false
+        streamingActive = false
+        activeRecordingConfiguration = nil
+        logger.error("Finish watchdog fired after \(Self.finishWatchdogSeconds, privacy: .public)s")
+        DiagnosticsService.breadcrumb(
+            category: "recording",
+            metadata: ["phase": "finish_timeout"]
+        )
+        DiagnosticsService.capture(
+            error: TranscriptionError.timedOut(seconds: Self.finishWatchdogSeconds),
+            category: "recording"
+        )
+        status = .failure("Transcription timed out")
     }
 
     private func handleAudioConfigurationChange() {

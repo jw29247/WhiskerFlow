@@ -18,6 +18,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build packaging artifacts (unsigned — not published)
+      # Resources/Info.plist is the single source of the version. A tag that
+      # disagrees with it would package the wrong version, so fail early.
+      - name: Verify the tag matches Resources/Info.plist
+        if: github.ref_type == 'tag'
         run: |
-          VERSION="${GITHUB_REF_NAME#v}" script/package_release.sh
+          PLIST_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$TAG_VERSION" != "$PLIST_VERSION" ]]; then
+            echo "ERROR: tag $GITHUB_REF_NAME does not match Info.plist version $PLIST_VERSION." >&2
+            exit 1
+          fi
+
+      - name: Build packaging artifacts (unsigned — not published)
+        run: script/package_release.sh

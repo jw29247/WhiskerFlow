@@ -71,6 +71,50 @@ final class RecordingCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.phase, .idle)
     }
 
+    func testForceIdleRecoversEveryActivePhaseAndReportsWhetherItActed() throws {
+        let coordinator = RecordingCoordinator()
+        XCTAssertFalse(coordinator.forceIdle())
+
+        let preparing = try XCTUnwrap(coordinator.requestStart())
+        XCTAssertEqual(coordinator.phase, .preparing(preparing))
+        XCTAssertTrue(coordinator.forceIdle())
+        XCTAssertEqual(coordinator.phase, .idle)
+        XCTAssertEqual(coordinator.stopReason, .failed)
+        XCTAssertFalse(coordinator.forceIdle())
+
+        let recording = try XCTUnwrap(coordinator.requestStart())
+        XCTAssertTrue(coordinator.didStart(recording))
+        XCTAssertTrue(coordinator.forceIdle())
+        XCTAssertEqual(coordinator.phase, .idle)
+        XCTAssertEqual(coordinator.stopReason, .failed)
+
+        let finishing = try XCTUnwrap(coordinator.requestStart())
+        XCTAssertTrue(coordinator.didStart(finishing))
+        XCTAssertTrue(coordinator.requestFinish(finishing, reason: .userReleased))
+        XCTAssertTrue(coordinator.forceIdle())
+        XCTAssertEqual(coordinator.phase, .idle)
+        XCTAssertEqual(coordinator.stopReason, .failed)
+    }
+
+    func testForceIdleRejectsStaleTokensAndAllowsANewSession() throws {
+        let coordinator = RecordingCoordinator()
+        let stuck = try XCTUnwrap(coordinator.requestStart())
+        XCTAssertTrue(coordinator.didStart(stuck))
+        XCTAssertTrue(coordinator.requestFinish(stuck))
+        XCTAssertTrue(coordinator.forceIdle())
+
+        XCTAssertFalse(coordinator.didFinish(stuck))
+        XCTAssertFalse(coordinator.requestFinish(stuck))
+
+        let next = try XCTUnwrap(coordinator.requestStart())
+        XCTAssertEqual(coordinator.phase, .preparing(next))
+        XCTAssertNil(coordinator.stopReason)
+        XCTAssertTrue(coordinator.didStart(next))
+        XCTAssertTrue(coordinator.requestFinish(next))
+        XCTAssertTrue(coordinator.didFinish(next))
+        XCTAssertEqual(coordinator.phase, .idle)
+    }
+
     func testOneHundredRapidSessionsAlwaysRecoverToIdle() throws {
         let coordinator = RecordingCoordinator()
 

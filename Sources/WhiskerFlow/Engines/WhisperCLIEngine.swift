@@ -1,4 +1,5 @@
 import Foundation
+import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
 /// Advanced engine: shells out to a user-provided `openai-whisper` CLI.

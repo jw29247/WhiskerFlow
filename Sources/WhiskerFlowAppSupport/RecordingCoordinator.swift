@@ -85,6 +85,16 @@ public final class RecordingCoordinator {
         return true
     }
 
+    /// Recover from a stuck phase when no session token is trustworthy any more
+    /// (e.g. a wedged decode that never reported back).
+    @discardableResult
+    public func forceIdle() -> Bool {
+        guard phase != .idle else { return false }
+        stopReason = .failed
+        phase = .idle
+        return true
+    }
+
     @discardableResult
     public func fail(_ sessionID: UUID) -> Bool {
         switch phase {
