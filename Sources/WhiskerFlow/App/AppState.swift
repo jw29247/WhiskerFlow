@@ -43,6 +43,7 @@ final class AppState {
         let model: WhisperModel
         let language: String?
         let vocabulary: Vocabulary
+        let formatting: FormattingOptions
         let cliConfiguration: WhisperConfiguration
         let allowAppleFallback: Bool
         let delivery: DeliveryMode
@@ -245,6 +246,7 @@ final class AppState {
         warmUpTask?.cancel()
         let engine = settings.engine
         let model = settings.model
+        let language = settings.resolvedLanguage
         let allowFallback = settings.allowAppleFallback
         guard engine == .whisperKit else {
             modelState = .ready
@@ -253,10 +255,11 @@ final class AppState {
         modelState = .preparing
         warmUpTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            let ready = await transcription.prepare(kind: engine, model: model)
+            let ready = await transcription.prepare(kind: engine, model: model, language: language)
             guard !Task.isCancelled,
                   self.settings.engine == engine,
-                  self.settings.model == model else { return }
+                  self.settings.model == model,
+                  self.settings.resolvedLanguage == language else { return }
             if ready {
                 DiagnosticsService.breadcrumb(category: "model", metadata: ["model": model.rawValue])
                 self.modelState = .ready
@@ -470,6 +473,7 @@ final class AppState {
                         language: configuration.language,
                         model: configuration.model,
                         vocabulary: configuration.vocabulary,
+                        formatting: configuration.formatting,
                         streaming: streamingActive
                     )
                     inputSelection = candidate
@@ -786,7 +790,10 @@ final class AppState {
                 cliConfiguration: configuration.cliConfiguration,
                 allowAppleFallback: configuration.allowAppleFallback
             )
-            let finalText = configuration.vocabulary.apply(to: outcome.result.text)
+            let finalText = TranscriptFormatter.format(
+                configuration.vocabulary.apply(to: outcome.result.text),
+                options: configuration.formatting
+            )
             try store.markTranscribed(
                 id: record.id,
                 text: finalText,
@@ -862,6 +869,7 @@ final class AppState {
             model: settings.model,
             language: settings.resolvedLanguage,
             vocabulary: effectiveVocabulary,
+            formatting: settings.formatting,
             cliConfiguration: settings.cliConfiguration,
             allowAppleFallback: settings.allowAppleFallback,
             delivery: settings.delivery,

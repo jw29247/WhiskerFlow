@@ -37,6 +37,7 @@ final class AppSettings {
     var whisperCommand: String { didSet { defaults.set(whisperCommand, forKey: Keys.whisperCommand) } }
     var whisperArguments: String { didSet { defaults.set(whisperArguments, forKey: Keys.whisperArguments) } }
     var vocabulary: Vocabulary { didSet { persist(vocabulary, key: Keys.vocabulary) } }
+    var formatting: FormattingOptions { didSet { persist(formatting, key: Keys.formatting) } }
 
     @ObservationIgnored private(set) var legacySelectedDeviceID: String?
 
@@ -66,6 +67,7 @@ final class AppSettings {
         whisperCommand = defaults.string(forKey: Keys.whisperCommand) ?? Self.defaultWhisperCommand
         whisperArguments = defaults.string(forKey: Keys.whisperArguments) ?? Self.defaultWhisperArguments
         vocabulary = Self.loadVocabulary(from: defaults) ?? Vocabulary()
+        formatting = Self.loadFormatting(from: defaults) ?? FormattingOptions()
         legacySelectedDeviceID = defaults.string(forKey: Keys.selectedDeviceID)
         launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
         defaults.removeObject(forKey: Keys.sharedVocabularyURL)
@@ -143,6 +145,11 @@ final class AppSettings {
         return try? JSONDecoder().decode(Vocabulary.self, from: data)
     }
 
+    private static func loadFormatting(from defaults: UserDefaults) -> FormattingOptions? {
+        guard let data = defaults.data(forKey: Keys.formatting) else { return nil }
+        return try? JSONDecoder().decode(FormattingOptions.self, from: data)
+    }
+
     private static func loadCustomHotkey(from defaults: UserDefaults) -> KeyCombo? {
         guard let data = defaults.data(forKey: Keys.customHotkey) else { return nil }
         return try? JSONDecoder().decode(KeyCombo.self, from: data)
@@ -175,6 +182,7 @@ final class AppSettings {
         static let whisperCommand = "whisperCommand"
         static let whisperArguments = "whisperArguments"
         static let vocabulary = "vocabulary"
+        static let formatting = "formattingOptions"
         static let sharedVocabularyURL = "sharedVocabularyURL"
         static let launchAtLogin = "launchAtLogin"
     }

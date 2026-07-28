@@ -69,6 +69,23 @@ struct SettingsView: View {
                 Toggle("Play sound cues", isOn: $appState.settings.playSounds)
             }
 
+            Section("Formatting") {
+                Toggle("Spoken line commands", isOn: $appState.settings.formatting.spokenLineCommands)
+                Text("Say \"new line\" or \"new paragraph\" to insert a line break.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Capitalise sentences", isOn: $appState.settings.formatting.capitalizeSentences)
+                Text("Uppercase the first letter of each sentence and line.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Remove filler words", isOn: $appState.settings.formatting.removeFillerWords)
+                Text("Drop \"um\", \"uh\", \"erm\" and \"uhm\", then tidy the spacing left behind.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("App") {
                 Toggle("Show in menu bar", isOn: $appState.settings.showMenuBarExtra)
                 Toggle("Show Dock icon", isOn: $appState.settings.showDockIcon)
@@ -114,6 +131,7 @@ struct SettingsView: View {
                 Picker("Language", selection: $appState.settings.language) {
                     ForEach(Self.languages, id: \.code) { Text($0.name).tag($0.code) }
                 }
+                .onChange(of: appState.settings.language) { _, _ in appState.warmUpEngine() }
 
                 Toggle("Fall back to Apple Speech if the model is unavailable",
                        isOn: $appState.settings.allowAppleFallback)

@@ -8,19 +8,24 @@ import WhiskerFlowCore
 /// loaded once and kept warm, so only the first transcription pays the load cost.
 actor WhisperKitEngine: TranscriptionEngine {
     private var pipe: WhisperKit?
-    private var loadedModel: WhisperModel?
+    /// Keyed by identifier, not by `WhisperModel`, so switching between the
+    /// English-only and multilingual variants of one size reloads the pipe.
+    private var loadedIdentifier: String?
 
     nonisolated var kind: TranscriptionEngineKind { .whisperKit }
 
     func isAvailable() async -> Bool { true }
 
-    func prepare(model: WhisperModel) async throws {
-        if pipe != nil, loadedModel == model { return }
+    func prepare(model: WhisperModel, language: String?) async throws {
+        let identifier = model.whisperKitIdentifier(
+            multilingual: WhisperModel.requiresMultilingualModel(language: language)
+        )
+        if pipe != nil, loadedIdentifier == identifier { return }
 
         do {
             let downloadBase = try ModelStoragePaths.prepareWhisperKitDownloadBase()
             let localAssets = try ModelStoragePaths.prepareLocalAssets(
-                modelIdentifier: model.whisperKitIdentifier
+                modelIdentifier: identifier
             )
             let kit: WhisperKit
             if let localAssets {
@@ -34,7 +39,7 @@ actor WhisperKitEngine: TranscriptionEngine {
                 )
             } else {
                 kit = try await WhisperKit(
-                    model: model.whisperKitIdentifier,
+                    model: identifier,
                     downloadBase: downloadBase,
                     tokenizerFolder: downloadBase,
                     verbose: false,
@@ -44,16 +49,16 @@ actor WhisperKitEngine: TranscriptionEngine {
                 )
             }
             pipe = kit
-            loadedModel = model
+            loadedIdentifier = identifier
         } catch {
             pipe = nil
-            loadedModel = nil
+            loadedIdentifier = nil
             throw TranscriptionError.modelUnavailable(model.displayName)
         }
     }
 
     func transcribe(_ request: TranscriptionRequest) async throws -> WhiskerFlowCore.TranscriptionResult {
-        try await prepare(model: request.model)
+        try await prepare(model: request.model, language: request.language)
         guard let pipe else {
             throw TranscriptionError.modelUnavailable(request.model.displayName)
         }
@@ -88,7 +93,7 @@ actor WhisperKitEngine: TranscriptionEngine {
     /// Used by the live dictation loop. An empty result yields an empty string
     /// (a partial that hasn't caught any speech yet is not an error).
     func transcribe(samples: [Float], language: String?, model: WhisperModel) async throws -> WhiskerFlowCore.TranscriptionResult {
-        try await prepare(model: model)
+        try await prepare(model: model, language: language)
         guard let pipe else {
             throw TranscriptionError.modelUnavailable(model.displayName)
         }
@@ -122,7 +127,7 @@ actor WhisperKitEngine: TranscriptionEngine {
             return try await withAbandoningDeadline(seconds: seconds, operation: operation)
         } catch AsyncTimeoutError.timedOut {
             pipe = nil
-            loadedModel = nil
+            loadedIdentifier = nil
             throw TranscriptionError.timedOut(seconds: Int(seconds))
         }
     }
@@ -135,9 +140,14 @@ actor WhisperKitEngine: TranscriptionEngine {
     }
 
     private static func decodingOptions(language: String?) -> DecodingOptions {
+        // WhisperKit 0.13 derives `detectLanguage` from `!usePrefillPrompt`, so
+        // auto-detect stays off unless forced on. A nil language is the only
+        // case that needs it, and it always loads the multilingual weights.
         DecodingOptions(
             task: .transcribe,
             language: language,
+            usePrefillPrompt: true,
+            detectLanguage: language == nil,
             skipSpecialTokens: true,
             withoutTimestamps: true,
             chunkingStrategy: .vad

@@ -45,4 +45,42 @@ final class ModelStoragePathsTests: XCTestCase {
         ))
         XCTAssertFalse(assets.modelFolder.path.hasPrefix(documents.path))
     }
+
+    func testMultilingualIdentifierMapsToTheMatchingModelAndTokenizerPaths() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let applicationSupport = root.appendingPathComponent("Application Support", isDirectory: true)
+        let documents = root.appendingPathComponent("Documents", isDirectory: true)
+        let legacyBase = documents.appendingPathComponent("huggingface", isDirectory: true)
+        let legacyModel = legacyBase
+            .appendingPathComponent("models/argmaxinc/whisperkit-coreml/openai_whisper-small", isDirectory: true)
+        let legacyTokenizer = legacyBase
+            .appendingPathComponent("models/openai/whisper-small", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyModel, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: legacyTokenizer, withIntermediateDirectories: true)
+        try Data("model".utf8).write(to: legacyModel.appendingPathComponent("config.json"))
+        try Data("tokenizer".utf8).write(to: legacyTokenizer.appendingPathComponent("tokenizer.json"))
+
+        let assets = try XCTUnwrap(ModelStoragePaths.prepareLocalAssets(
+            modelIdentifier: "openai_whisper-small",
+            applicationSupport: applicationSupport,
+            documents: documents
+        ))
+
+        let base = ModelStoragePaths.whisperKitDownloadBase(in: applicationSupport)
+        XCTAssertEqual(
+            assets.modelFolder,
+            base.appendingPathComponent(
+                "models/argmaxinc/whisperkit-coreml/openai_whisper-small",
+                isDirectory: true
+            )
+        )
+        XCTAssertEqual(assets.tokenizerDownloadBase, base)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: assets.tokenizerDownloadBase
+                .appendingPathComponent("models/openai/whisper-small/tokenizer.json")
+                .path
+        ))
+    }
 }

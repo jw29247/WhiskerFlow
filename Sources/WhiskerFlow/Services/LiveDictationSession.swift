@@ -26,6 +26,7 @@ final class LiveDictationSession {
     private var language: String?
     private var model: WhisperModel = .tiny
     private var vocabulary = CompiledVocabulary(Vocabulary())
+    private var formatting = FormattingOptions()
     private var confirmedText = ""
     private var confirmedSampleCount = 0
     private var windowText = ""
@@ -54,11 +55,13 @@ final class LiveDictationSession {
         language: String?,
         model: WhisperModel,
         vocabulary: Vocabulary,
+        formatting: FormattingOptions,
         streaming: Bool
     ) throws {
         self.language = language
         self.model = model
         self.vocabulary = CompiledVocabulary(vocabulary)
+        self.formatting = formatting
         resetTranscript()
         isStreaming = streaming
         do {
@@ -94,7 +97,7 @@ final class LiveDictationSession {
             }
         }
 
-        let finalText = LiveDecodeWindowPolicy.join(confirmedText, windowText)
+        let finalText = emittedText()
         resetTranscript()
         onLevel?(0)
         return (finalText, samples)
@@ -131,7 +134,17 @@ final class LiveDictationSession {
     private func decodeWindow(_ window: [Float]) async {
         guard let text = await decodedText(for: window), !text.isEmpty else { return }
         windowText = text
-        onPartial?(LiveDecodeWindowPolicy.join(confirmedText, text))
+        onPartial?(emittedText())
+    }
+
+    /// Formatting is applied to the joined transcript, never to a lone window: a
+    /// window edge is not a sentence edge, so formatting fragments would
+    /// capitalise mid-sentence at every seam and split spoken commands in half.
+    private func emittedText() -> String {
+        TranscriptFormatter.format(
+            LiveDecodeWindowPolicy.join(confirmedText, windowText),
+            options: formatting
+        )
     }
 
     /// Fold everything up to a mid-silence cut into the confirmed prefix so the
