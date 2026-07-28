@@ -153,12 +153,35 @@ final class SharedVocabularyService {
             return
         }
 
-        guard let resourcesURL = Bundle.main.resourceURL else { return }
+        // The resource bundle name is fixed by SwiftPM, so a rename or a packaging
+        // change silently ships an empty glossary unless the miss is reported.
+        guard let resourcesURL = Bundle.main.resourceURL else {
+            DiagnosticsService.capture(
+                error: CocoaError(.fileNoSuchFile),
+                category: "glossary",
+                code: "seed_missing"
+            )
+            return
+        }
         let seedURL = resourcesURL
             .appendingPathComponent("WhiskerFlow_WhiskerFlow.bundle", isDirectory: true)
             .appendingPathComponent("shared-vocabulary.json")
-        guard let seed = try? Data(contentsOf: seedURL),
-           let vocabulary = try? AgencyVocabularyPolicy.decode(seed) else { return }
+        guard let seed = try? Data(contentsOf: seedURL) else {
+            DiagnosticsService.capture(
+                error: CocoaError(.fileNoSuchFile),
+                category: "glossary",
+                code: "seed_missing"
+            )
+            return
+        }
+        guard let vocabulary = try? AgencyVocabularyPolicy.decode(seed) else {
+            DiagnosticsService.capture(
+                error: CocoaError(.fileReadCorruptFile),
+                category: "glossary",
+                code: "seed_invalid"
+            )
+            return
+        }
         let modified = (try? seedURL.resourceValues(forKeys: [.contentModificationDateKey]))?
             .contentModificationDate ?? Date()
         rules = vocabulary.rules

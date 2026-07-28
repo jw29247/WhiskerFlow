@@ -23,7 +23,9 @@ enum DiagnosticsService {
             options.sendDefaultPii = false
             options.tracesSampleRate = 0
             options.enableAutoPerformanceTracing = false
-            options.enableAutoSessionTracking = false
+            // Sessions carry only app version and OS, and without them Sentry
+            // cannot compute a crash-free rate.
+            options.enableAutoSessionTracking = true
             options.enableMetrics = false
             options.enableNetworkTracking = false
             options.enableNetworkBreadcrumbs = false
@@ -98,11 +100,11 @@ enum DiagnosticsService {
             redact(thread.stacktrace)
         }
         event.exceptions?.forEach { exception in
-            // Exception values can include framework assertions, paths, device
-            // identifiers, or other runtime content. The type and mechanism
-            // retain the crash classification without that payload.
-            exception.value = nil
-            exception.module = nil
+            // Exception values can include paths, device identifiers, or other
+            // runtime content. Sanitizing rather than clearing keeps the
+            // assertion text that identifies the crash. The module is a
+            // framework name, not user content.
+            exception.value = DiagnosticPrivacy.sanitizedCrashText(exception.value)
             redact(exception.stacktrace)
         }
         redact(event.stacktrace)
@@ -125,7 +127,9 @@ enum DiagnosticsService {
     private static func redact(_ stacktrace: SentryStacktrace?) {
         stacktrace?.frames.forEach { frame in
             frame.fileName = nil
-            frame.package = nil
+            // The binary basename is what Sentry groups on; the containing path
+            // is the part that can carry a user directory.
+            frame.package = DiagnosticPrivacy.safeDebugImageName(frame.package)
             frame.contextLine = nil
             frame.preContext = nil
             frame.postContext = nil

@@ -182,10 +182,14 @@ private final class ConversionFailureBox: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
 
-    func increment() {
+    /// True only for the first failure of a capture, so the tap — which fires
+    /// about ten times a second — can report at most once.
+    @discardableResult
+    func increment() -> Bool {
         lock.lock()
+        defer { lock.unlock() }
         count += 1
-        lock.unlock()
+        return count == 1
     }
 
     var value: Int {
@@ -304,9 +308,18 @@ final class AudioCaptureService: AudioCapturing {
                 let peak = Self.peak(from: converted)
                 Task { @MainActor [weak self] in self?.onLevel?(level, peak) }
             } catch {
-                failures.increment()
+                let isFirstFailure = failures.increment()
                 Task { @MainActor [weak self] in
                     self?.logger.error("Audio conversion failed error=\(error.localizedDescription, privacy: .public)")
+                    // AppState reports the count when a capture yields nothing
+                    // usable; this only marks that conversion started failing at
+                    // all, so partial failures are not invisible.
+                    if isFirstFailure {
+                        DiagnosticsService.breadcrumb(
+                            category: "audio",
+                            metadata: ["error_code": "conversion_failed"]
+                        )
+                    }
                 }
             }
         }

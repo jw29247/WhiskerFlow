@@ -35,6 +35,7 @@ final class LiveDictationSession {
     private var lastDecodedSampleCount = 0
     private var isRunning = false
     private var isStreaming = false
+    private var reportedDecodeFailure = false
 
     private static let sampleRate = 16_000.0
     /// Re-decode once this much new audio has accumulated since the last pass.
@@ -64,6 +65,7 @@ final class LiveDictationSession {
         self.vocabulary = CompiledVocabulary(vocabulary)
         self.formatting = formatting
         resetTranscript()
+        reportedDecodeFailure = false
         isStreaming = streaming
         do {
             try audioCapture.start(selection: selection)
@@ -171,7 +173,16 @@ final class LiveDictationSession {
             let result = try await transcription.transcribeSamples(samples, language: language, model: model)
             return vocabulary.apply(to: result.text)
         } catch {
-            // Partial decode failures are non-fatal — keep the previous text.
+            // Partial decode failures are non-fatal — keep the previous text. The
+            // decode loop runs several times a second, so report once per session.
+            if !reportedDecodeFailure {
+                reportedDecodeFailure = true
+                DiagnosticsService.capture(
+                    error: error,
+                    category: "model",
+                    code: "live_decode_failed"
+                )
+            }
             return nil
         }
     }
