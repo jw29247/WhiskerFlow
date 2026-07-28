@@ -87,6 +87,31 @@ final class GlossaryLintTests: XCTestCase {
         )
     }
 
+    func testCasingOnlyRuleOfCommonWordsIsNotDropped() {
+        // "sleep number" -> "Sleep Number" cannot change what a transcript says, so
+        // the sanitizer must not discard it on every installed machine.
+        XCTAssertTrue(flags("sleep number", "Sleep Number").isEmpty)
+        XCTAssertTrue(flags("one water", "One Water").isEmpty)
+        XCTAssertEqual(flags("sleep number", "Bed Brand"), [.commonPhrase(find: "sleep number")])
+    }
+
+    /// The lint's job is to catch a cascade the runtime really performs, so it has to
+    /// consider the capitalised replacement a case-insensitive rule emits at a
+    /// sentence start — checking only the literal `replaceWith` misses it entirely.
+    func testCascadeThroughACapitalisedReplacementIsFlagged() {
+        let rules = [
+            VocabularyRule(find: "gonna", replaceWith: "going to"),
+            VocabularyRule(find: "Going to", replaceWith: "GOING TO", caseSensitive: true)
+        ]
+
+        XCTAssertEqual(
+            cascades(rules),
+            [.cascadeHazard(find: "gonna", replaceWith: "going to", matchedBy: "Going to")]
+        )
+        // And the runtime really does cascade, which is what makes the flag correct.
+        XCTAssertEqual(Vocabulary(rules: rules).apply(to: "Gonna ship"), "GOING TO ship")
+    }
+
     func testVocabularyFlagsIncludePerRuleFlags() {
         let vocabulary = Vocabulary(rules: [
             VocabularyRule(find: "cleens", replaceWith: "Cleens"),

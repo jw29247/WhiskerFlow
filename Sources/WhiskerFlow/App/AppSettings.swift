@@ -53,7 +53,7 @@ final class AppSettings {
 
         engine = defaults.string(forKey: Keys.engine).flatMap(TranscriptionEngineKind.init) ?? .whisperKit
         model = defaults.string(forKey: Keys.model).flatMap(WhisperModel.init) ?? .tiny
-        language = defaults.string(forKey: Keys.language) ?? "en"
+        language = Self.migratedLanguage(from: defaults)
         hotkey = defaults.string(forKey: Keys.hotkey).flatMap(HotkeyTrigger.init) ?? .fn
         customHotkey = Self.loadCustomHotkey(from: defaults) ?? .default
         recordingMode = defaults.string(forKey: Keys.recordingMode).flatMap(RecordingMode.init) ?? .holdToTalk
@@ -145,6 +145,23 @@ final class AppSettings {
         return try? JSONDecoder().decode(Vocabulary.self, from: data)
     }
 
+    /// "Auto-detect" used to be decorative: every WhisperKit identifier was the
+    /// English-only variant whatever the setting said. It now selects multilingual
+    /// weights, which an existing user has never downloaded — so a stored "auto"
+    /// from before that change becomes English rather than forcing a
+    /// several-hundred-megabyte download (and a dead engine when offline). The
+    /// one-shot flag means a user who picks Auto-detect deliberately afterwards
+    /// keeps it. Assigning in `init` doesn't run `didSet`, so the value is written
+    /// through to `defaults` here.
+    private static func migratedLanguage(from defaults: UserDefaults) -> String {
+        guard let stored = defaults.string(forKey: Keys.language) else { return "en" }
+        guard stored.lowercased() == "auto",
+              !defaults.bool(forKey: Keys.languageAutoMigrated) else { return stored }
+        defaults.set(true, forKey: Keys.languageAutoMigrated)
+        defaults.set("en", forKey: Keys.language)
+        return "en"
+    }
+
     private static func loadFormatting(from defaults: UserDefaults) -> FormattingOptions? {
         guard let data = defaults.data(forKey: Keys.formatting) else { return nil }
         return try? JSONDecoder().decode(FormattingOptions.self, from: data)
@@ -168,6 +185,7 @@ final class AppSettings {
         static let engine = "engine"
         static let model = "model"
         static let language = "language"
+        static let languageAutoMigrated = "languageAutoMigrated"
         static let hotkey = "hotkey"
         static let customHotkey = "customHotkey"
         static let recordingMode = "recordingMode"

@@ -31,5 +31,6 @@
 --disable wrapArguments
 --disable wrapFunctionBodies
 --disable wrapIfStatementBodies
+--disable wrapLoopBodies
 --disable wrapMultilineStatementBraces
 --disable wrapPropertyBodies

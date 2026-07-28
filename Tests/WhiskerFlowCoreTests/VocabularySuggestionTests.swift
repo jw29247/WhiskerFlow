@@ -132,6 +132,29 @@ final class VocabularySuggestionTests: XCTestCase {
         )
     }
 
+    /// A one-word fix in a long transcript must not build an O(n*m) table: the shared
+    /// head and tail are matched off first, so only the disagreement is aligned.
+    func testCorrectionInALongTranscriptIsStillFoundQuickly() {
+        let filler = Array(repeating: "the client asked for it that way", count: 400).joined(separator: " ")
+        let started = Date()
+        let suggestions = VocabularyCorrectionDetector.corrections(
+            original: "\(filler) we spoke with clawd \(filler)",
+            edited: "\(filler) we spoke with Claude \(filler)"
+        )
+
+        XCTAssertEqual(suggestions, [VocabularyCorrection(find: "clawd", replaceWith: "Claude")])
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+    }
+
+    func testWholesaleRewriteOfALongTranscriptSuggestsNothing() {
+        let original = Array(repeating: "alpha bravo charlie delta", count: 400).joined(separator: " ")
+        let edited = Array(repeating: "echo foxtrot golf hotel", count: 400).joined(separator: " ")
+        let started = Date()
+
+        XCTAssertEqual(VocabularyCorrectionDetector.corrections(original: original, edited: edited), [])
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+    }
+
     func testLongRunIsNotSuggested() {
         let suggestions = VocabularyCorrectionDetector.corrections(
             original: "the report says we should ship on friday because the client asked for it that way",

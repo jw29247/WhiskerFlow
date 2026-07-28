@@ -23,6 +23,10 @@ public enum GlossaryLint {
         let tokens = tokens(in: rule.find)
         guard !tokens.isEmpty else { return [] }
         guard tokens.allSatisfy(isCommonEnglish) else { return [] }
+        // A casing-only rule ("sleep number" -> "Sleep Number") cannot change what
+        // a transcript says, so everyday words in its `find` are not a hazard and
+        // it must not be hard-dropped.
+        guard rule.find.lowercased() != rule.replaceWith.lowercased() else { return [] }
         return [tokens.count == 1 ? .commonWord(find: rule.find) : .commonPhrase(find: rule.find)]
     }
 
@@ -30,8 +34,13 @@ public enum GlossaryLint {
         var result = vocabulary.rules.flatMap { flags(for: $0) }
         let patterns = vocabulary.rules.map(pattern(for:))
         for (index, rule) in vocabulary.rules.enumerated() where !rule.replaceWith.isEmpty {
+            // Every form the rule can insert, not just its literal `replaceWith`:
+            // a case-insensitive rule capitalises its replacement at a sentence
+            // start, and a cascade that only fires on that form is still a cascade.
+            let inserted = rule.possibleReplacements
             for later in (index + 1)..<vocabulary.rules.count {
-                guard let regex = patterns[later], matches(regex, rule.replaceWith) else { continue }
+                guard let regex = patterns[later],
+                      inserted.contains(where: { matches(regex, $0) }) else { continue }
                 result.append(
                     .cascadeHazard(
                         find: rule.find,
@@ -60,7 +69,9 @@ public enum GlossaryLint {
     }
 
     /// Mirrors the pattern `CompiledVocabulary` builds, so a cascade flag means the
-    /// later rule really would rewrite this rule's replacement at runtime.
+    /// later rule really would rewrite this rule's replacement at runtime. The
+    /// replacement side comes from Core (`possibleReplacements`) rather than being
+    /// re-derived here; keep this pattern in step with `CompiledRule.init`.
     private static func pattern(for rule: VocabularyRule) -> NSRegularExpression? {
         let find = rule.find
         guard !find.isEmpty else { return nil }

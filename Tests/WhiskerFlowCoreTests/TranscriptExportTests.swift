@@ -79,20 +79,31 @@ final class TranscriptExportTests: XCTestCase {
         XCTAssertEqual(lines[5], "second line\"")
     }
 
-    func testJSONIncludesEveryStatusAndRoundTrips() throws {
+    func testJSONSkipsFailedAndInProgressRecordsLikeTheOtherFormats() throws {
         let records = [
             record("done", secondsAgo: 30),
             record("boom", secondsAgo: 20, status: .failed(errorMessage: "boom")),
             record("", secondsAgo: 10, status: .recording),
-            record("half", secondsAgo: 0, status: .transcribing)
+            record("newest", secondsAgo: 0)
         ]
 
         let data = try TranscriptExporter.json(records)
-        let decoded = try JSONDecoder.whiskerFlow.decode([TranscriptRecord].self, from: data)
+        let decoded = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
 
-        XCTAssertEqual(decoded.count, 4)
-        XCTAssertEqual(decoded, records.sorted { $0.createdAt > $1.createdAt })
-        XCTAssertEqual(decoded.map(\.text), ["half", "", "boom", "done"])
+        XCTAssertEqual(decoded?.count, 2)
+        XCTAssertEqual(decoded?.compactMap { $0["text"] as? String }, ["newest", "done"])
+        XCTAssertEqual(decoded?.compactMap { $0["wordCount"] as? Int }, [1, 1])
+    }
+
+    func testJSONOmitsLocalAudioPaths() throws {
+        let data = try TranscriptExporter.json([record("done", secondsAgo: 0)])
+        let text = String(decoding: data, as: UTF8.self)
+
+        // An absolute path under the user's home has no business in a file the user
+        // shares — the same detail the diagnostics sanitizer strips elsewhere.
+        XCTAssertFalse(text.contains("audioFilePath"), text)
+        XCTAssertFalse(text.contains(".m4a"), text)
+        XCTAssertFalse(text.contains("errorMessage"), text)
     }
 
     func testExportRoutesFormatsAndNamesFiles() throws {

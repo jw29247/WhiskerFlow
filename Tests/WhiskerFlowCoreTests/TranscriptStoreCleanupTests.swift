@@ -131,8 +131,34 @@ final class TranscriptStoreCleanupTests: XCTestCase {
         }
         XCTAssertEqual(try Data(contentsOf: url), original)
 
-        try store.replaceAll([record])
-        let reloaded = try JSONDecoder.whiskerFlow.decode([TranscriptRecord].self, from: Data(contentsOf: url))
-        XCTAssertEqual(reloaded.map(\.id), [record.id])
+        // Replacing the whole list is no more entitled to destroy the only copy of
+        // an unparsed history than appending to it is.
+        XCTAssertThrowsError(try store.replaceAll([record])) { error in
+            XCTAssertEqual(error as? TranscriptStoreError, .corruptFileUnrecoverable(path: url.path))
+        }
+        XCTAssertEqual(try Data(contentsOf: url), original)
+    }
+
+    func testBackupIsNotClaimedWhenAnEntryAlreadyOccupiesTheBackupPath() throws {
+        let url = tempURL()
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let original = Data("{ not json".utf8)
+        try original.write(to: url)
+        let backup = url.deletingPathExtension().appendingPathExtension("corrupt-42.json")
+        let squatter = Data("an older, unrelated backup".utf8)
+        try squatter.write(to: backup)
+
+        // Move and copy both refuse an occupied destination; a `fileExists` probe at
+        // that path would report success and clear the way to overwrite the original.
+        let store = TranscriptStore(fileURL: url, now: { Date(timeIntervalSince1970: 42) })
+        XCTAssertThrowsError(try store.load()) { error in
+            XCTAssertEqual(error as? TranscriptStoreError, .corruptFileUnrecoverable(path: url.path))
+        }
+
+        XCTAssertEqual(try Data(contentsOf: url), original, "the corrupt bytes must survive")
+        XCTAssertEqual(try Data(contentsOf: backup), squatter, "the occupant must not be replaced")
     }
 }

@@ -13,12 +13,7 @@ struct RecordingHUDView: View {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
-                if presentation == .recording, let signalWarning {
-                    Text(signalWarning)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(signalWarningTint)
-                        .frame(maxWidth: 320, alignment: .leading)
-                } else if presentation == .recording, !appState.liveText.isEmpty {
+                if presentation == .recording, !appState.liveText.isEmpty {
                     // Live transcript, most-recent words kept visible.
                     Text(appState.liveText)
                         .font(.system(size: 12))
@@ -36,6 +31,16 @@ struct RecordingHUDView: View {
                     Text("WhiskerFlow")
                         .font(.system(size: 11))
                         .foregroundStyle(.white.opacity(0.7))
+                }
+                // Added below the transcript, never in its place: a thinking pause
+                // reads as "too quiet" within a couple of seconds, and hiding the
+                // growing transcript every time the speaker draws breath is worse
+                // than the warning is useful.
+                if presentation == .recording, let signalWarning {
+                    Text(signalWarning)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(signalWarningTint)
+                        .frame(maxWidth: 320, alignment: .leading)
                 }
             }
             if presentation == .recording {

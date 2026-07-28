@@ -51,7 +51,10 @@ final class AppState {
     }
 
     /// How long a `.finishing` session may take before the UI is force-recovered.
-    private static let finishWatchdogSeconds = 45
+    /// Derived from the decode budget it backstops — a release can serially await
+    /// several live decodes — plus a margin, so only a genuine wedge trips it and a
+    /// merely slow decode is never reported as a timeout.
+    private static let finishWatchdogSeconds = Int(DecodeTimeoutPolicy.liveFinishBudget) + 15
     /// Upper bound on how long quitting waits for a transcript to finish saving.
     private static let shutdownDrainSeconds: TimeInterval = 5
 
@@ -100,6 +103,14 @@ final class AppState {
     private var pasteTargetApplication: NSRunningApplication?
     private var activeTranscriptionIDs: Set<UUID> = []
     private var latestRecordingSessionID: UUID?
+    /// The shutdown-drain token each in-flight finish holds, so the watchdog can
+    /// release it when it gives up on that finish instead of leaking it for the rest
+    /// of the process's life.
+    private var finishWorkTokens: [UUID: UUID] = [:]
+    /// Sessions the finish watchdog gave up on. A finish that returns after its
+    /// session was abandoned must not paste, must not touch lifecycle UI a newer
+    /// session owns, and must not play sounds — it only files the transcript.
+    private var abandonedSessionIDs: Set<UUID> = []
     private var activeRecordingConfiguration: TranscriptionJobConfiguration?
     /// Whether the most recent recording streamed live (vs. file-based capture).
     private var streamingActive = false
@@ -186,26 +197,36 @@ final class AppState {
         guard !hasStarted else { return }
         hasStarted = true
 
+        // History is the only fallible step, and it must not take the rest of the
+        // bootstrap down with it: an unreadable transcripts.json would otherwise
+        // leave the app running with no hotkey monitor and no HUD — no way to
+        // dictate at all — and `hasStarted` blocks any retry.
         do {
             try store.load()
             normalizeInterruptedRecords()
-            records = store.records
-            selectedRecordID = records.first?.id
-            refreshAccessibilityPermission()
-            // SwiftUI's settings Form is backed by NSTableView. Publishing the
-            // initial catalog synchronously while scene restoration is laying it
-            // out can re-enter its delegate and crash AppKit; defer one actor turn.
-            refreshDevices()
-            sharedVocabulary.configureAgencyLibrary()
-            sharedVocabulary.startPeriodicRefresh()
-            startAudioDeviceMonitor()
-            startHotkeyMonitor()
-            hudController = RecordingHUDController(appState: self)
-            warmUpEngine()
         } catch {
             lastError = error.localizedDescription
             status = .failure("Could not load transcript history")
+            DiagnosticsService.capture(
+                error: error,
+                category: "storage",
+                code: String((error as NSError).code)
+            )
         }
+
+        records = store.records
+        selectedRecordID = records.first?.id
+        refreshAccessibilityPermission()
+        // SwiftUI's settings Form is backed by NSTableView. Publishing the initial
+        // catalog synchronously while scene restoration is laying it out can
+        // re-enter its delegate and crash AppKit; defer one actor turn.
+        refreshDevices()
+        sharedVocabulary.configureAgencyLibrary()
+        sharedVocabulary.startPeriodicRefresh()
+        startAudioDeviceMonitor()
+        startHotkeyMonitor()
+        hudController = RecordingHUDController(appState: self)
+        warmUpEngine()
     }
 
     func applyActivationPolicy() {
@@ -570,9 +591,15 @@ final class AppState {
               recordingCoordinator.requestFinish(sessionID, reason: reason) else { return }
 
         // Registered for the whole finish, so a quit landing mid-finish waits for
-        // the transcript instead of racing the store write.
+        // the transcript instead of racing the store write. The watchdog needs to be
+        // able to release it too, or a finish it gave up on would keep every later
+        // quit waiting out the full drain budget for work that will never land.
         let workToken = pendingPersistWork.begin()
-        defer { pendingPersistWork.end(workToken) }
+        finishWorkTokens[sessionID] = workToken
+        defer {
+            finishWorkTokens[sessionID] = nil
+            pendingPersistWork.end(workToken)
+        }
 
         isRecording = false
         recordingStartedAt = nil
@@ -597,19 +624,46 @@ final class AppState {
         pasteTargetApplication = nil
         let result = await live.finish(reason: reason)
         watchdog.cancel()
+        let wasAbandoned = abandonedSessionIDs.remove(sessionID) != nil
         _ = recordingCoordinator.didFinish(sessionID)
+
+        if wasAbandoned {
+            // The watchdog already reported this session as timed out and released
+            // the coordinator, so the HUD text, the status and the paste target may
+            // all belong to a newer session by now. File the transcript so it isn't
+            // lost, but deliver nothing and touch no lifecycle UI.
+            logger.error("Finish returned after the watchdog session=\(sessionID.uuidString, privacy: .public)")
+            DiagnosticsService.breadcrumb(
+                category: "recording",
+                metadata: [
+                    "phase": "finish_late",
+                    "recovered": String(!result.text.isEmpty)
+                ]
+            )
+            if !result.text.isEmpty {
+                persistLiveRecording(
+                    text: result.text,
+                    samples: result.samples,
+                    configuration: configuration,
+                    sessionID: sessionID
+                )
+            }
+            return
+        }
+
         if configuration.playSounds { soundService.play(.recordingStopped) }
         liveText = ""
 
         if wasStreaming, !result.text.isEmpty {
             // Streaming already produced the transcript — paste immediately, then
             // persist the audio + record off the critical path.
-            status = .transcribing
+            let mayUpdateUI = canUpdateLifecycleUI(for: sessionID)
+            if mayUpdateUI { status = .transcribing }
             deliver(
                 result.text,
                 pasteTarget: pasteTarget,
                 delivery: configuration.delivery,
-                mayUpdateStatus: canUpdateLifecycleUI(for: sessionID)
+                mayUpdateStatus: mayUpdateUI
             )
             persistLiveRecording(
                 text: result.text,
@@ -620,7 +674,7 @@ final class AppState {
         } else {
             // Non-streaming engine, or streaming caught no speech: fall back to the
             // standard file-based path (includes the Apple Speech fallback).
-            status = .transcribing
+            if canUpdateLifecycleUI(for: sessionID) { status = .transcribing }
             await transcribeCapturedSamples(
                 result.samples,
                 conversionFailures: result.conversionFailures,
@@ -644,6 +698,14 @@ final class AppState {
     private func abandonStuckFinish(sessionID: UUID) {
         guard recordingCoordinator.phase == .finishing(sessionID) else { return }
         recordingCoordinator.forceIdle()
+        // Releasing the coordinator lets a new session start on top of this one, so
+        // stamp the abandoned session: whatever its finish eventually returns must
+        // not reach the pasteboard or the UI. Its drain token goes now too, or every
+        // later quit waits out the full budget for work that never lands.
+        abandonedSessionIDs.insert(sessionID)
+        if let token = finishWorkTokens.removeValue(forKey: sessionID) {
+            pendingPersistWork.end(token)
+        }
         isRecording = false
         isTranscribing = false
         streamingActive = false

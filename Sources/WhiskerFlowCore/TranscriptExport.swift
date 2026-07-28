@@ -59,7 +59,35 @@ public enum TranscriptExporter {
     }
 
     public static func json(_ records: [TranscriptRecord]) throws -> Data {
-        try JSONEncoder.whiskerFlow.encode(newestFirst(records))
+        try JSONEncoder.whiskerFlow.encode(completed(records).map(ExportedTranscript.init))
+    }
+
+    /// Export-specific shape. The storage model carries an absolute audio path
+    /// under the user's home and, for a failed record, the raw error message —
+    /// neither belongs in a file the user shares, and the diagnostics sanitizer
+    /// strips exactly this kind of detail everywhere else.
+    private struct ExportedTranscript: Encodable {
+        let id: UUID
+        let createdAt: Date
+        let updatedAt: Date?
+        let text: String
+        let wordCount: Int
+        let durationSeconds: Double?
+        let model: String?
+        let engine: String?
+        let language: String?
+
+        init(_ record: TranscriptRecord) {
+            id = record.id
+            createdAt = record.createdAt
+            updatedAt = record.updatedAt
+            text = record.text
+            wordCount = record.wordCount
+            durationSeconds = record.durationSeconds
+            model = record.model
+            engine = record.engine
+            language = record.language
+        }
     }
 
     private static func completed(_ records: [TranscriptRecord]) -> [TranscriptRecord] {

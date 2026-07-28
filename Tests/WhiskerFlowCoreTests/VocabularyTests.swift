@@ -111,6 +111,46 @@ final class VocabularyTests: XCTestCase {
         XCTAssertEqual(vocab.apply(to: "clawd Clawd"), "Claude Claude")
     }
 
+    func testMidSentenceCapitalisedMatchDoesNotGainACapital() {
+        let vocab = Vocabulary(rules: [VocabularyRule(find: "cx", replaceWith: "customer experience")])
+        XCTAssertEqual(vocab.apply(to: "The CX team shipped it"), "The customer experience team shipped it")
+        XCTAssertEqual(vocab.apply(to: "CX is the team"), "Customer experience is the team")
+    }
+
+    func testReplacementThatSpellsItsOwnCasingIsNeverRewritten() {
+        let brands = Vocabulary(rules: [
+            VocabularyRule(find: "ebay", replaceWith: "eBay"),
+            VocabularyRule(find: "iphone", replaceWith: "iPhone")
+        ])
+        // A brand rule that can never emit its own spelling is worse than no rule.
+        XCTAssertEqual(brands.apply(to: "Ebay listings are up"), "eBay listings are up")
+        XCTAssertEqual(brands.apply(to: "IPhone and Iphone"), "iPhone and iPhone")
+    }
+
+    func testSentenceStartIsRecognisedAfterEveryTerminator() {
+        let vocab = Vocabulary(rules: [VocabularyRule(find: "gonna", replaceWith: "going to")])
+        XCTAssertEqual(vocab.apply(to: "Wait! Gonna go"), "Wait! Going to go")
+        XCTAssertEqual(vocab.apply(to: "Ready? Gonna go"), "Ready? Going to go")
+        XCTAssertEqual(vocab.apply(to: "Ready,\nGonna go"), "Ready,\nGoing to go")
+        XCTAssertEqual(vocab.apply(to: "Ready, Gonna go"), "Ready, going to go")
+    }
+
+    func testPossibleReplacementsReportsWhatARuleCanInsert() {
+        XCTAssertEqual(
+            VocabularyRule(find: "gonna", replaceWith: "going to").possibleReplacements,
+            ["going to", "Going to"]
+        )
+        XCTAssertEqual(
+            VocabularyRule(find: "ebay", replaceWith: "eBay").possibleReplacements,
+            ["eBay"]
+        )
+        XCTAssertEqual(
+            VocabularyRule(find: "gonna", replaceWith: "going to", caseSensitive: true)
+                .possibleReplacements,
+            ["going to"]
+        )
+    }
+
     // MARK: - CompiledVocabulary reuse
 
     func testCompiledVocabularyIsStableAcrossRepeatedApplication() {

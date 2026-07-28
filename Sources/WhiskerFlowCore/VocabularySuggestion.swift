@@ -114,11 +114,46 @@ public enum VocabularyCorrectionDetector {
     }
 
     /// Longest-common-subsequence alignment, compared case-insensitively so a
-    /// re-capitalised word still lines up with its original position. Transcripts
-    /// are short enough that the full DP table is cheap.
+    /// re-capitalised word still lines up with its original position.
+    ///
+    /// The DP table is O(n*m) and this runs on the main actor before every save, so
+    /// the shared head and tail — all of a typical correction — are matched off
+    /// first and only the disagreeing core reaches the table. A core larger than
+    /// `maxAlignmentTokens` is a rewrite, not a correction: refuse it rather than
+    /// allocating hundreds of megabytes to learn nothing.
     private static func alignment(_ original: [String], _ edited: [String]) -> [AlignmentStep] {
         let left = original.map { $0.lowercased() }
         let right = edited.map { $0.lowercased() }
+
+        var head = 0
+        while head < left.count, head < right.count, left[head] == right[head] { head += 1 }
+        var tail = 0
+        while tail < left.count - head, tail < right.count - head,
+              left[left.count - 1 - tail] == right[right.count - 1 - tail] {
+            tail += 1
+        }
+
+        let leftCore = Array(left[head..<(left.count - tail)])
+        let rightCore = Array(right[head..<(right.count - tail)])
+        guard leftCore.count <= maxAlignmentTokens, rightCore.count <= maxAlignmentTokens else {
+            return []
+        }
+
+        var steps = (0..<head).map { AlignmentStep.common($0, $0) }
+        steps += coreAlignment(leftCore, rightCore, offset: head)
+        steps += (0..<tail).map {
+            AlignmentStep.common(left.count - tail + $0, right.count - tail + $0)
+        }
+        return steps
+    }
+
+    private static let maxAlignmentTokens = 400
+
+    private static func coreAlignment(
+        _ left: [String],
+        _ right: [String],
+        offset: Int
+    ) -> [AlignmentStep] {
         var lengths = [[Int]](
             repeating: [Int](repeating: 0, count: right.count + 1),
             count: left.count + 1
@@ -136,23 +171,23 @@ public enum VocabularyCorrectionDetector {
         var j = 0
         while i < left.count, j < right.count {
             if left[i] == right[j] {
-                steps.append(.common(i, j))
+                steps.append(.common(i + offset, j + offset))
                 i += 1
                 j += 1
             } else if lengths[i + 1][j] >= lengths[i][j + 1] {
-                steps.append(.removed(i))
+                steps.append(.removed(i + offset))
                 i += 1
             } else {
-                steps.append(.added(j))
+                steps.append(.added(j + offset))
                 j += 1
             }
         }
         while i < left.count {
-            steps.append(.removed(i))
+            steps.append(.removed(i + offset))
             i += 1
         }
         while j < right.count {
-            steps.append(.added(j))
+            steps.append(.added(j + offset))
             j += 1
         }
         return steps

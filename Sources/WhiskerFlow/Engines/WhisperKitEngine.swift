@@ -98,8 +98,10 @@ actor WhisperKitEngine: TranscriptionEngine {
             throw TranscriptionError.modelUnavailable(model.displayName)
         }
 
-        let deadline = DecodeTimeoutPolicy.timeout(forAudioSeconds: Double(samples.count) / 16_000)
-        let results = try await decode(seconds: deadline) {
+        // A live window is bounded by `LiveDecodeWindowPolicy.hardCapSeconds`, so it
+        // gets the tight live budget rather than the file-decode budget: the release
+        // path awaits these serially and the finish watchdog has to outlast them.
+        let results = try await decode(seconds: DecodeTimeoutPolicy.livePartialTimeout) {
             try await pipe.transcribe(
                 audioArray: samples,
                 decodeOptions: Self.decodingOptions(language: language)

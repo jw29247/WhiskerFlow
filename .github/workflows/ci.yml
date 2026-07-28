@@ -49,8 +49,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned: an unpinned formatter picks up new rules on its own schedule and
+      # turns a green branch red without a commit touching it.
       - name: Install SwiftFormat
-        run: brew install swiftformat
+        run: |
+          set -euo pipefail
+          brew install swiftformat
+          swiftformat --version | grep -qx "$SWIFTFORMAT_VERSION" || {
+            echo "swiftformat $(swiftformat --version) != pinned $SWIFTFORMAT_VERSION" >&2
+            echo "review the new rules, then bump SWIFTFORMAT_VERSION" >&2
+            exit 1
+          }
+        env:
+          SWIFTFORMAT_VERSION: "0.62.1"
 
       - name: SwiftFormat lint
         run: swiftformat Sources Tests --lint

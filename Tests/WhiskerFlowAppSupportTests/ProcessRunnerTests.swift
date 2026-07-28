@@ -52,19 +52,23 @@ final class ProcessRunnerTests: XCTestCase {
         return process.terminationStatus == 0
     }
 
-    func testGrandchildHoldingPipeDoesNotBlockOnEOF() async {
+    /// The grandchild inherits the pipe's write end, so EOF never arrives: only the
+    /// drain grace can unblock this. Asserted unconditionally — treating a timeout
+    /// as a pass would let a runner that fails every fast-exiting subprocess through.
+    func testGrandchildHoldingPipeDoesNotBlockOnEOF() async throws {
         let started = Date()
-        do {
-            let output = try await ProcessRunner.run(
-                executableURL: URL(fileURLWithPath: "/bin/sh"),
-                arguments: ["-c", "sleep 30 & echo out"],
-                environment: [:],
-                timeout: 1
-            )
-            XCTAssertEqual(output.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "out")
-        } catch {
-            XCTAssertEqual(error as? TranscriptionError, .timedOut(seconds: 1))
-        }
-        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        let output = try await ProcessRunner.run(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "sleep 30 & echo out"],
+            environment: [:],
+            timeout: 1
+        )
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertEqual(output.exitCode, 0)
+        XCTAssertEqual(output.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "out")
+        // Below the grace it was EOF, not the grace, that unblocked the drain.
+        XCTAssertGreaterThan(elapsed, ProcessRunner.drainGrace * 0.8)
+        XCTAssertLessThan(elapsed, ProcessRunner.drainGrace + 4)
     }
 }

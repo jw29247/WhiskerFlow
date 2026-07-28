@@ -116,7 +116,7 @@ final class SharedVocabularyService {
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                 throw URLError(.badServerResponse)
             }
-            let vocab = try AgencyVocabularyPolicy.decode(data)
+            let vocab = try ingest(data, source: "remote")
             guard myGeneration == generation else { return }
             rules = vocab.rules
             status = .loaded(count: rules.count, at: Date())
@@ -143,9 +143,33 @@ final class SharedVocabularyService {
         }
     }
 
+    /// The sanitizer silently discards any rule that would rewrite everyday speech.
+    /// The glossary is hand-maintained and served live from a branch, so a drop has
+    /// to be reported: otherwise the maintainer sees the rule "live" in the file
+    /// while it never applies on a single machine.
+    private func ingest(_ data: Data, source: String) throws -> Vocabulary {
+        let report = try AgencyVocabularyPolicy.decodeReport(data)
+        if report.droppedRuleCount > 0 {
+            DiagnosticsService.breadcrumb(
+                category: "glossary",
+                metadata: [
+                    "source": source,
+                    "dropped_rules": String(report.droppedRuleCount),
+                    "kept_rules": String(report.vocabulary.rules.count)
+                ]
+            )
+            DiagnosticsService.capture(
+                error: CocoaError(.fileReadCorruptFile),
+                category: "glossary",
+                code: "rules_dropped"
+            )
+        }
+        return report.vocabulary
+    }
+
     private func loadInitialVocabulary() {
         if let cache = try? Data(contentsOf: cacheURL),
-           let vocabulary = try? AgencyVocabularyPolicy.decode(cache) {
+           let vocabulary = try? ingest(cache, source: "cache") {
             let modified = (try? cacheURL.resourceValues(forKeys: [.contentModificationDateKey]))?
                 .contentModificationDate ?? Date()
             rules = vocabulary.rules
@@ -174,7 +198,7 @@ final class SharedVocabularyService {
             )
             return
         }
-        guard let vocabulary = try? AgencyVocabularyPolicy.decode(seed) else {
+        guard let vocabulary = try? ingest(seed, source: "seed") else {
             DiagnosticsService.capture(
                 error: CocoaError(.fileReadCorruptFile),
                 category: "glossary",

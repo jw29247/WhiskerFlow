@@ -58,7 +58,9 @@ public enum ProcessRunner {
         }
     }
 
-    private static let drainGrace: TimeInterval = 1
+    /// How long a pipe may stay open after the child is gone before the drain gives
+    /// up on an EOF that a grandchild is holding hostage.
+    static let drainGrace: TimeInterval = 1
     private static let killGrace: TimeInterval = 2
 
     private static func terminateThenKill(_ process: Process) {
@@ -131,9 +133,13 @@ final class PipeDrainer: @unchecked Sendable {
     }
 
     func forceFinish() {
+        // The handle is deliberately left open. This runs on a global queue while a
+        // readability callback may be inside `availableData` on the dispatch
+        // source's own queue, and a read against a closed descriptor raises an
+        // NSFileHandleOperationException that Swift cannot catch. Dropping the
+        // handler is enough: the owning `Pipe` closes its read end when it goes.
         handle.readabilityHandler = nil
         finish()
-        try? handle.close()
     }
 
     private func finish() {

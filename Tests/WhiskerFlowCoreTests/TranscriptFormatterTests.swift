@@ -110,6 +110,42 @@ final class TranscriptFormatterTests: XCTestCase {
         )
     }
 
+    func testFillerRemovalLeavesHyphenatedWordsIntact() {
+        let options = FormattingOptions(removeFillerWords: true)
+
+        // A hyphen is a word boundary to `\b`, which used to strip the "uh" out of
+        // "uh-huh" and paste a stray leading hyphen into the user's document.
+        XCTAssertEqual(
+            TranscriptFormatter.format("uh-huh, that works", options: options),
+            "uh-huh, that works"
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.format("um-hmm, agreed", options: options),
+            "um-hmm, agreed"
+        )
+    }
+
+    func testCapitalizationLeavesDomainsFilenamesAndAbbreviationsAlone() {
+        let options = FormattingOptions(capitalizeSentences: true)
+
+        XCTAssertEqual(
+            TranscriptFormatter.format("go to example.com now", options: options),
+            "Go to example.com now"
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.format("send it to www.example.com, e.g. tomorrow", options: options),
+            "Send it to www.example.com, e.g. tomorrow"
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.format("attach report.pdf to the email", options: options),
+            "Attach report.pdf to the email"
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.format("ask the p.m. about it", options: options),
+            "Ask the p.m. about it"
+        )
+    }
+
     func testFullPipelineAppliesFillerThenCommandsThenCapitalization() {
         XCTAssertEqual(
             TranscriptFormatter.format(

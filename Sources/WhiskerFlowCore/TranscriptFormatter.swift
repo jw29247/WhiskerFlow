@@ -46,7 +46,10 @@ public enum TranscriptFormatter {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static let fillerPattern = "\\b(?:um|uh|erm|uhm)\\b"
+    /// A hyphen is a word boundary to `\b`, so plain boundaries would fire inside
+    /// "uh-huh" and leave a stray hyphen behind. The filler has to be a word on
+    /// its own, hyphens included.
+    private static let fillerPattern = "(?<![\\w-])(?:um|uh|erm|uhm)(?![\\w-])"
 
     /// A filler that sits between two punctuation marks would otherwise leave the
     /// pair stranded ("Well, , this"), so when one precedes the filler its own
@@ -73,27 +76,62 @@ public enum TranscriptFormatter {
             .replacingPattern("\n{3,}", with: "\n\n")
     }
 
+    /// A terminator only ends a sentence when whitespace follows it and the word it
+    /// closes doesn't read as an abbreviation. Without both tests, dictated domains
+    /// ("example.com"), file names ("report.pdf") and abbreviations ("e.g.", "p.m.")
+    /// get letters upper-cased mid-token.
     private static func capitalizingSentences(_ text: String) -> String {
         var result = ""
         result.reserveCapacity(text.count)
         var atSentenceStart = true
+        var pendingTerminator = false
+        var wordLetters = 0
+        var wordTerminators = 0
 
         for character in text {
             if atSentenceStart, character.isLetter {
                 result.append(contentsOf: character.uppercased())
                 atSentenceStart = false
+                pendingTerminator = false
+                wordLetters = 1
+                wordTerminators = 0
                 continue
             }
             result.append(character)
-            if character == "." || character == "!" || character == "?" || character.isNewline {
+
+            if character.isNewline {
                 atSentenceStart = true
-            } else if character.isLetter || character.isNumber {
-                atSentenceStart = false
+                pendingTerminator = false
+                wordLetters = 0
+                wordTerminators = 0
+            } else if character.isWhitespace {
+                if pendingTerminator,
+                   !isAbbreviation(letters: wordLetters, terminators: wordTerminators) {
+                    atSentenceStart = true
+                }
+                pendingTerminator = false
+                wordLetters = 0
+                wordTerminators = 0
+            } else if sentenceTerminators.contains(character) {
+                pendingTerminator = true
+                wordTerminators += 1
+            } else {
+                pendingTerminator = false
+                if character.isLetter { wordLetters += 1 }
+                if character.isLetter || character.isNumber { atSentenceStart = false }
             }
         }
 
         return result
     }
+
+    /// "e.g.", "p.m." and "U.S." carry an interior terminator; a lone initial
+    /// ("a.") is one letter followed by one. Neither closes a sentence.
+    private static func isAbbreviation(letters: Int, terminators: Int) -> Bool {
+        terminators > 1 || letters == 1
+    }
+
+    private static let sentenceTerminators: Set<Character> = [".", "!", "?"]
 }
 
 private extension String {

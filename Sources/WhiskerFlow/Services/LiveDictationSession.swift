@@ -36,6 +36,11 @@ final class LiveDictationSession {
     private var isRunning = false
     private var isStreaming = false
     private var reportedDecodeFailure = false
+    /// Bumped by every `start()`. A decode pass that was in flight when the session
+    /// restarted belongs to the previous generation and must not touch the
+    /// transcript, so a late-returning decode can never resurrect an old loop or
+    /// mix its text into the new session.
+    private var generation = 0
 
     private static let sampleRate = 16_000.0
     /// Re-decode once this much new audio has accumulated since the last pass.
@@ -64,6 +69,7 @@ final class LiveDictationSession {
         self.model = model
         self.vocabulary = CompiledVocabulary(vocabulary)
         self.formatting = formatting
+        generation &+= 1
         resetTranscript()
         reportedDecodeFailure = false
         isStreaming = streaming
@@ -77,7 +83,7 @@ final class LiveDictationSession {
         }
 
         if streaming {
-            startDecodeLoop()
+            startDecodeLoop(generation: generation)
         }
     }
 
@@ -85,6 +91,7 @@ final class LiveDictationSession {
     func finish(
         reason: CaptureStopReason = .userReleased
     ) async -> (text: String, samples: [Float], conversionFailures: Int) {
+        let myGeneration = generation
         isRunning = false
         let loop = decodeLoop
         decodeLoop = nil
@@ -92,14 +99,25 @@ final class LiveDictationSession {
         await loop?.value
         let samples = captured.samples
 
-        // Fall back to a final decode only when we have no partial yet (utterance
-        // shorter than the first decode) or decoding lagged badly on a long hold.
-        if isStreaming {
+        if isStreaming, generation == myGeneration {
+            // A confirm pass throws away the window text it had already decoded past
+            // the cut, so an empty window with audio still after it always needs one
+            // more pass — otherwise a release right after the final phrase loses it.
+            // The other case is decoding having lagged badly on a long hold.
             let undecoded = samples.count - lastDecodedSampleCount
-            if LiveDecodeWindowPolicy.join(confirmedText, windowText).isEmpty
-                || undecoded > Self.staleSampleThreshold {
-                await decodeWindow(Array(samples[min(confirmedSampleCount, samples.count)...]))
+            if windowText.isEmpty || undecoded > Self.staleSampleThreshold {
+                await decodeWindow(
+                    Array(samples[min(confirmedSampleCount, samples.count)...]),
+                    generation: myGeneration
+                )
             }
+        }
+
+        // A `start()` during the teardown (the finish watchdog releases the
+        // coordinator without waiting for us) means the state now belongs to a newer
+        // session: hand back nothing rather than wiping its transcript.
+        guard generation == myGeneration else {
+            return ("", samples, captured.conversionFailureCount)
         }
 
         let finalText = emittedText()
@@ -111,6 +129,7 @@ final class LiveDictationSession {
     /// Abort without producing a transcript (e.g. permission revoked mid-flight).
     func cancel() {
         isRunning = false
+        generation &+= 1
         decodeLoop?.cancel()
         decodeLoop = nil
         audioCapture.cancel()
@@ -120,15 +139,15 @@ final class LiveDictationSession {
 
     // MARK: - Decode loop
 
-    private func startDecodeLoop() {
+    private func startDecodeLoop(generation myGeneration: Int) {
         decodeLoop = Task { @MainActor [weak self] in
-            while let self, self.isRunning, !Task.isCancelled {
+            while let self, self.isRunning, self.generation == myGeneration, !Task.isCancelled {
                 let total = self.audioCapture.sampleCount()
                 if total - self.lastDecodedSampleCount >= Self.minNewSamples {
                     self.lastDecodedSampleCount = total
                     let window = self.audioCapture.snapshotTail(from: self.confirmedSampleCount)
-                    await self.decodeWindow(window)
-                    await self.confirmSettledPrefix(of: window)
+                    await self.decodeWindow(window, generation: myGeneration)
+                    await self.confirmSettledPrefix(of: window, generation: myGeneration)
                 } else {
                     try? await Task.sleep(nanoseconds: 80_000_000) // 80 ms
                 }
@@ -136,8 +155,9 @@ final class LiveDictationSession {
         }
     }
 
-    private func decodeWindow(_ window: [Float]) async {
+    private func decodeWindow(_ window: [Float], generation myGeneration: Int) async {
         guard let text = await decodedText(for: window), !text.isEmpty else { return }
+        guard generation == myGeneration else { return }
         windowText = text
         onPartial?(emittedText())
     }
@@ -154,12 +174,15 @@ final class LiveDictationSession {
 
     /// Fold everything up to a mid-silence cut into the confirmed prefix so the
     /// next window starts short again. The prefix is decoded on its own: the
-    /// window text can cover audio past the cut, which stays unconfirmed.
-    private func confirmSettledPrefix(of window: [Float]) async {
+    /// window text can cover audio past the cut, which stays unconfirmed and is
+    /// dropped here — `finish()` re-decodes an empty window's tail for exactly that
+    /// reason, so a release seconds after a cut still keeps the words spoken since.
+    private func confirmSettledPrefix(of window: [Float], generation myGeneration: Int) async {
         guard let cut = LiveDecodeWindowPolicy.cutPoint(
             windowSampleCount: window.count,
             frameRMS: LiveDecodeWindowPolicy.frameRMS(window)
         ), let text = await decodedText(for: Array(window[..<cut])) else { return }
+        guard generation == myGeneration else { return }
 
         confirmedText = LiveDecodeWindowPolicy.join(confirmedText, text)
         confirmedSampleCount += cut

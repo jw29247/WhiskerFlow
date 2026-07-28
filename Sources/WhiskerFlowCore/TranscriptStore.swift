@@ -141,9 +141,12 @@ public final class TranscriptStore {
         try pruneExpired()
     }
 
+    /// Persistence stays suspended if `load()` suspended it: an unreadable history
+    /// that could not be backed up is the only copy of those bytes, and replacing
+    /// the whole list is no more entitled to destroy it than `add` is. Only a fresh
+    /// `load()`, which re-reads the file, can clear the suspension.
     public func replaceAll(_ records: [TranscriptRecord]) throws {
         self.records = records
-        persistenceSuspended = false
         try persist()
     }
 
@@ -211,17 +214,25 @@ public final class TranscriptStore {
         try persist()
     }
 
+    /// Success is the move/copy result, never a `fileExists` probe: an unrelated
+    /// entry already sitting at the backup path would otherwise read as "backed
+    /// up" and clear the way for `persist()` to overwrite the only copy of the
+    /// corrupt bytes. Nothing at that path is removed for the same reason.
     private func backupCorruptFile() -> Bool {
         let stamp = Int(now().timeIntervalSince1970)
         let backupURL = fileURL.deletingPathExtension()
             .appendingPathExtension("corrupt-\(stamp).json")
-        try? FileManager.default.removeItem(at: backupURL)
         do {
             try moveItem(fileURL, backupURL)
+            return true
         } catch {
-            try? copyItem(fileURL, backupURL)
+            do {
+                try copyItem(fileURL, backupURL)
+                return true
+            } catch {
+                return false
+            }
         }
-        return FileManager.default.fileExists(atPath: backupURL.path)
     }
 
     private func persist() throws {
