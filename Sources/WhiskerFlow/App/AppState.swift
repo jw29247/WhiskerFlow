@@ -51,6 +51,8 @@ final class AppState {
 
     /// How long a `.finishing` session may take before the UI is force-recovered.
     private static let finishWatchdogSeconds = 45
+    /// Upper bound on how long quitting waits for a transcript to finish saving.
+    private static let shutdownDrainSeconds: TimeInterval = 5
 
     var records: [TranscriptRecord] = []
     var selectedRecordID: TranscriptRecord.ID?
@@ -86,6 +88,7 @@ final class AppState {
     private var audioDeviceMonitor: AudioDeviceChangeMonitor?
     private var deviceRefreshTask: Task<Void, Never>?
     private var warmUpTask: Task<Void, Never>?
+    private let pendingPersistWork = PendingWorkTracker()
     private var hasStarted = false
     private var recordingIntentActive = false
     private var pasteTargetApplication: NSRunningApplication?
@@ -190,6 +193,52 @@ final class AppState {
             lastError = error.localizedDescription
             status = .failure("Could not load transcript history")
         }
+    }
+
+    func applyActivationPolicy() {
+        NSApp.setActivationPolicy(settings.showDockIcon ? .regular : .accessory)
+    }
+
+    /// Whether quitting now would drop a recording or an unsaved transcript.
+    var hasPendingWork: Bool {
+        isRecording || recordingCoordinator.phase != .idle || !pendingPersistWork.isIdle
+    }
+
+    func stopMonitors() {
+        hotkeyMonitor?.stop()
+        hotkeyMonitor = nil
+        audioDeviceMonitor?.stop()
+        audioDeviceMonitor = nil
+    }
+
+    /// Wind down for termination. Monitors go first so no new session can start,
+    /// then everything still in flight shares one `shutdownDrainSeconds` budget —
+    /// a wedged decode must not keep the process alive past it.
+    func shutdown() async {
+        stopMonitors()
+        warmUpTask?.cancel()
+        warmUpTask = nil
+        deviceRefreshTask?.cancel()
+        deviceRefreshTask = nil
+
+        switch recordingCoordinator.phase {
+        case .preparing:
+            live.cancel()
+            _ = recordingCoordinator.forceIdle()
+            isRecording = false
+        case .recording:
+            // The token bridges the hop until `finishRecording` registers its own.
+            let token = pendingPersistWork.begin()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.finishRecording()
+                self.pendingPersistWork.end(token)
+            }
+        case .finishing, .idle:
+            break
+        }
+
+        _ = await pendingPersistWork.waitUntilIdle(timeout: Self.shutdownDrainSeconds)
     }
 
     func warmUpEngine() {
@@ -481,6 +530,11 @@ final class AppState {
         guard case .recording(let sessionID) = recordingCoordinator.phase,
               recordingCoordinator.requestFinish(sessionID, reason: reason) else { return }
 
+        // Registered for the whole finish, so a quit landing mid-finish waits for
+        // the transcript instead of racing the store write.
+        let workToken = pendingPersistWork.begin()
+        defer { pendingPersistWork.end(workToken) }
+
         isRecording = false
         recordingStartedAt = nil
         status = .transcribing
@@ -597,7 +651,11 @@ final class AppState {
             return
         }
 
+        let workToken = pendingPersistWork.begin()
         Task.detached(priority: .utility) { [weak self] in
+            defer {
+                Task { @MainActor in self?.pendingPersistWork.end(workToken) }
+            }
             do {
                 try AudioFileWriter.writeWAV(samples: samples, to: url)
                 await self?.appendRecord(
@@ -844,10 +902,7 @@ final class AppState {
 
 extension TranscriptStore {
     static func defaultStore() -> TranscriptStore {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first!
-            .appendingPathComponent("WhiskerFlow", isDirectory: true)
-
+        let root = StorageLocations.applicationSupportRootOrTemporary()
         return TranscriptStore(fileURL: root.appendingPathComponent("transcripts.json"))
     }
 }

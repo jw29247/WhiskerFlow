@@ -296,8 +296,16 @@ final class AudioCaptureService: AudioCapturing {
         }
     }
 
+    func sampleCount() -> Int {
+        samples.count
+    }
+
     func snapshot() -> [Float] {
         samples.snapshot()
+    }
+
+    func snapshotTail(from index: Int) -> [Float] {
+        samples.suffix(from: index)
     }
 
     func stop(reason: CaptureStopReason) -> CapturedAudio {

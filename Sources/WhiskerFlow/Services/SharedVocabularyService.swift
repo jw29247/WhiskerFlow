@@ -166,9 +166,7 @@ final class SharedVocabularyService {
     }
 
     nonisolated static var defaultCacheURL: URL {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first!
-            .appendingPathComponent("WhiskerFlow", isDirectory: true)
+        let root = StorageLocations.applicationSupportRootOrTemporary()
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root.appendingPathComponent("shared-vocabulary.json")
     }

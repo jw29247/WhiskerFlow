@@ -5,9 +5,11 @@ import WhiskerFlowCore
 /// Live, low-latency dictation using the app-owned AVAudioEngine capture service.
 ///
 /// While the key is held, audio streams into a 16 kHz float buffer and a decode
-/// loop continuously re-transcribes the growing buffer off the warm pipe, so the
-/// latest transcript is ready the instant the key is released. On `finish()` we
-/// return that latest partial (plus the raw samples, for history / retry).
+/// loop continuously re-transcribes only the audio after the last confirmed cut,
+/// so the cost per pass stays flat however long the hold runs. The text before a
+/// cut is kept verbatim and the freshest transcript is the confirmed prefix plus
+/// the current window, ready the instant the key is released. On `finish()` we
+/// return that transcript (plus the raw samples, for history / retry).
 @MainActor
 final class LiveDictationSession {
     private let transcription: TranscriptionService
@@ -23,8 +25,11 @@ final class LiveDictationSession {
     private var decodeLoop: Task<Void, Never>?
     private var language: String?
     private var model: WhisperModel = .tiny
-    private var vocabulary = Vocabulary()
-    private var latestText = ""
+    private var vocabulary = CompiledVocabulary(Vocabulary())
+    private var confirmedText = ""
+    private var confirmedSampleCount = 0
+    private var windowText = ""
+    /// Absolute position in the capture buffer that the transcript reaches.
     private var lastDecodedSampleCount = 0
     private var isRunning = false
     private var isStreaming = false
@@ -53,9 +58,8 @@ final class LiveDictationSession {
     ) throws {
         self.language = language
         self.model = model
-        self.vocabulary = vocabulary
-        latestText = ""
-        lastDecodedSampleCount = 0
+        self.vocabulary = CompiledVocabulary(vocabulary)
+        resetTranscript()
         isStreaming = streaming
         do {
             try audioCapture.start(selection: selection)
@@ -84,14 +88,14 @@ final class LiveDictationSession {
         // shorter than the first decode) or decoding lagged badly on a long hold.
         if isStreaming {
             let undecoded = samples.count - lastDecodedSampleCount
-            if (latestText.isEmpty || undecoded > Self.staleSampleThreshold), !samples.isEmpty {
-                await decode(samples)
+            if LiveDecodeWindowPolicy.join(confirmedText, windowText).isEmpty
+                || undecoded > Self.staleSampleThreshold {
+                await decodeWindow(Array(samples[min(confirmedSampleCount, samples.count)...]))
             }
         }
 
-        let finalText = latestText
-        latestText = ""
-        lastDecodedSampleCount = 0
+        let finalText = LiveDecodeWindowPolicy.join(confirmedText, windowText)
+        resetTranscript()
         onLevel?(0)
         return (finalText, samples)
     }
@@ -102,8 +106,7 @@ final class LiveDictationSession {
         decodeLoop?.cancel()
         decodeLoop = nil
         audioCapture.cancel()
-        latestText = ""
-        lastDecodedSampleCount = 0
+        resetTranscript()
         onLevel?(0)
     }
 
@@ -112,10 +115,12 @@ final class LiveDictationSession {
     private func startDecodeLoop() {
         decodeLoop = Task { @MainActor [weak self] in
             while let self, self.isRunning, !Task.isCancelled {
-                let samples = self.audioCapture.snapshot()
-                if samples.count - self.lastDecodedSampleCount >= Self.minNewSamples {
-                    self.lastDecodedSampleCount = samples.count
-                    await self.decode(samples)
+                let total = self.audioCapture.sampleCount()
+                if total - self.lastDecodedSampleCount >= Self.minNewSamples {
+                    self.lastDecodedSampleCount = total
+                    let window = self.audioCapture.snapshotTail(from: self.confirmedSampleCount)
+                    await self.decodeWindow(window)
+                    await self.confirmSettledPrefix(of: window)
                 } else {
                     try? await Task.sleep(nanoseconds: 80_000_000) // 80 ms
                 }
@@ -123,18 +128,43 @@ final class LiveDictationSession {
         }
     }
 
-    private func decode(_ samples: [Float]) async {
-        guard !samples.isEmpty else { return }
+    private func decodeWindow(_ window: [Float]) async {
+        guard let text = await decodedText(for: window), !text.isEmpty else { return }
+        windowText = text
+        onPartial?(LiveDecodeWindowPolicy.join(confirmedText, text))
+    }
+
+    /// Fold everything up to a mid-silence cut into the confirmed prefix so the
+    /// next window starts short again. The prefix is decoded on its own: the
+    /// window text can cover audio past the cut, which stays unconfirmed.
+    private func confirmSettledPrefix(of window: [Float]) async {
+        guard let cut = LiveDecodeWindowPolicy.cutPoint(
+            windowSampleCount: window.count,
+            frameRMS: LiveDecodeWindowPolicy.frameRMS(window)
+        ), let text = await decodedText(for: Array(window[..<cut])) else { return }
+
+        confirmedText = LiveDecodeWindowPolicy.join(confirmedText, text)
+        confirmedSampleCount += cut
+        windowText = ""
+        lastDecodedSampleCount = confirmedSampleCount
+    }
+
+    private func decodedText(for samples: [Float]) async -> String? {
+        guard !samples.isEmpty else { return nil }
         do {
             let result = try await transcription.transcribeSamples(samples, language: language, model: model)
-            let text = vocabulary.apply(to: result.text)
-            if !text.isEmpty {
-                latestText = text
-                onPartial?(text)
-            }
+            return vocabulary.apply(to: result.text)
         } catch {
             // Partial decode failures are non-fatal — keep the previous text.
+            return nil
         }
+    }
+
+    private func resetTranscript() {
+        confirmedText = ""
+        confirmedSampleCount = 0
+        windowText = ""
+        lastDecodedSampleCount = 0
     }
 
 }

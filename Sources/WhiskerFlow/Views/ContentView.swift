@@ -74,20 +74,21 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            // Startup changes List rows, app activation policy, and potentially
-            // sheet presentation. `onAppear` can run while NSTableView is still
-            // inside its initial layout/restoration delegate callback, so defer
-            // the complete bootstrap to the next main-queue turn.
+            // `AppDelegate` already bootstraps at launch; this is the fallback for
+            // a window that appears later (`start()` is idempotent). Startup changes
+            // List rows, app activation policy, and potentially sheet presentation,
+            // and `onAppear` can run while NSTableView is still inside its initial
+            // layout/restoration delegate callback, so defer to the next main-queue turn.
             DispatchQueue.main.async {
                 appState.start()
-                applyDockPolicy(appState.settings.showDockIcon)
+                appState.applyActivationPolicy()
                 if appState.records.isEmpty && !appState.hasAccessibilityPermission {
                     showOnboarding = true
                 }
             }
         }
-        .onChange(of: appState.settings.showDockIcon) { _, newValue in
-            applyDockPolicy(newValue)
+        .onChange(of: appState.settings.showDockIcon) { _, _ in
+            appState.applyActivationPolicy()
         }
         .sheet(isPresented: $showOnboarding) {
             OnboardingView(appState: appState)
@@ -95,10 +96,6 @@ struct ContentView: View {
         .sheet(isPresented: $showStats) {
             StatsView(appState: appState)
         }
-    }
-
-    private func applyDockPolicy(_ showDock: Bool) {
-        NSApp.setActivationPolicy(showDock ? .regular : .accessory)
     }
 }
 

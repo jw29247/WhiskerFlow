@@ -36,7 +36,9 @@ public struct CapturedAudio: Equatable, Sendable {
 @MainActor
 public protocol AudioCapturing {
     func start(selection: AudioInputSelection) throws
+    func sampleCount() -> Int
     func snapshot() -> [Float]
+    func snapshotTail(from index: Int) -> [Float]
     func stop(reason: CaptureStopReason) -> CapturedAudio
     func cancel()
 }
