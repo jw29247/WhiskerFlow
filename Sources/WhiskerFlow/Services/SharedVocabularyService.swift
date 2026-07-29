@@ -116,7 +116,7 @@ final class SharedVocabularyService {
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                 throw URLError(.badServerResponse)
             }
-            let vocab = try AgencyVocabularyPolicy.decode(data)
+            let vocab = try ingest(data, source: "remote")
             guard myGeneration == generation else { return }
             rules = vocab.rules
             status = .loaded(count: rules.count, at: Date())
@@ -143,9 +143,33 @@ final class SharedVocabularyService {
         }
     }
 
+    /// The sanitizer silently discards any rule that would rewrite everyday speech.
+    /// The glossary is hand-maintained and served live from a branch, so a drop has
+    /// to be reported: otherwise the maintainer sees the rule "live" in the file
+    /// while it never applies on a single machine.
+    private func ingest(_ data: Data, source: String) throws -> Vocabulary {
+        let report = try AgencyVocabularyPolicy.decodeReport(data)
+        if report.droppedRuleCount > 0 {
+            DiagnosticsService.breadcrumb(
+                category: "glossary",
+                metadata: [
+                    "source": source,
+                    "dropped_rules": String(report.droppedRuleCount),
+                    "kept_rules": String(report.vocabulary.rules.count)
+                ]
+            )
+            DiagnosticsService.capture(
+                error: CocoaError(.fileReadCorruptFile),
+                category: "glossary",
+                code: "rules_dropped"
+            )
+        }
+        return report.vocabulary
+    }
+
     private func loadInitialVocabulary() {
         if let cache = try? Data(contentsOf: cacheURL),
-           let vocabulary = try? AgencyVocabularyPolicy.decode(cache) {
+           let vocabulary = try? ingest(cache, source: "cache") {
             let modified = (try? cacheURL.resourceValues(forKeys: [.contentModificationDateKey]))?
                 .contentModificationDate ?? Date()
             rules = vocabulary.rules
@@ -153,12 +177,35 @@ final class SharedVocabularyService {
             return
         }
 
-        guard let resourcesURL = Bundle.main.resourceURL else { return }
+        // The resource bundle name is fixed by SwiftPM, so a rename or a packaging
+        // change silently ships an empty glossary unless the miss is reported.
+        guard let resourcesURL = Bundle.main.resourceURL else {
+            DiagnosticsService.capture(
+                error: CocoaError(.fileNoSuchFile),
+                category: "glossary",
+                code: "seed_missing"
+            )
+            return
+        }
         let seedURL = resourcesURL
             .appendingPathComponent("WhiskerFlow_WhiskerFlow.bundle", isDirectory: true)
             .appendingPathComponent("shared-vocabulary.json")
-        guard let seed = try? Data(contentsOf: seedURL),
-           let vocabulary = try? AgencyVocabularyPolicy.decode(seed) else { return }
+        guard let seed = try? Data(contentsOf: seedURL) else {
+            DiagnosticsService.capture(
+                error: CocoaError(.fileNoSuchFile),
+                category: "glossary",
+                code: "seed_missing"
+            )
+            return
+        }
+        guard let vocabulary = try? ingest(seed, source: "seed") else {
+            DiagnosticsService.capture(
+                error: CocoaError(.fileReadCorruptFile),
+                category: "glossary",
+                code: "seed_invalid"
+            )
+            return
+        }
         let modified = (try? seedURL.resourceValues(forKeys: [.contentModificationDateKey]))?
             .contentModificationDate ?? Date()
         rules = vocabulary.rules
@@ -166,9 +213,7 @@ final class SharedVocabularyService {
     }
 
     nonisolated static var defaultCacheURL: URL {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first!
-            .appendingPathComponent("WhiskerFlow", isDirectory: true)
+        let root = StorageLocations.applicationSupportRootOrTemporary()
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root.appendingPathComponent("shared-vocabulary.json")
     }

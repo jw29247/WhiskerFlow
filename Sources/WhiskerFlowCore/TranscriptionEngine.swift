@@ -43,14 +43,20 @@ public enum WhisperModel: String, Codable, CaseIterable, Sendable, Identifiable 
         }
     }
 
-    /// English-only CoreML model identifier used by WhisperKit.
-    public var whisperKitIdentifier: String {
-        switch self {
-        case .tiny: return "openai_whisper-tiny.en"
-        case .base: return "openai_whisper-base.en"
-        case .small: return "openai_whisper-small.en"
-        case .medium: return "openai_whisper-medium.en"
-        }
+    /// CoreML model identifier used by WhisperKit. The `.en` variants are
+    /// smaller and sharper on English but cannot decode any other language.
+    public func whisperKitIdentifier(multilingual: Bool) -> String {
+        multilingual ? "openai_whisper-\(rawValue)" : "openai_whisper-\(rawValue).en"
+    }
+
+    /// Whether a requested language needs the multilingual weights. A nil
+    /// language means auto-detect, which the English-only models cannot do.
+    public static func requiresMultilingualModel(language: String?) -> Bool {
+        guard let language, !language.isEmpty else { return true }
+        let normalized = language.lowercased()
+        return normalized != "en"
+            && !normalized.hasPrefix("en-")
+            && !normalized.hasPrefix("en_")
     }
 
     /// Model name passed to the openai-whisper CLI (`--model`).
@@ -147,14 +153,15 @@ public protocol TranscriptionEngine: Sendable {
     func isAvailable() async -> Bool
 
     /// Warm up / load the model so the first real transcription isn't penalized.
-    func prepare(model: WhisperModel) async throws
+    /// The language decides whether multilingual weights are needed.
+    func prepare(model: WhisperModel, language: String?) async throws
 
     func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult
 }
 
 public extension TranscriptionEngine {
     func isAvailable() async -> Bool { true }
-    func prepare(model: WhisperModel) async throws {}
+    func prepare(model: WhisperModel, language: String?) async throws {}
 }
 
 public enum TranscriptionError: LocalizedError, Equatable {

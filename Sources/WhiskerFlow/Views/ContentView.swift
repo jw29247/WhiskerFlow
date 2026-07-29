@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WhiskerFlowCore
 
@@ -31,6 +32,11 @@ struct ContentView: View {
                                 in: RoundedRectangle(cornerRadius: 6)
                             )
                             .contextMenu {
+                                Button {
+                                    appState.copy(record.text)
+                                } label: {
+                                    Label("Copy", systemImage: "doc.on.doc")
+                                }
                                 Button(role: .destructive) {
                                     appState.delete(record)
                                 } label: {
@@ -59,6 +65,17 @@ struct ContentView: View {
         }
         .toolbar {
             ToolbarItem {
+                Menu {
+                    Button("Markdown") { export(.markdown) }
+                    Button("CSV") { export(.csv) }
+                    Button("JSON") { export(.json) }
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .disabled(appState.records.isEmpty)
+                .help("Export transcript history")
+            }
+            ToolbarItem {
                 Button {
                     showStats = true
                 } label: {
@@ -74,20 +91,21 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            // Startup changes List rows, app activation policy, and potentially
-            // sheet presentation. `onAppear` can run while NSTableView is still
-            // inside its initial layout/restoration delegate callback, so defer
-            // the complete bootstrap to the next main-queue turn.
+            // `AppDelegate` already bootstraps at launch; this is the fallback for
+            // a window that appears later (`start()` is idempotent). Startup changes
+            // List rows, app activation policy, and potentially sheet presentation,
+            // and `onAppear` can run while NSTableView is still inside its initial
+            // layout/restoration delegate callback, so defer to the next main-queue turn.
             DispatchQueue.main.async {
                 appState.start()
-                applyDockPolicy(appState.settings.showDockIcon)
+                appState.applyActivationPolicy()
                 if appState.records.isEmpty && !appState.hasAccessibilityPermission {
                     showOnboarding = true
                 }
             }
         }
-        .onChange(of: appState.settings.showDockIcon) { _, newValue in
-            applyDockPolicy(newValue)
+        .onChange(of: appState.settings.showDockIcon) { _, _ in
+            appState.applyActivationPolicy()
         }
         .sheet(isPresented: $showOnboarding) {
             OnboardingView(appState: appState)
@@ -97,8 +115,19 @@ struct ContentView: View {
         }
     }
 
-    private func applyDockPolicy(_ showDock: Bool) {
-        NSApp.setActivationPolicy(showDock ? .regular : .accessory)
+    /// Rendering happens in the core exporter; the panel and the write stay here so
+    /// `AppState` never touches the file system on the user's behalf.
+    private func export(_ format: TranscriptExportFormat) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "WhiskerFlow History.\(format.fileExtension)"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let data = try appState.exportHistory(as: format)
+            try data.write(to: url, options: .atomic)
+        } catch {
+            appState.status = .failure("Could not export history")
+        }
     }
 }
 

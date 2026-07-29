@@ -7,4 +7,10 @@ final class TranscriptTextTests: XCTestCase {
 
         XCTAssertEqual(text.plainTranscriptText, "Hello, world. This is WhiskerFlow.")
     }
+
+    func testNormalizedForDeliveryPreservesLineBreaksAndCollapsesSpaceRuns() {
+        let text = "  Hello,   world.\n\nThis\tis \n WhiskerFlow.  "
+
+        XCTAssertEqual(text.normalizedForDelivery, "Hello, world.\n\nThis is\nWhiskerFlow.")
+    }
 }

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCT="WhiskerFlow"
-VERSION="${VERSION:-0.4.0}"
+VERSION="${VERSION:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT_DIR/Resources/Info.plist")}"
 DIST_DIR="$ROOT_DIR/dist"
 STAGING_DIR="$DIST_DIR/$PRODUCT-$VERSION"
 APP_BUNDLE="$STAGING_DIR/$PRODUCT.app"

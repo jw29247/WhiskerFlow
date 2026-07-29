@@ -13,11 +13,11 @@ actor TranscriptionService {
     private let appleSpeech = AppleSpeechEngine()
 
     @discardableResult
-    func prepare(kind: TranscriptionEngineKind, model: WhisperModel) async -> Bool {
+    func prepare(kind: TranscriptionEngineKind, model: WhisperModel, language: String?) async -> Bool {
         switch kind {
         case .whisperKit:
             do {
-                try await whisperKit.prepare(model: model)
+                try await whisperKit.prepare(model: model, language: language)
                 return true
             } catch {
                 return false

@@ -32,6 +32,16 @@ struct RecordingHUDView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.white.opacity(0.7))
                 }
+                // Added below the transcript, never in its place: a thinking pause
+                // reads as "too quiet" within a couple of seconds, and hiding the
+                // growing transcript every time the speaker draws breath is worse
+                // than the warning is useful.
+                if presentation == .recording, let signalWarning {
+                    Text(signalWarning)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(signalWarningTint)
+                        .frame(maxWidth: 320, alignment: .leading)
+                }
             }
             if presentation == .recording {
                 LevelMeter(level: appState.audioLevel, tint: .white)
@@ -89,6 +99,18 @@ struct RecordingHUDView: View {
         }
     }
 
+    private var signalWarning: String? {
+        switch appState.signalQuality {
+        case .tooQuiet: return "Mic may not be picking up speech"
+        case .clipping: return "Audio is clipping — back off the mic"
+        case .unknown, .ok: return nil
+        }
+    }
+
+    private var signalWarningTint: Color {
+        appState.signalQuality == .clipping ? .orange : .yellow
+    }
+
     private var elapsedString: String {
         let total = Int(appState.recordingElapsed)
         return String(format: "%01d:%02d", total / 60, total % 60)
@@ -115,6 +137,7 @@ final class RecordingHUDController {
             _ = appState.status
             // Re-fit the panel as the live transcript grows.
             _ = appState.liveText
+            _ = appState.signalQuality
         } onChange: { [weak self] in
             Task { @MainActor in
                 self?.updateVisibility()

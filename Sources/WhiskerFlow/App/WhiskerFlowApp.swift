@@ -2,11 +2,15 @@ import SwiftUI
 
 @main
 struct WhiskerFlowApp: App {
-    @State private var appState = AppState()
+    @State private var appState: AppState
     @StateObject private var updaterService = UpdaterService()
+    @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
 
     init() {
         DiagnosticsService.start()
+        let appState = AppState()
+        _appState = State(initialValue: appState)
+        AppDelegate.launchAppState = appState
     }
 
     var body: some Scene {

@@ -19,7 +19,7 @@ struct PasteService {
     func copy(_ text: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(text.plainTranscriptText, forType: .string)
+        pasteboard.setString(text.normalizedForDelivery, forType: .string)
     }
 
     /// Paste `text` into `application` at the cursor, preserving the user's clipboard.
@@ -29,7 +29,7 @@ struct PasteService {
         let saved = Self.snapshot(of: pasteboard)
 
         pasteboard.clearContents()
-        pasteboard.setString(text.plainTranscriptText, forType: .string)
+        pasteboard.setString(text.normalizedForDelivery, forType: .string)
 
         guard hasAccessibilityPermission else {
             requestAccessibilityPermission()

@@ -43,11 +43,20 @@ final class AppState {
         let model: WhisperModel
         let language: String?
         let vocabulary: Vocabulary
+        let formatting: FormattingOptions
         let cliConfiguration: WhisperConfiguration
         let allowAppleFallback: Bool
         let delivery: DeliveryMode
         let playSounds: Bool
     }
+
+    /// How long a `.finishing` session may take before the UI is force-recovered.
+    /// Derived from the decode budget it backstops — a release can serially await
+    /// several live decodes — plus a margin, so only a genuine wedge trips it and a
+    /// merely slow decode is never reported as a timeout.
+    private static let finishWatchdogSeconds = Int(DecodeTimeoutPolicy.liveFinishBudget) + 15
+    /// Upper bound on how long quitting waits for a transcript to finish saving.
+    private static let shutdownDrainSeconds: TimeInterval = 5
 
     var records: [TranscriptRecord] = []
     var selectedRecordID: TranscriptRecord.ID?
@@ -55,6 +64,8 @@ final class AppState {
     var isRecording = false
     var isTranscribing = false
     var audioLevel: Float = 0
+    /// Rolling verdict on the live input, surfaced as a HUD warning.
+    var signalQuality: AudioSignalQuality = .unknown
     /// Live transcript shown in the HUD while streaming dictation is active.
     var liveText = ""
     var recordingStartedAt: Date?
@@ -64,6 +75,9 @@ final class AppState {
     var devices: [AudioInputDescriptor] = []
     var lastError: String?
     var searchText = ""
+    /// Corrections spotted in the user's last transcript edit, offered as
+    /// personal vocabulary rules until accepted or dismissed.
+    var pendingVocabularySuggestions: [VocabularyCorrection] = []
 
     var settings: AppSettings
 
@@ -83,20 +97,36 @@ final class AppState {
     private var audioDeviceMonitor: AudioDeviceChangeMonitor?
     private var deviceRefreshTask: Task<Void, Never>?
     private var warmUpTask: Task<Void, Never>?
+    private let pendingPersistWork = PendingWorkTracker()
     private var hasStarted = false
     private var recordingIntentActive = false
     private var pasteTargetApplication: NSRunningApplication?
     private var activeTranscriptionIDs: Set<UUID> = []
     private var latestRecordingSessionID: UUID?
+    /// The shutdown-drain token each in-flight finish holds, so the watchdog can
+    /// release it when it gives up on that finish instead of leaking it for the rest
+    /// of the process's life.
+    private var finishWorkTokens: [UUID: UUID] = [:]
+    /// Sessions the finish watchdog gave up on. A finish that returns after its
+    /// session was abandoned must not paste, must not touch lifecycle UI a newer
+    /// session owns, and must not play sounds — it only files the transcript.
+    private var abandonedSessionIDs: Set<UUID> = []
     private var activeRecordingConfiguration: TranscriptionJobConfiguration?
     /// Whether the most recent recording streamed live (vs. file-based capture).
     private var streamingActive = false
+    private var signalAssessor = AudioSignalAssessor()
 
     init(settings: AppSettings? = nil, store: TranscriptStore = .defaultStore()) {
         self.settings = settings ?? AppSettings()
         self.store = store
         self.live = LiveDictationSession(transcription: transcription)
-        live.onLevel = { [weak self] level in self?.audioLevel = level }
+        live.onLevel = { [weak self] level, peak in
+            guard let self else { return }
+            audioLevel = level
+            guard isRecording else { return }
+            signalAssessor.ingest(level: level, peak: peak)
+            signalQuality = signalAssessor.quality
+        }
         live.onPartial = { [weak self] text in self?.liveText = text }
         live.onConfigurationChange = { [weak self] in self?.handleAudioConfigurationChange() }
     }
@@ -167,32 +197,89 @@ final class AppState {
         guard !hasStarted else { return }
         hasStarted = true
 
+        // History is the only fallible step, and it must not take the rest of the
+        // bootstrap down with it: an unreadable transcripts.json would otherwise
+        // leave the app running with no hotkey monitor and no HUD — no way to
+        // dictate at all — and `hasStarted` blocks any retry.
         do {
             try store.load()
             normalizeInterruptedRecords()
-            records = store.records
-            selectedRecordID = records.first?.id
-            refreshAccessibilityPermission()
-            // SwiftUI's settings Form is backed by NSTableView. Publishing the
-            // initial catalog synchronously while scene restoration is laying it
-            // out can re-enter its delegate and crash AppKit; defer one actor turn.
-            refreshDevices()
-            sharedVocabulary.configureAgencyLibrary()
-            sharedVocabulary.startPeriodicRefresh()
-            startAudioDeviceMonitor()
-            startHotkeyMonitor()
-            hudController = RecordingHUDController(appState: self)
-            warmUpEngine()
         } catch {
             lastError = error.localizedDescription
             status = .failure("Could not load transcript history")
+            DiagnosticsService.capture(
+                error: error,
+                category: "storage",
+                code: String((error as NSError).code)
+            )
         }
+
+        records = store.records
+        selectedRecordID = records.first?.id
+        refreshAccessibilityPermission()
+        // SwiftUI's settings Form is backed by NSTableView. Publishing the initial
+        // catalog synchronously while scene restoration is laying it out can
+        // re-enter its delegate and crash AppKit; defer one actor turn.
+        refreshDevices()
+        sharedVocabulary.configureAgencyLibrary()
+        sharedVocabulary.startPeriodicRefresh()
+        startAudioDeviceMonitor()
+        startHotkeyMonitor()
+        hudController = RecordingHUDController(appState: self)
+        warmUpEngine()
+    }
+
+    func applyActivationPolicy() {
+        NSApp.setActivationPolicy(settings.showDockIcon ? .regular : .accessory)
+    }
+
+    /// Whether quitting now would drop a recording or an unsaved transcript.
+    var hasPendingWork: Bool {
+        isRecording || recordingCoordinator.phase != .idle || !pendingPersistWork.isIdle
+    }
+
+    func stopMonitors() {
+        hotkeyMonitor?.stop()
+        hotkeyMonitor = nil
+        audioDeviceMonitor?.stop()
+        audioDeviceMonitor = nil
+    }
+
+    /// Wind down for termination. Monitors go first so no new session can start,
+    /// then everything still in flight shares one `shutdownDrainSeconds` budget —
+    /// a wedged decode must not keep the process alive past it.
+    func shutdown() async {
+        stopMonitors()
+        warmUpTask?.cancel()
+        warmUpTask = nil
+        deviceRefreshTask?.cancel()
+        deviceRefreshTask = nil
+
+        switch recordingCoordinator.phase {
+        case .preparing:
+            live.cancel()
+            _ = recordingCoordinator.forceIdle()
+            isRecording = false
+        case .recording:
+            // The token bridges the hop until `finishRecording` registers its own.
+            let token = pendingPersistWork.begin()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.finishRecording()
+                self.pendingPersistWork.end(token)
+            }
+        case .finishing, .idle:
+            break
+        }
+
+        _ = await pendingPersistWork.waitUntilIdle(timeout: Self.shutdownDrainSeconds)
     }
 
     func warmUpEngine() {
         warmUpTask?.cancel()
         let engine = settings.engine
         let model = settings.model
+        let language = settings.resolvedLanguage
         let allowFallback = settings.allowAppleFallback
         guard engine == .whisperKit else {
             modelState = .ready
@@ -201,10 +288,11 @@ final class AppState {
         modelState = .preparing
         warmUpTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            let ready = await transcription.prepare(kind: engine, model: model)
+            let ready = await transcription.prepare(kind: engine, model: model, language: language)
             guard !Task.isCancelled,
                   self.settings.engine == engine,
-                  self.settings.model == model else { return }
+                  self.settings.model == model,
+                  self.settings.resolvedLanguage == language else { return }
             if ready {
                 DiagnosticsService.breadcrumb(category: "model", metadata: ["model": model.rawValue])
                 self.modelState = .ready
@@ -297,13 +385,34 @@ final class AppState {
         status = .success("Copied to clipboard")
     }
 
+    func exportHistory(as format: TranscriptExportFormat) throws -> Data {
+        try TranscriptExporter.export(records, as: format)
+    }
+
     func updateText(_ record: TranscriptRecord, to text: String) {
+        let suggestions = VocabularyCorrectionDetector.corrections(
+            original: record.text,
+            edited: text,
+            existingRules: effectiveVocabulary
+        )
         do {
             try store.setText(id: record.id, text: text)
             records = store.records
+            pendingVocabularySuggestions = suggestions
         } catch {
             handleStorageError(error, message: "Could not save transcript changes")
         }
+    }
+
+    func acceptVocabularySuggestion(_ suggestion: VocabularyCorrection) {
+        settings.vocabulary.rules.append(
+            VocabularyRule(find: suggestion.find, replaceWith: suggestion.replaceWith)
+        )
+        pendingVocabularySuggestions.removeAll { $0 == suggestion }
+    }
+
+    func dismissVocabularySuggestions() {
+        pendingVocabularySuggestions = []
     }
 
     func delete(_ record: TranscriptRecord) {
@@ -401,6 +510,8 @@ final class AppState {
             refreshDevices()
             guard recordingCoordinator.phase == .preparing(sessionID) else { return }
             liveText = ""
+            signalAssessor.reset()
+            signalQuality = .unknown
             let configuration = makeTranscriptionConfiguration()
             activeRecordingConfiguration = configuration
             // Stream + decode live for the WhisperKit engine; other engines stay
@@ -418,6 +529,7 @@ final class AppState {
                         language: configuration.language,
                         model: configuration.model,
                         vocabulary: configuration.vocabulary,
+                        formatting: configuration.formatting,
                         streaming: streamingActive
                     )
                     inputSelection = candidate
@@ -432,6 +544,8 @@ final class AppState {
             }
             guard recordingCoordinator.didStart(sessionID) else {
                 live.cancel()
+                streamingActive = false
+                activeRecordingConfiguration = nil
                 return
             }
             isRecording = true
@@ -476,6 +590,17 @@ final class AppState {
         guard case .recording(let sessionID) = recordingCoordinator.phase,
               recordingCoordinator.requestFinish(sessionID, reason: reason) else { return }
 
+        // Registered for the whole finish, so a quit landing mid-finish waits for
+        // the transcript instead of racing the store write. The watchdog needs to be
+        // able to release it too, or a finish it gave up on would keep every later
+        // quit waiting out the full drain budget for work that will never land.
+        let workToken = pendingPersistWork.begin()
+        finishWorkTokens[sessionID] = workToken
+        defer {
+            finishWorkTokens[sessionID] = nil
+            pendingPersistWork.end(workToken)
+        }
+
         isRecording = false
         recordingStartedAt = nil
         status = .transcribing
@@ -483,6 +608,13 @@ final class AppState {
             category: "recording",
             metadata: ["phase": "finishing", "stop_reason": String(describing: reason)]
         )
+        // A wedged CoreML decode never returns, so nothing below can unstick the
+        // UI on its own — this watchdog is the only way back to idle.
+        let watchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.finishWatchdogSeconds) * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.abandonStuckFinish(sessionID: sessionID)
+        }
 
         let wasStreaming = streamingActive
         streamingActive = false
@@ -491,19 +623,47 @@ final class AppState {
         let pasteTarget = pasteTargetApplication
         pasteTargetApplication = nil
         let result = await live.finish(reason: reason)
+        watchdog.cancel()
+        let wasAbandoned = abandonedSessionIDs.remove(sessionID) != nil
         _ = recordingCoordinator.didFinish(sessionID)
+
+        if wasAbandoned {
+            // The watchdog already reported this session as timed out and released
+            // the coordinator, so the HUD text, the status and the paste target may
+            // all belong to a newer session by now. File the transcript so it isn't
+            // lost, but deliver nothing and touch no lifecycle UI.
+            logger.error("Finish returned after the watchdog session=\(sessionID.uuidString, privacy: .public)")
+            DiagnosticsService.breadcrumb(
+                category: "recording",
+                metadata: [
+                    "phase": "finish_late",
+                    "recovered": String(!result.text.isEmpty)
+                ]
+            )
+            if !result.text.isEmpty {
+                persistLiveRecording(
+                    text: result.text,
+                    samples: result.samples,
+                    configuration: configuration,
+                    sessionID: sessionID
+                )
+            }
+            return
+        }
+
         if configuration.playSounds { soundService.play(.recordingStopped) }
         liveText = ""
 
         if wasStreaming, !result.text.isEmpty {
             // Streaming already produced the transcript — paste immediately, then
             // persist the audio + record off the critical path.
-            status = .transcribing
+            let mayUpdateUI = canUpdateLifecycleUI(for: sessionID)
+            if mayUpdateUI { status = .transcribing }
             deliver(
                 result.text,
                 pasteTarget: pasteTarget,
                 delivery: configuration.delivery,
-                mayUpdateStatus: canUpdateLifecycleUI(for: sessionID)
+                mayUpdateStatus: mayUpdateUI
             )
             persistLiveRecording(
                 text: result.text,
@@ -514,9 +674,10 @@ final class AppState {
         } else {
             // Non-streaming engine, or streaming caught no speech: fall back to the
             // standard file-based path (includes the Apple Speech fallback).
-            status = .transcribing
+            if canUpdateLifecycleUI(for: sessionID) { status = .transcribing }
             await transcribeCapturedSamples(
                 result.samples,
+                conversionFailures: result.conversionFailures,
                 pasteTarget: pasteTarget,
                 configuration: configuration,
                 sessionID: sessionID
@@ -532,6 +693,33 @@ final class AppState {
                 status = .success("Microphone changed; partial transcript saved")
             }
         }
+    }
+
+    private func abandonStuckFinish(sessionID: UUID) {
+        guard recordingCoordinator.phase == .finishing(sessionID) else { return }
+        recordingCoordinator.forceIdle()
+        // Releasing the coordinator lets a new session start on top of this one, so
+        // stamp the abandoned session: whatever its finish eventually returns must
+        // not reach the pasteboard or the UI. Its drain token goes now too, or every
+        // later quit waits out the full budget for work that never lands.
+        abandonedSessionIDs.insert(sessionID)
+        if let token = finishWorkTokens.removeValue(forKey: sessionID) {
+            pendingPersistWork.end(token)
+        }
+        isRecording = false
+        isTranscribing = false
+        streamingActive = false
+        activeRecordingConfiguration = nil
+        logger.error("Finish watchdog fired after \(Self.finishWatchdogSeconds, privacy: .public)s")
+        DiagnosticsService.breadcrumb(
+            category: "recording",
+            metadata: ["phase": "finish_timeout"]
+        )
+        DiagnosticsService.capture(
+            error: TranscriptionError.timedOut(seconds: Self.finishWatchdogSeconds),
+            category: "recording"
+        )
+        status = .failure("Transcription timed out")
     }
 
     private func handleAudioConfigurationChange() {
@@ -565,7 +753,11 @@ final class AppState {
             return
         }
 
+        let workToken = pendingPersistWork.begin()
         Task.detached(priority: .utility) { [weak self] in
+            defer {
+                Task { @MainActor in self?.pendingPersistWork.end(workToken) }
+            }
             do {
                 try AudioFileWriter.writeWAV(samples: samples, to: url)
                 await self?.appendRecord(
@@ -620,13 +812,28 @@ final class AppState {
     /// path (used for non-streaming engines and the streaming-empty fallback).
     private func transcribeCapturedSamples(
         _ samples: [Float],
+        conversionFailures: Int,
         pasteTarget: NSRunningApplication?,
         configuration: TranscriptionJobConfiguration,
         sessionID: UUID
     ) async {
         guard !samples.isEmpty else {
+            // Buffers that all failed to convert look identical to silence at this
+            // point, so the failure count is the only way to tell the user why.
+            if conversionFailures > 0 {
+                logger.error("Capture yielded no usable audio failures=\(conversionFailures, privacy: .public)")
+                DiagnosticsService.capture(
+                    error: AudioCaptureServiceError.conversionFailed("all buffers"),
+                    category: "audio",
+                    code: String(conversionFailures)
+                )
+            }
             if canUpdateLifecycleUI(for: sessionID) {
-                status = .failure("No speech was detected")
+                status = .failure(
+                    conversionFailures > 0
+                        ? "Microphone audio could not be converted — try another microphone"
+                        : "No speech was detected"
+                )
             }
             return
         }
@@ -696,7 +903,10 @@ final class AppState {
                 cliConfiguration: configuration.cliConfiguration,
                 allowAppleFallback: configuration.allowAppleFallback
             )
-            let finalText = configuration.vocabulary.apply(to: outcome.result.text)
+            let finalText = TranscriptFormatter.format(
+                configuration.vocabulary.apply(to: outcome.result.text),
+                options: configuration.formatting
+            )
             try store.markTranscribed(
                 id: record.id,
                 text: finalText,
@@ -772,6 +982,7 @@ final class AppState {
             model: settings.model,
             language: settings.resolvedLanguage,
             vocabulary: effectiveVocabulary,
+            formatting: settings.formatting,
             cliConfiguration: settings.cliConfiguration,
             allowAppleFallback: settings.allowAppleFallback,
             delivery: settings.delivery,
@@ -812,10 +1023,7 @@ final class AppState {
 
 extension TranscriptStore {
     static func defaultStore() -> TranscriptStore {
-        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first!
-            .appendingPathComponent("WhiskerFlow", isDirectory: true)
-
+        let root = StorageLocations.applicationSupportRootOrTemporary()
         return TranscriptStore(fileURL: root.appendingPathComponent("transcripts.json"))
     }
 }

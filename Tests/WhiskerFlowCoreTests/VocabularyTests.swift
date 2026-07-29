@@ -81,4 +81,99 @@ final class VocabularyTests: XCTestCase {
         // A blank personal row must not wipe out shared rules.
         XCTAssertEqual(effective.apply(to: "clawd"), "Claude")
     }
+
+    // MARK: - Case preservation
+
+    func testCapitalisationIsPreservedAtSentenceStart() {
+        let vocab = Vocabulary(rules: [VocabularyRule(find: "gonna", replaceWith: "going to")])
+        XCTAssertEqual(vocab.apply(to: "Gonna go"), "Going to go")
+    }
+
+    func testMidSentenceMatchKeepsLowercaseReplacement() {
+        let vocab = Vocabulary(rules: [VocabularyRule(find: "gonna", replaceWith: "going to")])
+        XCTAssertEqual(vocab.apply(to: "I'm gonna go"), "I'm going to go")
+    }
+
+    func testMixedCaseOccurrencesAreAdjustedIndependently() {
+        let vocab = Vocabulary(rules: [VocabularyRule(find: "gonna", replaceWith: "going to")])
+        XCTAssertEqual(vocab.apply(to: "Gonna wait. gonna go."), "Going to wait. going to go.")
+    }
+
+    func testCaseSensitiveRuleIsNeverAdjusted() {
+        let vocab = Vocabulary(rules: [
+            VocabularyRule(find: "Gonna", replaceWith: "going to", caseSensitive: true)
+        ])
+        XCTAssertEqual(vocab.apply(to: "Gonna go"), "going to go")
+    }
+
+    func testUppercaseLedReplacementIsNeverAdjusted() {
+        let vocab = Vocabulary(rules: [VocabularyRule(find: "clawd", replaceWith: "Claude")])
+        XCTAssertEqual(vocab.apply(to: "clawd Clawd"), "Claude Claude")
+    }
+
+    func testMidSentenceCapitalisedMatchDoesNotGainACapital() {
+        let vocab = Vocabulary(rules: [VocabularyRule(find: "cx", replaceWith: "customer experience")])
+        XCTAssertEqual(vocab.apply(to: "The CX team shipped it"), "The customer experience team shipped it")
+        XCTAssertEqual(vocab.apply(to: "CX is the team"), "Customer experience is the team")
+    }
+
+    func testReplacementThatSpellsItsOwnCasingIsNeverRewritten() {
+        let brands = Vocabulary(rules: [
+            VocabularyRule(find: "ebay", replaceWith: "eBay"),
+            VocabularyRule(find: "iphone", replaceWith: "iPhone")
+        ])
+        // A brand rule that can never emit its own spelling is worse than no rule.
+        XCTAssertEqual(brands.apply(to: "Ebay listings are up"), "eBay listings are up")
+        XCTAssertEqual(brands.apply(to: "IPhone and Iphone"), "iPhone and iPhone")
+    }
+
+    func testSentenceStartIsRecognisedAfterEveryTerminator() {
+        let vocab = Vocabulary(rules: [VocabularyRule(find: "gonna", replaceWith: "going to")])
+        XCTAssertEqual(vocab.apply(to: "Wait! Gonna go"), "Wait! Going to go")
+        XCTAssertEqual(vocab.apply(to: "Ready? Gonna go"), "Ready? Going to go")
+        XCTAssertEqual(vocab.apply(to: "Ready,\nGonna go"), "Ready,\nGoing to go")
+        XCTAssertEqual(vocab.apply(to: "Ready, Gonna go"), "Ready, going to go")
+    }
+
+    func testPossibleReplacementsReportsWhatARuleCanInsert() {
+        XCTAssertEqual(
+            VocabularyRule(find: "gonna", replaceWith: "going to").possibleReplacements,
+            ["going to", "Going to"]
+        )
+        XCTAssertEqual(
+            VocabularyRule(find: "ebay", replaceWith: "eBay").possibleReplacements,
+            ["eBay"]
+        )
+        XCTAssertEqual(
+            VocabularyRule(find: "gonna", replaceWith: "going to", caseSensitive: true)
+                .possibleReplacements,
+            ["going to"]
+        )
+    }
+
+    // MARK: - CompiledVocabulary reuse
+
+    func testCompiledVocabularyIsStableAcrossRepeatedApplication() {
+        let compiled = CompiledVocabulary(Vocabulary(rules: [
+            VocabularyRule(find: "clawd", replaceWith: "Claude"),
+            VocabularyRule(find: "gonna", replaceWith: "going to"),
+            VocabularyRule(find: "C++", replaceWith: "C plus plus"),
+            VocabularyRule(find: "", replaceWith: "skipped")
+        ]))
+        for _ in 0..<100 {
+            XCTAssertEqual(
+                compiled.apply(to: "Gonna ask clawd about C++"),
+                "Going to ask Claude about C plus plus"
+            )
+        }
+    }
+
+    func testCompiledVocabularyMatchesVocabularyApply() {
+        let vocab = Vocabulary(rules: [
+            VocabularyRule(find: "x", replaceWith: "$1&"),
+            VocabularyRule(find: "cat", replaceWith: "dog")
+        ])
+        let compiled = CompiledVocabulary(vocab)
+        XCTAssertEqual(compiled.apply(to: "x the category cat"), vocab.apply(to: "x the category cat"))
+    }
 }

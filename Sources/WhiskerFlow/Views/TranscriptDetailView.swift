@@ -53,6 +53,9 @@ struct TranscriptDetailView: View {
                             .buttonStyle(.borderedProminent)
                     }
                 }
+                if !appState.pendingVocabularySuggestions.isEmpty {
+                    vocabularySuggestions
+                }
             } else {
                 ScrollView {
                     Text(detailText(record))
@@ -63,6 +66,26 @@ struct TranscriptDetailView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var vocabularySuggestions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(appState.pendingVocabularySuggestions, id: \.self) { suggestion in
+                HStack(spacing: 8) {
+                    Image(systemName: "text.badge.plus")
+                        .foregroundStyle(.tint)
+                    Text("You corrected “\(suggestion.find)” to “\(suggestion.replaceWith)” — add as a vocabulary rule?")
+                        .font(.callout)
+                    Spacer()
+                    Button("Add") { appState.acceptVocabularySuggestion(suggestion) }
+                        .buttonStyle(.borderedProminent)
+                    Button("Dismiss") { appState.dismissVocabularySuggestions() }
+                        .help("Stop suggesting rules from this edit")
+                }
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.background.opacity(0.5)))
     }
 
     @ViewBuilder
@@ -115,10 +138,15 @@ struct TranscriptDetailView: View {
     // MARK: - Helpers
 
     private func syncDraft() {
-        guard let record else { draft = ""; return }
+        guard let record else {
+            draft = ""
+            appState.dismissVocabularySuggestions()
+            return
+        }
         if editingID != record.id {
             draft = record.text
             editingID = record.id
+            appState.dismissVocabularySuggestions()
         }
     }
 

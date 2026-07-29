@@ -1,0 +1,36 @@
+--swiftversion 5.10
+
+--exclude .build
+--exclude script/make_icon.swift
+
+--disable andOperator
+--disable blankLinesAtEndOfScope
+--disable blankLinesBetweenScopes
+--disable conditionalAssignment
+--disable consecutiveSpaces
+--disable elseOnSameLine
+--disable extensionAccessControl
+--disable genericExtensions
+--disable hoistPatternLet
+--disable hoistTry
+--disable indent
+--disable modifierOrder
+--disable noForceUnwrapInTests
+--disable numberFormatting
+--disable opaqueGenericParameters
+--disable preferKeyPath
+--disable redundantFileprivate
+--disable redundantParens
+--disable redundantReturn
+--disable redundantSelf
+--disable sortImports
+--disable spaceAroundOperators
+--disable trailingCommas
+--disable typeSugar
+--disable unusedArguments
+--disable wrapArguments
+--disable wrapFunctionBodies
+--disable wrapIfStatementBodies
+--disable wrapLoopBodies
+--disable wrapMultilineStatementBraces
+--disable wrapPropertyBodies

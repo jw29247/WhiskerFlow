@@ -19,10 +19,24 @@ public final class LockedAudioBuffer: @unchecked Sendable {
         lock.unlock()
     }
 
+    public var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return samples.count
+    }
+
     public func snapshot() -> [Float] {
         lock.lock()
         defer { lock.unlock() }
         return samples
+    }
+
+    /// The samples from `index` onwards. `index` is clamped, so a caller holding
+    /// a stale offset gets the whole buffer or an empty tail rather than a trap.
+    public func suffix(from index: Int) -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(samples[max(0, min(index, samples.count))...])
     }
 
     public func drain() -> [Float] {

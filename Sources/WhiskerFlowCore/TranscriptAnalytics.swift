@@ -45,6 +45,15 @@ public extension String {
             .joined(separator: " ")
     }
 
+    /// Tidy spacing for the clipboard while keeping line breaks intact — the
+    /// formatter's "new line" / "new paragraph" commands only survive delivery
+    /// because this preserves `\n` where `plainTranscriptText` collapses it.
+    var normalizedForDelivery: String {
+        replacingOccurrences(of: "[ \t]+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "[ \t]*\n[ \t]*", with: "\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     var transcriptWordCount: Int {
         plainTranscriptText
             .split(separator: " ")

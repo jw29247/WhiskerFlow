@@ -178,6 +178,33 @@ private final class ConverterInputBox: @unchecked Sendable {
     }
 }
 
+private final class ConversionFailureBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    /// True only for the first failure of a capture, so the tap — which fires
+    /// about ten times a second — can report at most once.
+    @discardableResult
+    func increment() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+        return count == 1
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func reset() {
+        lock.lock()
+        count = 0
+        lock.unlock()
+    }
+}
+
 @MainActor
 final class AudioCaptureService: AudioCapturing {
     private static let targetSampleRate = 16_000.0
@@ -187,13 +214,15 @@ final class AudioCaptureService: AudioCapturing {
     )
     private let catalog: any AudioDeviceCataloging
     private let samples = LockedAudioBuffer()
+    private let conversionFailures = ConversionFailureBox()
     private var engine: AVAudioEngine?
     private var tapInstalled = false
     private var configurationObserver: NSObjectProtocol?
     private var configurationArmTask: Task<Void, Never>?
     private var configurationObservationGate = AudioConfigurationObservationGate()
 
-    var onLevel: ((Float) -> Void)?
+    /// Normalized 0...1 RMS level plus the buffer's absolute peak.
+    var onLevel: ((Float, Float) -> Void)?
     var onConfigurationChange: (() -> Void)?
 
     init() {
@@ -207,6 +236,7 @@ final class AudioCaptureService: AudioCapturing {
     func start(selection: AudioInputSelection) throws {
         discardCapture()
         samples.reset()
+        conversionFailures.reset()
 
         guard let descriptor = catalog.resolve(selection) else {
             throw AudioCaptureServiceError.deviceUnavailable
@@ -264,6 +294,7 @@ final class AudioCaptureService: AudioCapturing {
         }
         let converterBox = AudioConverterBox(converter: converter)
         let store = samples
+        let failures = conversionFailures
 
         inputNode.installTap(onBus: 0, bufferSize: 1_600, format: inputFormat) { [weak self] buffer, _ in
             do {
@@ -274,10 +305,21 @@ final class AudioCaptureService: AudioCapturing {
                 )
                 store.append(converted)
                 let level = Self.level(from: converted)
-                Task { @MainActor [weak self] in self?.onLevel?(level) }
+                let peak = Self.peak(from: converted)
+                Task { @MainActor [weak self] in self?.onLevel?(level, peak) }
             } catch {
+                let isFirstFailure = failures.increment()
                 Task { @MainActor [weak self] in
                     self?.logger.error("Audio conversion failed error=\(error.localizedDescription, privacy: .public)")
+                    // AppState reports the count when a capture yields nothing
+                    // usable; this only marks that conversion started failing at
+                    // all, so partial failures are not invisible.
+                    if isFirstFailure {
+                        DiagnosticsService.breadcrumb(
+                            category: "audio",
+                            metadata: ["error_code": "conversion_failed"]
+                        )
+                    }
                 }
             }
         }
@@ -296,20 +338,33 @@ final class AudioCaptureService: AudioCapturing {
         }
     }
 
+    func sampleCount() -> Int {
+        samples.count
+    }
+
     func snapshot() -> [Float] {
         samples.snapshot()
     }
 
+    func snapshotTail(from index: Int) -> [Float] {
+        samples.suffix(from: index)
+    }
+
     func stop(reason: CaptureStopReason) -> CapturedAudio {
         stopEngine()
-        onLevel?(0)
-        return CapturedAudio(samples: samples.drain(), stopReason: reason)
+        onLevel?(0, 0)
+        return CapturedAudio(
+            samples: samples.drain(),
+            stopReason: reason,
+            conversionFailureCount: conversionFailures.value
+        )
     }
 
     func cancel() {
         stopEngine()
         samples.reset()
-        onLevel?(0)
+        conversionFailures.reset()
+        onLevel?(0, 0)
     }
 
     private func discardCapture() {
@@ -402,6 +457,10 @@ final class AudioCaptureService: AudioCapturing {
         let rms = (sum / Float(buffer.count)).squareRoot()
         let db = 20 * log10(max(rms, 1e-7))
         return (max(-50, min(0, db)) + 50) / 50
+    }
+
+    nonisolated private static func peak(from buffer: [Float]) -> Float {
+        buffer.reduce(Float.zero) { max($0, abs($1)) }
     }
 }
 

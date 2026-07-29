@@ -26,17 +26,31 @@ public enum CaptureStopReason: Equatable, Sendable {
 public struct CapturedAudio: Equatable, Sendable {
     public let samples: [Float]
     public let stopReason: CaptureStopReason
+    /// Buffers the capture tap failed to convert. Non-zero with no samples means
+    /// the mic delivered audio we could not use — not that the user stayed silent.
+    public let conversionFailureCount: Int
 
-    public init(samples: [Float], stopReason: CaptureStopReason) {
+    public init(
+        samples: [Float],
+        stopReason: CaptureStopReason,
+        conversionFailureCount: Int = 0
+    ) {
         self.samples = samples
         self.stopReason = stopReason
+        self.conversionFailureCount = conversionFailureCount
+    }
+
+    public var reportsUnusableInput: Bool {
+        samples.isEmpty && conversionFailureCount > 0
     }
 }
 
 @MainActor
 public protocol AudioCapturing {
     func start(selection: AudioInputSelection) throws
+    func sampleCount() -> Int
     func snapshot() -> [Float]
+    func snapshotTail(from index: Int) -> [Float]
     func stop(reason: CaptureStopReason) -> CapturedAudio
     func cancel()
 }
@@ -81,6 +95,16 @@ public final class RecordingCoordinator {
     @discardableResult
     public func didFinish(_ sessionID: UUID) -> Bool {
         guard phase == .finishing(sessionID) else { return false }
+        phase = .idle
+        return true
+    }
+
+    /// Recover from a stuck phase when no session token is trustworthy any more
+    /// (e.g. a wedged decode that never reported back).
+    @discardableResult
+    public func forceIdle() -> Bool {
+        guard phase != .idle else { return false }
+        stopReason = .failed
         phase = .idle
         return true
     }
