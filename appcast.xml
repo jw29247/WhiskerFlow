@@ -9,6 +9,13 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>0.7.0</title>
+      <pubDate>Wed, 29 Jul 2026 07:18:45 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Stability and accuracy overhaul: transcription timeout recovery, safer launch and quit, faster live transcription, multilingual models, glossary safety, opt-in smart formatting, mic signal warnings, vocabulary learning from edits, and history export.]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v0.7.0/WhiskerFlow-0.7.0.zip" sparkle:version="11" sparkle:shortVersionString="0.7.0" sparkle:edSignature="ZxLeJjDV/h8jNEQgurAcXMXVXRLOkaNKFVx2VJ1/Dw2SfNMUCyjEUr5brdW9OxhMjrKWgrY5rMDDY+9da4mzDw==" length="4840170" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>0.6.2</title>
       <pubDate>Thu, 16 Jul 2026 10:14:02 +0000</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>

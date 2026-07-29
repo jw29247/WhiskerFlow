@@ -1,6 +1,6 @@
 cask "whiskerflow" do
-  version "0.6.2"
-  sha256 "923540547de1f6edff18fa5c3b84c867d52bf2e39902ac1866e3e4b70d510955"
+  version "0.7.0"
+  sha256 "25f3c3a2381ebb1553da98f992d988c746677549942f88972d9945c65f361742"
 
   url "https://github.com/jw29247/WhiskerFlow/releases/download/v#{version}/WhiskerFlow-#{version}.dmg"
   name "WhiskerFlow"
