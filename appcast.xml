@@ -9,6 +9,13 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>0.7.1</title>
+      <pubDate>Thu, 30 Jul 2026 13:35:07 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Adds privacy-safe self-hosted operational telemetry for app lifecycle, dictation, transcription, and persistence reliability.]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v0.7.1/WhiskerFlow-0.7.1.zip" sparkle:version="12" sparkle:shortVersionString="0.7.1" sparkle:edSignature="AX2mdPfqMKFNYD2tAxSGkbVzJ0E26F2Rbm3idiALzI9KT96YBSi/eeZPpgEjrwP6/+e887ISplVLtYn9fpV0CA==" length="7212021" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>0.7.0</title>
       <pubDate>Wed, 29 Jul 2026 07:18:45 +0000</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
