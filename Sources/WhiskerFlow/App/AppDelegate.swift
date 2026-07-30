@@ -22,6 +22,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        appState?.refreshPermissionsAfterActivation()
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let appState, appState.hasPendingWork else {
             appState?.stopMonitors()

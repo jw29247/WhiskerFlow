@@ -99,7 +99,8 @@ struct ContentView: View {
             DispatchQueue.main.async {
                 appState.start()
                 appState.applyActivationPolicy()
-                if appState.records.isEmpty && !appState.hasAccessibilityPermission {
+                if appState.records.isEmpty
+                    && (!appState.hasAccessibilityPermission || !appState.hasMicrophonePermission) {
                     showOnboarding = true
                 }
             }

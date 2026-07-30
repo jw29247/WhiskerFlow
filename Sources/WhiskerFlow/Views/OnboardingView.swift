@@ -17,11 +17,22 @@ struct OnboardingView: View {
 
             PermissionRow(
                 title: "Microphone",
-                detail: "Needed to record your voice.",
+                detail: appState.microphonePermissionDetail,
                 systemImage: "mic.fill",
                 granted: appState.hasMicrophonePermission
             ) {
-                Button("Allow") { Task { await appState.requestMicrophonePermission() } }
+                switch appState.microphonePermission.recoveryAction {
+                case .request:
+                    Button("Request") {
+                        Task { await appState.requestMicrophonePermission() }
+                    }
+                case .openSettings:
+                    Button("Open Microphone Settings") {
+                        Self.openSettings("Privacy_Microphone")
+                    }
+                case nil:
+                    EmptyView()
+                }
             }
 
             PermissionRow(

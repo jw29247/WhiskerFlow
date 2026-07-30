@@ -6,16 +6,34 @@ import Logging
 import WhiskerFlowAppSupport
 
 enum Microphone {
-    static func requestAccess() async -> Bool {
-        await withCheckedContinuation { continuation in
-            AVCaptureDevice.requestAccess(for: .audio) { allowed in
-                continuation.resume(returning: allowed)
-            }
+    static func availableInputDevices() -> [AudioInputDescriptor] {
+        CoreAudioDeviceCatalog.availableInputs()
+    }
+}
+
+@MainActor
+final class AVCaptureMicrophoneAuthorizationProvider: MicrophoneAuthorizationProviding {
+    var authorizationState: MicrophoneAuthorizationState {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .notDetermined:
+            return .notDetermined
+        case .restricted:
+            return .restricted
+        case .denied:
+            return .denied
+        case .authorized:
+            return .authorized
+        @unknown default:
+            return .restricted
         }
     }
 
-    static func availableInputDevices() -> [AudioInputDescriptor] {
-        CoreAudioDeviceCatalog.availableInputs()
+    func requestAccess() async {
+        await withCheckedContinuation { continuation in
+            AVCaptureDevice.requestAccess(for: .audio) { _ in
+                continuation.resume()
+            }
+        }
     }
 }
 

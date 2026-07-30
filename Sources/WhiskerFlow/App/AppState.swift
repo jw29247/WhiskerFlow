@@ -72,7 +72,6 @@ final class AppState {
     var recordingStartedAt: Date?
     var modelState: ModelState = .unloaded
     var hasAccessibilityPermission = false
-    var hasMicrophonePermission = false
     var devices: [AudioInputDescriptor] = []
     var lastError: String?
     var searchText = ""
@@ -91,6 +90,7 @@ final class AppState {
     private let recordingCoordinator = RecordingCoordinator()
     private let pasteService = PasteService()
     private let soundService = SoundService()
+    let microphonePermission: MicrophonePermissionController
     let sharedVocabulary = SharedVocabularyService()
     private var hotkeyMonitor: HotkeyMonitor?
     private var hudController: RecordingHUDController?
@@ -116,9 +116,16 @@ final class AppState {
     private var streamingActive = false
     private var signalAssessor = AudioSignalAssessor()
 
-    init(settings: AppSettings? = nil, store: TranscriptStore = .defaultStore()) {
+    init(
+        settings: AppSettings? = nil,
+        store: TranscriptStore = .defaultStore(),
+        microphonePermission: MicrophonePermissionController? = nil
+    ) {
         self.settings = settings ?? AppSettings()
         self.store = store
+        self.microphonePermission = microphonePermission ?? MicrophonePermissionController(
+            provider: AVCaptureMicrophoneAuthorizationProvider()
+        )
         self.live = LiveDictationSession(transcription: transcription)
         live.onLevel = { [weak self] level, peak in
             guard let self else { return }
@@ -191,6 +198,14 @@ final class AppState {
         recordingCoordinator.phase.controlsAreLocked
     }
 
+    var hasMicrophonePermission: Bool {
+        microphonePermission.isGranted
+    }
+
+    var microphonePermissionDetail: String {
+        microphonePermission.detail
+    }
+
     // MARK: - Lifecycle
 
     func start() {
@@ -217,6 +232,7 @@ final class AppState {
         records = store.records
         selectedRecordID = records.first?.id
         refreshAccessibilityPermission()
+        refreshMicrophonePermission()
         // SwiftUI's settings Form is backed by NSTableView. Publishing the initial
         // catalog synchronously while scene restoration is laying it out can
         // re-enter its delegate and crash AppKit; defer one actor turn.
@@ -366,11 +382,23 @@ final class AppState {
         refreshAccessibilityPermission()
     }
 
+    func refreshMicrophonePermission() {
+        let previous = microphonePermission.authorizationState
+        microphonePermission.refresh()
+        handleMicrophoneAuthorizationTransition(from: previous)
+    }
+
+    func refreshPermissionsAfterActivation() {
+        refreshAccessibilityPermission()
+        let previous = microphonePermission.authorizationState
+        microphonePermission.refreshForApplicationActivation()
+        handleMicrophoneAuthorizationTransition(from: previous)
+    }
+
     func requestMicrophonePermission() async {
-        hasMicrophonePermission = await Microphone.requestAccess()
-        if hasMicrophonePermission {
-            refreshDevices()
-        }
+        let previous = microphonePermission.authorizationState
+        _ = await microphonePermission.requestIfNeeded()
+        handleMicrophoneAuthorizationTransition(from: previous)
     }
 
     func requestSpeechPermission() async -> Bool {
@@ -502,17 +530,26 @@ final class AppState {
         logger.info("Recording preparing")
         DiagnosticsService.breadcrumb(category: "recording", metadata: ["phase": "preparing"])
 
-        let allowed = await Microphone.requestAccess()
-        hasMicrophonePermission = allowed
+        let microphoneAuthorization = await microphonePermission.requestIfNeeded()
         guard recordingCoordinator.phase == .preparing(sessionID) else {
             telemetryOutcome = "cancelled"
             return
         }
-        guard allowed else {
+        guard microphoneAuthorization == .authorized else {
             _ = recordingCoordinator.fail(sessionID)
-            span.setAttribute(key: "error.type", value: "permission_denied")
-            span.status = .error(description: "Microphone permission denied")
-            status = .failure("Microphone access is required")
+            span.setAttribute(
+                key: "error.type",
+                value: "microphone_permission_\(microphoneAuthorization.rawValue)"
+            )
+            span.status = .error(description: "Microphone permission unavailable")
+            DiagnosticsService.breadcrumb(
+                category: "audio",
+                metadata: ["phase": "permission_\(microphoneAuthorization.rawValue)"]
+            )
+            if let message = microphonePermission.captureFailureMessage {
+                lastError = message
+                status = .failure(message)
+            }
             return
         }
 
@@ -609,7 +646,8 @@ final class AppState {
             isRecording = false
             streamingActive = false
             activeRecordingConfiguration = nil
-            lastError = error.localizedDescription
+            let message = CaptureErrorPresentation.message(for: error)
+            lastError = message
             span.setAttributes([
                 "error.type": .string(String(describing: type(of: error))),
                 "error.code": .int((error as NSError).code)
@@ -624,7 +662,7 @@ final class AppState {
                 category: "audio",
                 code: String((error as NSError).code)
             )
-            status = .failure("Could not start recording")
+            status = .failure(message)
         }
     }
 
@@ -836,6 +874,20 @@ final class AppState {
             metadata: ["phase": "recording", "stop_reason": "device_disconnected"]
         )
         Task { await finishRecording(reason: .deviceDisconnected) }
+    }
+
+    private func handleMicrophoneAuthorizationTransition(
+        from previous: MicrophoneAuthorizationState
+    ) {
+        let current = microphonePermission.authorizationState
+        guard current != previous else { return }
+        logger.info(
+            "Microphone authorization changed",
+            metadata: ["authorization.state": "\(current.rawValue)"]
+        )
+        if current == .authorized {
+            refreshDevices()
+        }
     }
 
     /// Save a finished streaming transcript + its audio without blocking the
