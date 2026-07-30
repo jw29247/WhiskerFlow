@@ -1,4 +1,5 @@
 import AppKit
+import WhiskerFlowAppSupport
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -24,11 +25,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let appState, appState.hasPendingWork else {
             appState?.stopMonitors()
+            Observability.shutdown(timeout: 2)
             return .terminateNow
         }
         // `shutdown()` is bounded, so the reply always arrives.
         Task { @MainActor in
             await appState.shutdown()
+            Observability.shutdown(timeout: 2)
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

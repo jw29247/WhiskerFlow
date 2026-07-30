@@ -3,3 +3,9 @@
 .DS_Store
 DerivedData/
 dist/
+
+# Local Claude state and worktrees are machine-specific. Shared skill links in
+# .claude/skills remain tracked.
+.claude/.DS_Store
+.claude/settings.local.json
+.claude/worktrees/

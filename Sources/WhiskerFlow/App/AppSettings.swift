@@ -1,6 +1,6 @@
 import Foundation
+import Logging
 import Observation
-import OSLog
 import ServiceManagement
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
@@ -9,9 +9,8 @@ import WhiskerFlowCore
 @Observable
 final class AppSettings {
     @ObservationIgnored private let defaults: UserDefaults
-    @ObservationIgnored private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "agency.thatworks.WhiskerFlow",
-        category: "Settings"
+    @ObservationIgnored private let logger = Logging.Logger(
+        label: "agency.thatworks.WhiskerFlow.Settings"
     )
 
     private(set) var persistenceError: String?
@@ -132,7 +131,10 @@ final class AppSettings {
 
     private func reportPersistenceFailure(_ error: Error) {
         persistenceError = "A setting could not be saved. Try again."
-        logger.error("Settings persistence failed code=\((error as NSError).code, privacy: .public)")
+        logger.error(
+            "Settings persistence failed",
+            metadata: ["error.code": "\((error as NSError).code)"]
+        )
         DiagnosticsService.capture(
             error: error,
             category: "storage",

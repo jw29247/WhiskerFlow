@@ -1,4 +1,5 @@
 import SwiftUI
+import WhiskerFlowAppSupport
 
 @main
 struct WhiskerFlowApp: App {
@@ -7,6 +8,7 @@ struct WhiskerFlowApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
 
     init() {
+        Observability.start()
         DiagnosticsService.start()
         let appState = AppState()
         _appState = State(initialValue: appState)

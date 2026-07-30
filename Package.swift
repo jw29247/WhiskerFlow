@@ -19,13 +19,35 @@ let package = Package(
         // In-app auto-updates (appcast + EdDSA-signed updates). Sparkle ships as a
         // binary XCFramework; `script/bundle_app.sh` embeds & re-signs it.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
-        .package(url: "https://github.com/getsentry/sentry-cocoa", exact: "9.21.0")
+        .package(url: "https://github.com/getsentry/sentry-cocoa", exact: "9.21.0"),
+        // Pin the Swift 5.9-compatible OpenTelemetry release. Declaring the core
+        // package explicitly keeps SwiftPM from resolving its 2.x range to a
+        // Swift 6-only release.
+        .package(
+            url: "https://github.com/open-telemetry/opentelemetry-swift.git",
+            exact: "2.2.0"
+        ),
+        .package(
+            url: "https://github.com/open-telemetry/opentelemetry-swift-core.git",
+            exact: "2.2.0"
+        ),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.6.3")
     ],
     targets: [
         .target(name: "WhiskerFlowCore"),
         .target(
             name: "WhiskerFlowAppSupport",
-            dependencies: ["WhiskerFlowCore"]
+            dependencies: [
+                "WhiskerFlowCore",
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
+                .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core"),
+                .product(
+                    name: "OpenTelemetryProtocolExporterHTTP",
+                    package: "opentelemetry-swift"
+                ),
+                .product(name: "OTelSwiftLog", package: "opentelemetry-swift")
+            ]
         ),
         .executableTarget(
             name: "WhiskerFlow",
@@ -34,7 +56,10 @@ let package = Package(
                 "WhiskerFlowAppSupport",
                 .product(name: "WhisperKit", package: "WhisperKit"),
                 .product(name: "Sparkle", package: "Sparkle"),
-                .product(name: "Sentry", package: "sentry-cocoa")
+                .product(name: "Sentry", package: "sentry-cocoa"),
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
+                .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core")
             ],
             resources: [.copy("Resources/shared-vocabulary.json")]
         ),

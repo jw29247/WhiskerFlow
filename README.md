@@ -4,7 +4,9 @@ On-device push-to-talk dictation for macOS. Hold a key, speak, release — Whisk
 transcribes locally and pastes the text wherever your cursor is.
 
 - **Fast & private** — transcription runs on-device via [WhisperKit](https://github.com/argmaxinc/WhisperKit)
-  (Whisper on the Apple Neural Engine). Nothing is sent to a server.
+  (Whisper on the Apple Neural Engine). Audio and transcript text are never sent
+  to a server; privacy-safe operational telemetry goes to the project's
+  self-hosted Superlog instance.
 - **Zero-setup install** — no Python, no Homebrew Whisper. The model downloads itself on first use.
 - **Works offline too** — a built-in Apple Speech engine needs no download at all.
 - **Floating HUD** with a live level meter, a rich menu-bar popover, searchable/editable
@@ -64,6 +66,12 @@ Pick the engine, model size, and language in **Settings → Engine**.
 swift build          # build
 swift test           # run the WhiskerFlowCore test suite
 swift run WhiskerFlow # run (or use script/build_and_run.sh to run as a .app bundle)
+```
+
+Verify that a span, structured log, and metric reach Superlog:
+
+```sh
+SUPERLOG_LIVE_SMOKE=1 swift test --filter ObservabilitySmokeTests
 ```
 
 Package a distributable DMG + zip:

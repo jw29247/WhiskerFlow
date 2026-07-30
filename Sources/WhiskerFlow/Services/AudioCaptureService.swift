@@ -2,7 +2,7 @@
 import AudioToolbox
 import CoreAudio
 import Foundation
-import OSLog
+import Logging
 import WhiskerFlowAppSupport
 
 enum Microphone {
@@ -208,9 +208,8 @@ private final class ConversionFailureBox: @unchecked Sendable {
 @MainActor
 final class AudioCaptureService: AudioCapturing {
     private static let targetSampleRate = 16_000.0
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "agency.thatworks.WhiskerFlow",
-        category: "AudioCapture"
+    private let logger = Logging.Logger(
+        label: "agency.thatworks.WhiskerFlow.AudioCapture"
     )
     private let catalog: any AudioDeviceCataloging
     private let samples = LockedAudioBuffer()
@@ -258,7 +257,10 @@ final class AudioCaptureService: AudioCapturing {
                 UInt32(MemoryLayout<AudioDeviceID>.size)
             )
             guard status == noErr else {
-                logger.error("Device assignment failed status=\(status, privacy: .public)")
+                logger.error(
+                    "Device assignment failed",
+                    metadata: ["core_audio.status": "\(status)"]
+                )
                 throw AudioCaptureServiceError.deviceAssignmentFailed(status)
             }
         }
@@ -310,7 +312,10 @@ final class AudioCaptureService: AudioCapturing {
             } catch {
                 let isFirstFailure = failures.increment()
                 Task { @MainActor [weak self] in
-                    self?.logger.error("Audio conversion failed error=\(error.localizedDescription, privacy: .public)")
+                    self?.logger.error(
+                        "Audio conversion failed",
+                        metadata: ["error.code": "\((error as NSError).code)"]
+                    )
                     // AppState reports the count when a capture yields nothing
                     // usable; this only marks that conversion started failing at
                     // all, so partial failures are not invisible.
@@ -330,7 +335,13 @@ final class AudioCaptureService: AudioCapturing {
             try engine.start()
             self.engine = engine
             armConfigurationObservation(for: engine)
-            logger.info("Capture started selection=\(selection.persistedValue == "system-default" ? "default" : "specific", privacy: .public)")
+            logger.info(
+                "Capture started",
+                metadata: [
+                    "audio.input.kind":
+                        "\(selection.persistedValue == "system-default" ? "default" : "specific")"
+                ]
+            )
         } catch {
             inputNode.removeTap(onBus: 0)
             tapInstalled = false

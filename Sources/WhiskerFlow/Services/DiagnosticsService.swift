@@ -1,12 +1,11 @@
 import Foundation
-import OSLog
+import Logging
 import Sentry
 import WhiskerFlowAppSupport
 
 enum DiagnosticsService {
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "agency.thatworks.WhiskerFlow",
-        category: "Diagnostics"
+    private static let logger = Logging.Logger(
+        label: "agency.thatworks.WhiskerFlow.Diagnostics"
     )
 
     static func start() {
