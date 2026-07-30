@@ -9,6 +9,13 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>0.7.2</title>
+      <pubDate>Thu, 30 Jul 2026 13:59:27 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Fixes microphone permission recovery after access is denied or restricted, with automatic re-checking when WhiskerFlow becomes active.]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v0.7.2/WhiskerFlow-0.7.2.zip" sparkle:version="13" sparkle:shortVersionString="0.7.2" sparkle:edSignature="IxiRysmXaQfoEeWbD/uynrIambqsblDJjIPf3FuHOSj4jwJn9MGm7DN/63f+UB8ScCJIUV6Y5oc7x2xJZ1I2BA==" length="7222149" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>0.7.1</title>
       <pubDate>Thu, 30 Jul 2026 13:35:07 +0000</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
