@@ -20,6 +20,56 @@ actor WhisperKitEngine: TranscriptionEngine {
         let identifier = model.whisperKitIdentifier(
             multilingual: WhisperModel.requiresMultilingualModel(language: language)
         )
+        try await prepare(identifier: identifier, displayName: model.displayName)
+    }
+
+    /// Meeting Mode uses a pinned high-accuracy model without changing the
+    /// user's lightweight push-to-talk model preference.
+    func prepareMeeting(language: String?) async throws {
+        try await prepare(
+            identifier: Self.meetingModelIdentifier,
+            displayName: "WhisperKit meeting model"
+        )
+    }
+
+    func transcribeMeeting(
+        _ request: TranscriptionRequest
+    ) async throws -> WhiskerFlowCore.TranscriptionResult {
+        try await prepareMeeting(language: request.language)
+        guard let pipe else {
+            throw TranscriptionError.modelUnavailable("WhisperKit meeting model")
+        }
+        let deadline = Self.audioSeconds(at: request.audioURL)
+            .map(DecodeTimeoutPolicy.timeout(forAudioSeconds:)) ?? DecodeTimeoutPolicy.maximumTimeout
+        let results = try await decode(seconds: deadline) {
+            try await pipe.transcribe(
+                audioPath: request.audioURL.path,
+                decodeOptions: Self.decodingOptions(
+                    language: request.language,
+                    withoutTimestamps: false,
+                    wordTimestamps: true
+                )
+            )
+        }
+        let text = results.map(\.text)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw TranscriptionError.emptyTranscript }
+        return WhiskerFlowCore.TranscriptionResult(
+            text: text.plainTranscriptText,
+            segments: results.flatMap(\.segments).map {
+                WhiskerFlowCore.TranscriptionSegment(
+                    text: $0.text,
+                    start: Double($0.start),
+                    end: Double($0.end)
+                )
+            },
+            language: results.first?.language ?? request.language,
+            duration: results.first?.timings.inputAudioSeconds
+        )
+    }
+
+    private func prepare(identifier: String, displayName: String) async throws {
         if pipe != nil, loadedIdentifier == identifier { return }
 
         do {
@@ -53,7 +103,7 @@ actor WhisperKitEngine: TranscriptionEngine {
         } catch {
             pipe = nil
             loadedIdentifier = nil
-            throw TranscriptionError.modelUnavailable(model.displayName)
+            throw TranscriptionError.modelUnavailable(displayName)
         }
     }
 
@@ -68,7 +118,11 @@ actor WhisperKitEngine: TranscriptionEngine {
         let results = try await decode(seconds: deadline) {
             try await pipe.transcribe(
                 audioPath: request.audioURL.path,
-                decodeOptions: Self.decodingOptions(language: request.language)
+                decodeOptions: Self.decodingOptions(
+                    language: request.language,
+                    withoutTimestamps: true,
+                    wordTimestamps: false
+                )
             )
         }
 
@@ -104,7 +158,11 @@ actor WhisperKitEngine: TranscriptionEngine {
         let results = try await decode(seconds: DecodeTimeoutPolicy.livePartialTimeout) {
             try await pipe.transcribe(
                 audioArray: samples,
-                decodeOptions: Self.decodingOptions(language: language)
+                decodeOptions: Self.decodingOptions(
+                    language: language,
+                    withoutTimestamps: true,
+                    wordTimestamps: false
+                )
             )
         }
 
@@ -141,7 +199,11 @@ actor WhisperKitEngine: TranscriptionEngine {
         return Double(file.length) / sampleRate
     }
 
-    private static func decodingOptions(language: String?) -> DecodingOptions {
+    private static func decodingOptions(
+        language: String?,
+        withoutTimestamps: Bool,
+        wordTimestamps: Bool
+    ) -> DecodingOptions {
         // WhisperKit 0.13 derives `detectLanguage` from `!usePrefillPrompt`, so
         // auto-detect stays off unless forced on. A nil language is the only
         // case that needs it, and it always loads the multilingual weights.
@@ -151,8 +213,11 @@ actor WhisperKitEngine: TranscriptionEngine {
             usePrefillPrompt: true,
             detectLanguage: language == nil,
             skipSpecialTokens: true,
-            withoutTimestamps: true,
+            withoutTimestamps: withoutTimestamps,
+            wordTimestamps: wordTimestamps,
             chunkingStrategy: .vad
         )
     }
+
+    static let meetingModelIdentifier = "openai_whisper-large-v3-v20240930_turbo_632MB"
 }

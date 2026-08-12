@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import SwiftUI
 
 struct OnboardingView: View {
@@ -51,6 +52,63 @@ struct OnboardingView: View {
             }
 
             PermissionRow(
+                title: "Screen Recording",
+                detail: "Required to capture Mac system output. WhiskerFlow retains audio only, never screen frames.",
+                systemImage: "rectangle.inset.filled.and.person.filled",
+                granted: appState.hasScreenRecordingPermission
+            ) {
+                HStack {
+                    Button("Open Settings") {
+                        appState.requestScreenRecordingPermission()
+                        Self.openSettings("Privacy_ScreenCapture")
+                    }
+                    Button("Re-check") { appState.refreshScreenRecordingPermission() }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Atlas Meeting Capture", systemImage: "person.2.wave.2")
+                    .font(.headline)
+                Text("Pair this Mac so scheduled calls can be recorded locally and uploaded as encrypted chunks. The device token is stored in Keychain.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("Atlas HTTPS URL", text: $appState.settings.atlasBaseURL)
+                    .textFieldStyle(.roundedBorder)
+                SecureField("Atlas device token", text: $appState.settings.atlasDeviceToken)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Image(systemName: appState.isAtlasPaired ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(appState.isAtlasPaired ? .green : .orange)
+                    Text(appState.isAtlasPaired ? "Paired" : "Pairing required")
+                        .font(.caption)
+                    Spacer()
+                    Button("Re-check") { appState.refreshMeetingConfiguration() }
+                }
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 10).fill(.quaternary.opacity(0.5)))
+
+            HStack(spacing: 14) {
+                Label(
+                    appState.isMeetingStorageAvailable ? "Local storage ready" : "At least 500 MB local storage is required",
+                    systemImage: appState.isMeetingStorageAvailable ? "internaldrive.fill" : "externaldrive.badge.xmark"
+                )
+                .font(.caption)
+                .foregroundStyle(appState.isMeetingStorageAvailable ? .green : .orange)
+                Spacer()
+                Label(
+                    appState.meetingModelState == .ready
+                        ? "Meeting transcription and diarization ready"
+                        : "WhisperKit + SpeakerKit meeting model preparing",
+                    systemImage: appState.meetingModelState == .ready
+                        ? "checkmark.circle"
+                        : "arrow.down.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(appState.meetingModelState == .ready ? .green : .secondary)
+            }
+
+            PermissionRow(
                 title: "Speech Recognition",
                 detail: "Used by the built-in Apple Speech fallback (optional).",
                 systemImage: "waveform.badge.mic",
@@ -62,7 +120,7 @@ struct OnboardingView: View {
             Spacer(minLength: 0)
 
             HStack {
-                Text("The first WhisperKit transcription downloads a model (~150 MB).")
+                Text("Meeting Mode downloads a larger local WhisperKit model and SpeakerKit assets; processing stays on this Mac.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -71,7 +129,7 @@ struct OnboardingView: View {
             }
         }
         .padding(28)
-        .frame(width: 540, height: 460)
+        .frame(width: 560, height: 700)
     }
 
     static func openSettings(_ anchor: String) {

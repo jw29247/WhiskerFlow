@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import Logging
 import OpenTelemetryApi
@@ -78,6 +79,7 @@ final class AppState {
     /// Corrections spotted in the user's last transcript edit, offered as
     /// personal vocabulary rules until accepted or dismissed.
     var pendingVocabularySuggestions: [VocabularyCorrection] = []
+    var meetingModelState: ModelState = .unloaded
 
     var settings: AppSettings
 
@@ -85,7 +87,8 @@ final class AppState {
         label: "agency.thatworks.WhiskerFlow.AppState"
     )
     private let store: TranscriptStore
-    private let transcription = TranscriptionService()
+    private let transcription: TranscriptionService
+    private let meetingCapture: MeetingCaptureCoordinator
     private let live: LiveDictationSession
     private let recordingCoordinator = RecordingCoordinator()
     private let pasteService = PasteService()
@@ -97,6 +100,7 @@ final class AppState {
     private var audioDeviceMonitor: AudioDeviceChangeMonitor?
     private var deviceRefreshTask: Task<Void, Never>?
     private var warmUpTask: Task<Void, Never>?
+    private var meetingWarmUpTask: Task<Void, Never>?
     private let pendingPersistWork = PendingWorkTracker()
     private var hasStarted = false
     private var recordingIntentActive = false
@@ -121,10 +125,19 @@ final class AppState {
         store: TranscriptStore = .defaultStore(),
         microphonePermission: MicrophonePermissionController? = nil
     ) {
-        self.settings = settings ?? AppSettings()
-        self.store = store
-        self.microphonePermission = microphonePermission ?? MicrophonePermissionController(
+        let resolvedSettings = settings ?? AppSettings()
+        let resolvedMicrophonePermission = microphonePermission ?? MicrophonePermissionController(
             provider: AVCaptureMicrophoneAuthorizationProvider()
+        )
+        let transcription = TranscriptionService()
+        self.settings = resolvedSettings
+        self.store = store
+        self.microphonePermission = resolvedMicrophonePermission
+        self.transcription = transcription
+        self.meetingCapture = MeetingCaptureCoordinator(
+            settings: resolvedSettings,
+            microphonePermission: resolvedMicrophonePermission,
+            transcription: transcription
         )
         self.live = LiveDictationSession(transcription: transcription)
         live.onLevel = { [weak self] level, peak in
@@ -206,6 +219,28 @@ final class AppState {
         microphonePermission.detail
     }
 
+  var meetingStatus: MeetingMenuBarStatus { meetingCapture.status }
+  var meetingStatusDetail: String { meetingCapture.statusDetail }
+  var activeMeetingTitle: String? { meetingCapture.activeMeetingTitle }
+  var isMeetingCapturing: Bool { meetingCapture.isCapturing }
+
+    var isAtlasPaired: Bool {
+        guard URL(string: settings.atlasBaseURL)?.scheme == "https" else { return false }
+        return !settings.atlasDeviceToken.isEmpty
+    }
+
+    var hasScreenRecordingPermission: Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
+    var isMeetingStorageAvailable: Bool {
+        let root = StorageLocations.applicationSupportRootOrTemporary()
+            .appendingPathComponent("MeetingRecordings", isDirectory: true)
+        guard let values = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+              let capacity = values.volumeAvailableCapacityForImportantUsage else { return false }
+        return capacity >= 500 * 1024 * 1024
+    }
+
     // MARK: - Lifecycle
 
     func start() {
@@ -241,8 +276,10 @@ final class AppState {
         sharedVocabulary.startPeriodicRefresh()
         startAudioDeviceMonitor()
         startHotkeyMonitor()
+        meetingCapture.start()
         hudController = RecordingHUDController(appState: self)
         warmUpEngine()
+        warmUpMeetingEngine()
     }
 
     func applyActivationPolicy() {
@@ -251,7 +288,7 @@ final class AppState {
 
     /// Whether quitting now would drop a recording or an unsaved transcript.
     var hasPendingWork: Bool {
-        isRecording || recordingCoordinator.phase != .idle || !pendingPersistWork.isIdle
+        isRecording || recordingCoordinator.phase != .idle || meetingCapture.isBusy || !pendingPersistWork.isIdle
     }
 
     func stopMonitors() {
@@ -259,6 +296,7 @@ final class AppState {
         hotkeyMonitor = nil
         audioDeviceMonitor?.stop()
         audioDeviceMonitor = nil
+        meetingCapture.stopMonitoring()
     }
 
     /// Wind down for termination. Monitors go first so no new session can start,
@@ -268,8 +306,11 @@ final class AppState {
         stopMonitors()
         warmUpTask?.cancel()
         warmUpTask = nil
+        meetingWarmUpTask?.cancel()
+        meetingWarmUpTask = nil
         deviceRefreshTask?.cancel()
         deviceRefreshTask = nil
+        await meetingCapture.shutdown()
 
         switch recordingCoordinator.phase {
         case .preparing:
@@ -322,6 +363,24 @@ final class AppState {
 
     func reloadHotkey() {
         hotkeyMonitor?.update(combo: settings.activeHotkeyCombo)
+    }
+
+    func warmUpMeetingEngine() {
+        meetingWarmUpTask?.cancel()
+        guard settings.meetingModeEnabled else {
+            meetingModelState = .unloaded
+            return
+        }
+        let language = settings.resolvedLanguage
+        meetingModelState = .preparing
+        meetingWarmUpTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let ready = await transcription.prepareMeeting(language: language)
+            guard !Task.isCancelled, self.settings.resolvedLanguage == language else { return }
+            meetingModelState = ready
+                ? .ready
+                : .failed("Could not load the local meeting model. Encrypted audio will be retained for repair.")
+        }
     }
 
     /// Suspend the live hotkey while the user is recording a new shortcut, so the
@@ -393,12 +452,31 @@ final class AppState {
         let previous = microphonePermission.authorizationState
         microphonePermission.refreshForApplicationActivation()
         handleMicrophoneAuthorizationTransition(from: previous)
+        meetingCapture.refreshConfiguration()
     }
 
     func requestMicrophonePermission() async {
         let previous = microphonePermission.authorizationState
         _ = await microphonePermission.requestIfNeeded()
         handleMicrophoneAuthorizationTransition(from: previous)
+    }
+
+    func refreshScreenRecordingPermission() {
+        _ = hasScreenRecordingPermission
+    }
+
+    func requestScreenRecordingPermission() {
+        _ = CGRequestScreenCaptureAccess()
+        refreshScreenRecordingPermission()
+    }
+
+    func toggleMeetingCapture() {
+        meetingCapture.toggleManualCapture()
+    }
+
+    func refreshMeetingConfiguration() {
+        warmUpMeetingEngine()
+        meetingCapture.refreshConfiguration()
     }
 
     func requestSpeechPermission() async -> Bool {

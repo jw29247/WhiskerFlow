@@ -240,6 +240,8 @@ final class AudioCaptureService: AudioCapturing {
 
     /// Normalized 0...1 RMS level plus the buffer's absolute peak.
     var onLevel: ((Float, Float) -> Void)?
+    /// Normalized 16 kHz mono samples for Meeting Mode's durable writer.
+    var onSamples: (([Float]) -> Void)?
     var onConfigurationChange: (() -> Void)?
 
     init() {
@@ -324,6 +326,7 @@ final class AudioCaptureService: AudioCapturing {
                     targetFormat: targetFormat
                 )
                 store.append(converted)
+                Task { @MainActor [weak self] in self?.onSamples?(converted) }
                 let level = Self.level(from: converted)
                 let peak = Self.peak(from: converted)
                 Task { @MainActor [weak self] in self?.onLevel?(level, peak) }

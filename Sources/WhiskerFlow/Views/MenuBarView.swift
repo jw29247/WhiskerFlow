@@ -50,6 +50,36 @@ struct MenuBarView: View {
                 }
             }
 
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                let meetingIsRecording = appState.isMeetingCapturing
+                HStack {
+                    Label(
+                        "Meeting Mode: \(appState.meetingStatus.displayName)",
+                        systemImage: meetingIsRecording ? "record.circle.fill" : "person.2.wave.2"
+                    )
+                    .foregroundStyle(meetingIsRecording ? .red : .primary)
+                    Spacer()
+                    if let title = appState.activeMeetingTitle {
+                        Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Text(appState.meetingStatusDetail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    appState.toggleMeetingCapture()
+                } label: {
+                    Label(
+                        meetingIsRecording ? "Stop Meeting Capture" : "Start Ad Hoc Meeting",
+                        systemImage: meetingIsRecording ? "stop.fill" : "record.circle"
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(appState.meetingStatus == .uploading)
+            }
+
             if appState.retryQueue.count > 0 {
                 Divider()
                 Button {

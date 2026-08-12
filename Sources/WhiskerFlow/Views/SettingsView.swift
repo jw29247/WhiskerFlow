@@ -62,6 +62,28 @@ struct SettingsView: View {
                     .disabled(appState.microphoneControlsLocked)
             }
 
+            Section("Meeting Mode") {
+                Toggle("Automatically capture scheduled meetings", isOn: $appState.settings.meetingModeEnabled)
+                    .onChange(of: appState.settings.meetingModeEnabled) { _, _ in
+                        appState.refreshMeetingConfiguration()
+                    }
+                TextField("Atlas HTTPS URL", text: $appState.settings.atlasBaseURL)
+                    .textContentType(.URL)
+                SecureField("Atlas device token", text: $appState.settings.atlasDeviceToken)
+                HStack {
+                    Label(
+                        appState.meetingStatus.displayName,
+                        systemImage: appState.meetingStatus == .covered ? "checkmark.circle.fill" : "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(appState.meetingStatus == .covered ? .green : .orange)
+                    Spacer()
+                    Button("Re-check") { appState.refreshMeetingConfiguration() }
+                }
+                Text("Capture is local-first: network failures leave encrypted chunks queued on this Mac. Audio is never sent to cloud speech recognition.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Output") {
                 Picker("When done", selection: $appState.settings.delivery) {
                     ForEach(DeliveryMode.allCases) { Text($0.displayName).tag($0) }
