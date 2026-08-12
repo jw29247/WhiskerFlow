@@ -33,8 +33,10 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
     private let writer: MeetingPCMChunkWriter
     private let microphonePending = LockedAudioBuffer()
     private let systemPending = LockedAudioBuffer()
-    private var stream: SCStream?
-    private var isRunning = false
+  private var stream: SCStream?
+  private var isRunning = false
+  private var acceptingSamples = false
+  private var microphoneSampleCount = 0
     private var systemSampleCount = 0
 
     var onFailure: ((Error) -> Void)?
@@ -55,9 +57,15 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
     func start(selection: AudioInputSelection) async throws {
         guard !isRunning else { return }
         microphone.onSamples = { [weak self] samples in
-            guard let self else { return }
-            do {
-                _ = try writer.append(samples, track: .microphone)
+          guard let self else { return }
+          guard self.acceptingSamples else { return }
+          do {
+                _ = try writer.append(
+                    samples,
+                    track: .microphone,
+                    sourceStartMs: Int64(microphoneSampleCount / 16)
+                )
+                microphoneSampleCount += samples.count
                 microphonePending.append(samples)
                 try mixAvailable()
             } catch {
@@ -65,8 +73,6 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
             }
         }
         microphone.onLevel = { [weak self] level, _ in self?.onLevel?(level) }
-        try microphone.start(selection: selection)
-
         do {
             let content = try await SCShareableContent.current
             guard let display = content.displays.first else { throw MeetingAudioCaptureError.displayUnavailable }
@@ -86,10 +92,23 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
                 type: .audio,
                 sampleHandlerQueue: DispatchQueue(label: "agency.thatworks.WhiskerFlow.meeting-audio")
             )
-            try await stream.startCapture()
+            // Resolve ScreenCaptureKit's shareable content before opening the
+            // microphone, then arm both callbacks only after the system stream
+            // is running. Samples observed during either startup phase are
+            // discarded instead of creating an unaligned prefix.
+            microphoneSampleCount = 0
+            systemSampleCount = 0
             self.stream = stream
+            try await stream.startCapture()
+            try microphone.start(selection: selection)
+            acceptingSamples = true
             isRunning = true
-        } catch {
+          } catch {
+            acceptingSamples = false
+            if let activeStream = self.stream {
+              try? await activeStream.stopCapture()
+            }
+            self.stream = nil
             microphone.cancel()
             microphone.onSamples = nil
             if let error = error as? MeetingAudioCaptureError { throw error }
@@ -97,7 +116,8 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         }
   }
 
-  func stop() async throws -> [MeetingRecordingChunkDescriptor] {
+    func stop() async throws -> [MeetingRecordingChunkDescriptor] {
+    acceptingSamples = false
     if let stream {
       try? await stream.stopCapture()
     }
@@ -110,6 +130,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
     }
 
     func cancel() async {
+        acceptingSamples = false
         if let stream { try? await stream.stopCapture() }
         self.stream = nil
         isRunning = false
@@ -133,6 +154,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         guard type == .audio, let samples = Self.samples(from: sampleBuffer) else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
+            guard acceptingSamples else { return }
             do {
                 _ = try writer.append(samples, track: .system, sourceStartMs: Int64(systemSampleCount / 16))
                 systemSampleCount += samples.count

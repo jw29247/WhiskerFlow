@@ -229,9 +229,7 @@ final class AppState {
         return !settings.atlasDeviceToken.isEmpty
     }
 
-    var hasScreenRecordingPermission: Bool {
-        CGPreflightScreenCaptureAccess()
-    }
+    var hasScreenRecordingPermission = false
 
     var isMeetingStorageAvailable: Bool {
         let root = StorageLocations.applicationSupportRootOrTemporary()
@@ -268,6 +266,7 @@ final class AppState {
         selectedRecordID = records.first?.id
         refreshAccessibilityPermission()
         refreshMicrophonePermission()
+        refreshScreenRecordingPermission()
         // SwiftUI's settings Form is backed by NSTableView. Publishing the initial
         // catalog synchronously while scene restoration is laying it out can
         // re-enter its delegate and crash AppKit; defer one actor turn.
@@ -367,7 +366,7 @@ final class AppState {
 
     func warmUpMeetingEngine() {
         meetingWarmUpTask?.cancel()
-        guard settings.meetingModeEnabled else {
+        guard settings.meetingModeEnabled, isAtlasPaired else {
             meetingModelState = .unloaded
             return
         }
@@ -452,6 +451,7 @@ final class AppState {
         let previous = microphonePermission.authorizationState
         microphonePermission.refreshForApplicationActivation()
         handleMicrophoneAuthorizationTransition(from: previous)
+        refreshScreenRecordingPermission()
         meetingCapture.refreshConfiguration()
     }
 
@@ -462,7 +462,7 @@ final class AppState {
     }
 
     func refreshScreenRecordingPermission() {
-        _ = hasScreenRecordingPermission
+        hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
     }
 
     func requestScreenRecordingPermission() {

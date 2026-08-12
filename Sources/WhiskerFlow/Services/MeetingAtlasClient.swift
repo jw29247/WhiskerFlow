@@ -13,6 +13,11 @@ struct AtlasCaptureScheduleIntent: Codable, Sendable {
     let overlapsPrevious: Bool
 }
 
+struct MeetingAtlasRecordingCompletion: Sendable {
+    let status: String
+    let duplicate: Bool
+}
+
 protocol MeetingAtlasClient: Sendable {
     func schedule(fromMs: Int64, toMs: Int64) async throws -> [AtlasCaptureScheduleIntent]
     func heartbeat(
@@ -32,13 +37,20 @@ protocol MeetingAtlasClient: Sendable {
         meetingID: String,
         captureSessionID: UUID,
         trackChunkCounts: [MeetingAudioTrack: Int],
-        sourceManifestHash: String?
+        sourceManifestHash: String?,
+        playbackChunkCount: Int?
     ) async throws -> String
     func uploadChunk(
         artifactID: String,
         descriptor: MeetingRecordingChunkDescriptor,
         body: Data
     ) async throws
+    func uploadPlaybackChunk(
+        artifactID: String,
+        descriptor: MeetingRecordingChunkDescriptor,
+        body: Data
+    ) async throws
+    func completePlayback(artifactID: String) async throws
     func completeRecording(
         artifactID: String,
         durationMs: Int64,
@@ -46,8 +58,9 @@ protocol MeetingAtlasClient: Sendable {
         hasSourceGap: Bool,
         missingTracks: [MeetingAudioTrack],
         canonicalChecksum: String?,
+        sourceManifestHash: String?,
         modelVersion: String?
-    ) async throws
+    ) async throws -> MeetingAtlasRecordingCompletion
     func appendSegments(meetingID: String, turns: [MeetingSpeakerTurn]) async throws
     func finalize(
         meetingID: String,
@@ -146,7 +159,8 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
         meetingID: String,
         captureSessionID: UUID,
         trackChunkCounts: [MeetingAudioTrack: Int],
-        sourceManifestHash: String?
+        sourceManifestHash: String?,
+        playbackChunkCount: Int?
     ) async throws -> String {
         let tracks = trackChunkCounts.map { ["track": $0.key.rawValue, "expectedChunkCount": $0.value] }
         var args: [String: Any] = [
@@ -156,6 +170,9 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
         ]
         if let sourceManifestHash, !sourceManifestHash.isEmpty {
             args["sourceManifestHash"] = sourceManifestHash
+        }
+        if let playbackChunkCount {
+            args["playbackChunkCount"] = playbackChunkCount
         }
         let response = try await call(
             tool: "notetaker.prepareRecording",
@@ -187,9 +204,33 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
         try validate(response)
     }
 
-    func completeRecording(artifactID: String, durationMs: Int64, trackChunkCounts: [MeetingAudioTrack: Int], hasSourceGap: Bool, missingTracks: [MeetingAudioTrack], canonicalChecksum: String?, modelVersion: String?) async throws {
+    func uploadPlaybackChunk(
+        artifactID: String,
+        descriptor: MeetingRecordingChunkDescriptor,
+        body: Data
+    ) async throws {
+        let url = baseURL.appendingPathComponent("api/notetaker/upload")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(String(Int(Date().timeIntervalSince1970 * 1_000)), forHTTPHeaderField: "x-request-timestamp")
+        request.setValue("playback", forHTTPHeaderField: "x-recording-kind")
+        request.setValue(artifactID, forHTTPHeaderField: "x-recording-artifact-id")
+        request.setValue(String(descriptor.sequence), forHTTPHeaderField: "x-recording-sequence")
+        request.setValue(String(body.count), forHTTPHeaderField: "x-recording-byte-size")
+        let checksum = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
+        request.setValue(checksum, forHTTPHeaderField: "x-recording-checksum")
+        request.setValue(String(descriptor.startMs), forHTTPHeaderField: "x-recording-start-ms")
+        request.setValue(String(descriptor.endMs), forHTTPHeaderField: "x-recording-end-ms")
+        let (_, response) = try await session.data(for: request)
+        try validate(response)
+    }
+
+    func completeRecording(artifactID: String, durationMs: Int64, trackChunkCounts: [MeetingAudioTrack: Int], hasSourceGap: Bool, missingTracks: [MeetingAudioTrack], canonicalChecksum: String?, sourceManifestHash: String?, modelVersion: String?) async throws -> MeetingAtlasRecordingCompletion {
         var args: [String: Any] = [
-            "externalRef": "complete-\(artifactID)-\(durationMs)",
+            "externalRef": "complete-\(artifactID)",
             "artifactId": artifactID,
             "durationMs": durationMs,
             "trackChunkCounts": trackChunkCounts.map { ["track": $0.key.rawValue, "chunkCount": $0.value] },
@@ -197,10 +238,33 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
             "missingTracks": missingTracks.map(\.rawValue),
         ]
         if let canonicalChecksum { args["canonicalChecksum"] = canonicalChecksum }
+        if let sourceManifestHash { args["sourceManifestHash"] = sourceManifestHash }
         if let modelVersion { args["modelVersion"] = modelVersion }
-        _ = try await call(
+        let response = try await call(
             tool: "notetaker.completeRecording",
             args: args
+        )
+        guard let row = response as? [String: Any] else {
+            throw MeetingAtlasClientError.invalidResponse
+        }
+        let completed = row["completed"] as? Bool ?? false
+        let duplicate = row["duplicate"] as? Bool ?? false
+        if !completed && !duplicate {
+            throw MeetingAtlasClientError.server("Atlas is still waiting for recording chunks")
+        }
+        return MeetingAtlasRecordingCompletion(
+            status: row["status"] as? String ?? "partial",
+            duplicate: duplicate
+        )
+    }
+
+    func completePlayback(artifactID: String) async throws {
+        _ = try await call(
+            tool: "notetaker.completePlayback",
+            args: [
+                "externalRef": "complete-playback-\(artifactID)",
+                "artifactId": artifactID,
+            ]
         )
     }
 
@@ -214,9 +278,8 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
                 "speakerProvider": {
                     switch turn.speaker.resolution {
                     case .selfSpeaker: return "whisperkit"
-                    case .googleMeet: return "google_meet"
-                    case .manual: return "manual"
                     case .diarized, .unknown: return "speakerkit"
+                    case .googleMeet, .manual: return "speakerkit"
                     }
                 }(),
                 "startMs": turn.startMs,

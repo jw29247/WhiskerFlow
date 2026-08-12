@@ -106,7 +106,10 @@ final class AppSettings {
         vocabulary = Self.loadVocabulary(from: defaults) ?? Vocabulary()
         formatting = Self.loadFormatting(from: defaults) ?? FormattingOptions()
         atlasBaseURL = defaults.string(forKey: Keys.atlasBaseURL) ?? ""
-        meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? true
+        // Meeting Mode is an opt-in capture surface. Existing installs must not
+        // begin recording or download the large local meeting model until the
+        // user pairs a device and explicitly enables it.
+        meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? false
         legacySelectedDeviceID = defaults.string(forKey: Keys.selectedDeviceID)
         launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
         defaults.removeObject(forKey: Keys.sharedVocabularyURL)
