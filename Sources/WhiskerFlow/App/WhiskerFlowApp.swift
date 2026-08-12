@@ -33,6 +33,11 @@ struct WhiskerFlowApp: App {
                 }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
                 .disabled(appState.selectedRecord?.text.isEmpty ?? true)
+
+                Button("Toggle Meeting Capture") {
+                    appState.toggleMeetingCapture()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .option, .shift])
             }
         }
 
@@ -42,7 +47,9 @@ struct WhiskerFlowApp: App {
 
         MenuBarExtra(
             "WhiskerFlow",
-            systemImage: appState.isRecording ? "waveform.circle.fill" : "waveform.circle",
+            systemImage: appState.meetingStatus == .recording
+                ? "record.circle.fill"
+                : (appState.isRecording ? "waveform.circle.fill" : "waveform.circle"),
             isInserted: $appState.settings.showMenuBarExtra
         ) {
             MenuBarView(appState: appState, updaterService: updaterService)

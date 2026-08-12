@@ -9,6 +9,7 @@ import WhiskerFlowCore
 @Observable
 final class AppSettings {
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let meetingTokenStore: MeetingCaptureTokenStore
     @ObservationIgnored private let logger = Logging.Logger(
         label: "agency.thatworks.WhiskerFlow.Settings"
     )
@@ -38,6 +39,42 @@ final class AppSettings {
     var vocabulary: Vocabulary { didSet { persist(vocabulary, key: Keys.vocabulary) } }
     var formatting: FormattingOptions { didSet { persist(formatting, key: Keys.formatting) } }
 
+    /// Atlas endpoint is intentionally not inferred. Pairing supplies the
+    /// deployment URL, while the device token itself remains in Keychain.
+    var atlasBaseURL: String { didSet { defaults.set(atlasBaseURL, forKey: Keys.atlasBaseURL) } }
+    var meetingModeEnabled: Bool { didSet { defaults.set(meetingModeEnabled, forKey: Keys.meetingModeEnabled) } }
+
+    var atlasDeviceToken: String {
+        get { meetingTokenStore.read() ?? "" }
+        set {
+            do {
+                if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    try meetingTokenStore.delete()
+                } else {
+                    try meetingTokenStore.write(newValue.trimmingCharacters(in: .whitespacesAndNewlines))
+                }
+                persistenceError = nil
+            } catch {
+                reportPersistenceFailure(error)
+            }
+        }
+    }
+
+    func cachedMeetingSchedule() -> [AtlasCaptureScheduleIntent] {
+        guard let data = defaults.data(forKey: Keys.cachedMeetingSchedule) else { return [] }
+        return (try? JSONDecoder().decode([AtlasCaptureScheduleIntent].self, from: data)) ?? []
+    }
+
+    func cacheMeetingSchedule(_ intents: [AtlasCaptureScheduleIntent]) {
+        do {
+            let data = try JSONEncoder().encode(Array(intents.prefix(50)))
+            defaults.set(data, forKey: Keys.cachedMeetingSchedule)
+            persistenceError = nil
+        } catch {
+            reportPersistenceFailure(error)
+        }
+    }
+
     @ObservationIgnored private(set) var legacySelectedDeviceID: String?
 
     var launchAtLogin: Bool {
@@ -49,6 +86,7 @@ final class AppSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.meetingTokenStore = MeetingCaptureTokenStore()
 
         engine = defaults.string(forKey: Keys.engine).flatMap(TranscriptionEngineKind.init) ?? .whisperKit
         model = defaults.string(forKey: Keys.model).flatMap(WhisperModel.init) ?? .tiny
@@ -67,6 +105,11 @@ final class AppSettings {
         whisperArguments = defaults.string(forKey: Keys.whisperArguments) ?? Self.defaultWhisperArguments
         vocabulary = Self.loadVocabulary(from: defaults) ?? Vocabulary()
         formatting = Self.loadFormatting(from: defaults) ?? FormattingOptions()
+        atlasBaseURL = defaults.string(forKey: Keys.atlasBaseURL) ?? ""
+        // Meeting Mode is an opt-in capture surface. Existing installs must not
+        // begin recording or download the large local meeting model until the
+        // user pairs a device and explicitly enables it.
+        meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? false
         legacySelectedDeviceID = defaults.string(forKey: Keys.selectedDeviceID)
         launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
         defaults.removeObject(forKey: Keys.sharedVocabularyURL)
@@ -205,5 +248,8 @@ final class AppSettings {
         static let formatting = "formattingOptions"
         static let sharedVocabularyURL = "sharedVocabularyURL"
         static let launchAtLogin = "launchAtLogin"
+        static let atlasBaseURL = "atlasBaseURL"
+        static let meetingModeEnabled = "meetingModeEnabled"
+        static let cachedMeetingSchedule = "cachedMeetingSchedule"
     }
 }

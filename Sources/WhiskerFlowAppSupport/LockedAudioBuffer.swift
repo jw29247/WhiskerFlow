@@ -46,4 +46,17 @@ public final class LockedAudioBuffer: @unchecked Sendable {
         samples.removeAll(keepingCapacity: true)
         return result
     }
+
+    /// Removes and returns up to `count` samples without copying the remainder.
+    /// Meeting Mode uses this to align microphone and system-output buffers for
+    /// the canonical mixed track while each source track remains independent.
+    public func drainPrefix(_ count: Int) -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        let amount = max(0, min(count, samples.count))
+        guard amount > 0 else { return [] }
+        let result = Array(samples.prefix(amount))
+        samples.removeFirst(amount)
+        return result
+    }
 }

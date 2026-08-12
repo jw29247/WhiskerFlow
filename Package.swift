@@ -13,9 +13,11 @@ let package = Package(
         .library(name: "WhiskerFlowAppSupport", targets: ["WhiskerFlowAppSupport"])
     ],
     dependencies: [
-        // v0.13.0 is the last lightweight release (only swift-transformers);
-        // v0.18.0+ pull in Vapor and a web-server monorepo we don't want.
-        .package(url: "https://github.com/argmaxinc/WhisperKit", exact: "0.13.0"),
+        // Argmax's OSS distribution keeps WhisperKit and SpeakerKit on one
+        // compatible Swift package. Server targets are disabled by default by
+        // the upstream package, so this does not bring a cloud ASR service into
+        // the app.
+        .package(url: "https://github.com/argmaxinc/argmax-oss-swift", exact: "1.1.0"),
         // In-app auto-updates (appcast + EdDSA-signed updates). Sparkle ships as a
         // binary XCFramework; `script/bundle_app.sh` embeds & re-signs it.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
@@ -54,7 +56,8 @@ let package = Package(
             dependencies: [
                 "WhiskerFlowCore",
                 "WhiskerFlowAppSupport",
-                .product(name: "WhisperKit", package: "WhisperKit"),
+                .product(name: "WhisperKit", package: "argmax-oss-swift"),
+                .product(name: "SpeakerKit", package: "argmax-oss-swift"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "Sentry", package: "sentry-cocoa"),
                 .product(name: "Logging", package: "swift-log"),
