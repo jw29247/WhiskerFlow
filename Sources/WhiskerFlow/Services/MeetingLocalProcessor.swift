@@ -127,8 +127,7 @@ actor MeetingLocalProcessor {
   }
 
   private func matchesSelf(_ segment: TranscriptionSegment, in selfSegments: [TranscriptionSegment])
-    -> Bool
-  {
+    -> Bool {
     selfSegments.contains { candidate in
       let overlap = max(0, min(segment.end, candidate.end) - max(segment.start, candidate.start))
       let duration = max(0.01, segment.end - segment.start)
@@ -145,7 +144,7 @@ actor MeetingLocalProcessor {
     guard !samples.isEmpty else { return [] }
     // Audio is retained locally and the caller will upload a safe
     // `Unknown speaker` transcript if the shared diarizer cannot load/run.
-    return (try? await transcription.diarizeMeeting(samples: samples)) ?? []
+    return await (try? transcription.diarizeMeeting(samples: samples)) ?? []
   }
 
   private func diarizedSpeaker(

@@ -429,8 +429,7 @@ final class MeetingCaptureCoordinator {
       var canonicalHasher = SHA256()
       for descriptor in uploaded.chunks
         .filter({ $0.track == .mixed })
-        .sorted(by: { $0.sequence < $1.sequence })
-      {
+        .sorted(by: { $0.sequence < $1.sequence }) {
         canonicalHasher.update(
           data: try store.readChunk(sessionID: sessionID, descriptor: descriptor))
       }

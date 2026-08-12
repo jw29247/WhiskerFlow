@@ -15,8 +15,7 @@ actor TranscriptionService {
   private var meetingSpeakerKit: SpeakerKit?
 
   @discardableResult
-  func prepare(kind: TranscriptionEngineKind, model: WhisperModel, language: String?) async -> Bool
-  {
+  func prepare(kind: TranscriptionEngineKind, model: WhisperModel, language: String?) async -> Bool {
     switch kind {
     case .whisperKit:
       do {
@@ -39,8 +38,7 @@ actor TranscriptionService {
   /// Transcribe an in-memory 16 kHz mono float buffer with the warm WhisperKit
   /// pipe (single shared model instance — no extra load). Drives live dictation.
   func transcribeSamples(_ samples: [Float], language: String?, model: WhisperModel) async throws
-    -> TranscriptionResult
-  {
+    -> TranscriptionResult {
     try await whisperKit.transcribe(samples: samples, language: language, model: model)
   }
 
