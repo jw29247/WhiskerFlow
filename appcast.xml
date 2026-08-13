@@ -9,6 +9,13 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>0.8.1</title>
+      <pubDate>Thu, 13 Aug 2026 21:05:35 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[WhiskerFlow 0.8.1 adds one-click Atlas sign-in for Meeting Mode via Clerk, with secure native callback pairing.]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v0.8.1/WhiskerFlow-0.8.1.zip" sparkle:version="15" sparkle:shortVersionString="0.8.1" sparkle:edSignature="VVP8FqeKR03zzBX/wrv6vBohdVAq1NqGuI447Scl7A/NpG1A6mYAco5zI2J3lU+WrXOZ+PbjZEdxuoJDi0meAQ==" length="7451943" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>0.8.0</title>
       <pubDate>Wed, 12 Aug 2026 15:01:36 +0000</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
