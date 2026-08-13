@@ -9,6 +9,13 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>0.8.3</title>
+      <pubDate>Thu, 13 Aug 2026 21:44:08 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Meeting Hub: see upcoming and previous Atlas meetings, record scheduled events, or start an ad hoc recording.]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v0.8.3/WhiskerFlow-0.8.3.zip" sparkle:version="17" sparkle:shortVersionString="0.8.3" sparkle:edSignature="2PRsB2A/X8/8bkKVpmcna8BPfI27K60Ie5RYGqJkH27K7irmytdRSrf/AsF4+JoDXev502pz226BjFqmcv9MAQ==" length="7469671" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>0.8.2</title>
       <pubDate>Thu, 13 Aug 2026 21:22:14 +0000</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
