@@ -227,6 +227,8 @@ final class AppState {
   var meetingStatusDetail: String { meetingCapture.statusDetail }
   var activeMeetingTitle: String? { meetingCapture.activeMeetingTitle }
   var isMeetingCapturing: Bool { meetingCapture.isCapturing }
+  var upcomingMeetings: [AtlasCaptureScheduleIntent] { meetingCapture.upcomingMeetingIntents }
+  var previousMeetings: [AtlasCaptureScheduleIntent] { meetingCapture.previousMeetingIntents }
 
     var isAtlasPaired: Bool {
         guard URL(string: settings.atlasBaseURL)?.scheme == "https" else { return false }
@@ -481,6 +483,14 @@ final class AppState {
   func refreshMeetingConfiguration() {
         warmUpMeetingEngine()
         meetingCapture.refreshConfiguration()
+  }
+
+  func refreshMeetingSchedule() {
+    meetingCapture.refreshSchedule()
+  }
+
+  func recordScheduledMeeting(_ intent: AtlasCaptureScheduleIntent) {
+    meetingCapture.startScheduledCapture(intent)
   }
 
   func signInToAtlas() {
