@@ -122,6 +122,7 @@ final class AppState {
     private var signalAssessor = AudioSignalAssessor()
     var isSigningInToAtlas = false
     var atlasSignInError: String?
+    var atlasSignInConfirmation: String?
 
     init(
         settings: AppSettings? = nil,
@@ -486,13 +487,15 @@ final class AppState {
     guard !isSigningInToAtlas else { return }
     isSigningInToAtlas = true
     atlasSignInError = nil
+    atlasSignInConfirmation = nil
     Task { @MainActor [weak self] in
       guard let self else { return }
       defer { isSigningInToAtlas = false }
       do {
-        let token = try await atlasAuthSession.connect(baseURLString: settings.atlasBaseURL)
+        let token = try await atlasAuthSession.connect()
         settings.atlasDeviceToken = token
         refreshMeetingConfiguration()
+        atlasSignInConfirmation = "Connected to Atlas. Meeting Mode is ready."
       } catch {
         atlasSignInError = error.localizedDescription
       }

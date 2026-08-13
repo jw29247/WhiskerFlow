@@ -9,6 +9,13 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>0.8.2</title>
+      <pubDate>Thu, 13 Aug 2026 21:22:14 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Remove the Atlas URL input and show a clear connected confirmation after sign-in.]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v0.8.2/WhiskerFlow-0.8.2.zip" sparkle:version="16" sparkle:shortVersionString="0.8.2" sparkle:edSignature="zl3zBWr48KxLDUR3VOVObHYp30UUb62c6p7ZNn+tw7ZO9+AlVlmZUljB8VFBxFT2D+fBJwV5vJwkDT3d98xqCg==" length="7450542" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>0.8.1</title>
       <pubDate>Thu, 13 Aug 2026 21:05:35 +0000</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>

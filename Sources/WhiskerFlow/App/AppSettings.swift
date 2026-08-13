@@ -39,9 +39,9 @@ final class AppSettings {
     var vocabulary: Vocabulary { didSet { persist(vocabulary, key: Keys.vocabulary) } }
     var formatting: FormattingOptions { didSet { persist(formatting, key: Keys.formatting) } }
 
-    /// The deployment URL is configurable for staging; the connection token
-    /// returned after Clerk sign-in remains in Keychain.
-    var atlasBaseURL: String { didSet { defaults.set(atlasBaseURL, forKey: Keys.atlasBaseURL) } }
+    /// Atlas is the production service used by Meeting Mode. The connection
+    /// token returned after Clerk sign-in remains in Keychain.
+    var atlasBaseURL: String { Self.atlasProductionURL }
     var meetingModeEnabled: Bool { didSet { defaults.set(meetingModeEnabled, forKey: Keys.meetingModeEnabled) } }
 
     var atlasDeviceToken: String {
@@ -105,7 +105,7 @@ final class AppSettings {
         whisperArguments = defaults.string(forKey: Keys.whisperArguments) ?? Self.defaultWhisperArguments
         vocabulary = Self.loadVocabulary(from: defaults) ?? Vocabulary()
         formatting = Self.loadFormatting(from: defaults) ?? FormattingOptions()
-        atlasBaseURL = defaults.string(forKey: Keys.atlasBaseURL) ?? "https://atlas.thatworks.agency"
+        defaults.removeObject(forKey: Keys.atlasBaseURL)
         // Meeting Mode is an opt-in capture surface. Existing installs must not
         // begin recording or download the large local meeting model until the
         // user pairs a device and explicitly enables it.
@@ -114,6 +114,8 @@ final class AppSettings {
         launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
         defaults.removeObject(forKey: Keys.sharedVocabularyURL)
     }
+
+    static let atlasProductionURL = "https://atlas.thatworks.agency"
 
     var resolvedLanguage: String? {
         language.lowercased() == "auto" ? nil : language
