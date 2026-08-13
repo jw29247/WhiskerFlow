@@ -39,8 +39,8 @@ final class AppSettings {
     var vocabulary: Vocabulary { didSet { persist(vocabulary, key: Keys.vocabulary) } }
     var formatting: FormattingOptions { didSet { persist(formatting, key: Keys.formatting) } }
 
-    /// Atlas endpoint is intentionally not inferred. Pairing supplies the
-    /// deployment URL, while the device token itself remains in Keychain.
+    /// The deployment URL is configurable for staging; the connection token
+    /// returned after Clerk sign-in remains in Keychain.
     var atlasBaseURL: String { didSet { defaults.set(atlasBaseURL, forKey: Keys.atlasBaseURL) } }
     var meetingModeEnabled: Bool { didSet { defaults.set(meetingModeEnabled, forKey: Keys.meetingModeEnabled) } }
 
@@ -105,7 +105,7 @@ final class AppSettings {
         whisperArguments = defaults.string(forKey: Keys.whisperArguments) ?? Self.defaultWhisperArguments
         vocabulary = Self.loadVocabulary(from: defaults) ?? Vocabulary()
         formatting = Self.loadFormatting(from: defaults) ?? FormattingOptions()
-        atlasBaseURL = defaults.string(forKey: Keys.atlasBaseURL) ?? ""
+        atlasBaseURL = defaults.string(forKey: Keys.atlasBaseURL) ?? "https://atlas.thatworks.agency"
         // Meeting Mode is an opt-in capture surface. Existing installs must not
         // begin recording or download the large local meeting model until the
         // user pairs a device and explicitly enables it.

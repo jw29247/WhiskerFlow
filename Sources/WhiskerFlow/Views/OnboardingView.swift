@@ -69,13 +69,23 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Label("Atlas Meeting Capture", systemImage: "person.2.wave.2")
                     .font(.headline)
-                Text("Pair this Mac so scheduled calls can be recorded locally and uploaded as encrypted chunks. The device token is stored in Keychain.")
+                Text("Sign in with Atlas so scheduled calls can be recorded locally and uploaded as encrypted chunks. The connection token is stored securely in Keychain.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 TextField("Atlas HTTPS URL", text: $appState.settings.atlasBaseURL)
                     .textFieldStyle(.roundedBorder)
-                SecureField("Atlas device token", text: $appState.settings.atlasDeviceToken)
-                    .textFieldStyle(.roundedBorder)
+                Button {
+                    appState.signInToAtlas()
+                } label: {
+                    Label(
+                        appState.isSigningInToAtlas ? "Opening Atlas…" : "Sign in with Atlas",
+                        systemImage: "person.crop.circle.badge.checkmark"
+                    )
+                }
+                .disabled(appState.isSigningInToAtlas)
+                if let error = appState.atlasSignInError {
+                    Text(error).font(.caption).foregroundStyle(.orange)
+                }
                 HStack {
                     Image(systemName: appState.isAtlasPaired ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(appState.isAtlasPaired ? .green : .orange)
