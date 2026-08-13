@@ -89,6 +89,7 @@ final class AppState {
     private let store: TranscriptStore
     private let transcription: TranscriptionService
     private let meetingCapture: MeetingCaptureCoordinator
+    private let atlasAuthSession = AtlasAuthSession()
     private let live: LiveDictationSession
     private let recordingCoordinator = RecordingCoordinator()
     private let pasteService = PasteService()
@@ -119,6 +120,8 @@ final class AppState {
     /// Whether the most recent recording streamed live (vs. file-based capture).
     private var streamingActive = false
     private var signalAssessor = AudioSignalAssessor()
+    var isSigningInToAtlas = false
+    var atlasSignInError: String?
 
     init(
         settings: AppSettings? = nil,
@@ -474,10 +477,27 @@ final class AppState {
         meetingCapture.toggleManualCapture()
     }
 
-    func refreshMeetingConfiguration() {
+  func refreshMeetingConfiguration() {
         warmUpMeetingEngine()
         meetingCapture.refreshConfiguration()
+  }
+
+  func signInToAtlas() {
+    guard !isSigningInToAtlas else { return }
+    isSigningInToAtlas = true
+    atlasSignInError = nil
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { isSigningInToAtlas = false }
+      do {
+        let token = try await atlasAuthSession.connect(baseURLString: settings.atlasBaseURL)
+        settings.atlasDeviceToken = token
+        refreshMeetingConfiguration()
+      } catch {
+        atlasSignInError = error.localizedDescription
+      }
     }
+  }
 
     func requestSpeechPermission() async -> Bool {
         await transcription.requestAppleSpeechAuthorization()

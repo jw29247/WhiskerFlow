@@ -69,7 +69,18 @@ struct SettingsView: View {
                     }
                 TextField("Atlas HTTPS URL", text: $appState.settings.atlasBaseURL)
                     .textContentType(.URL)
-                SecureField("Atlas device token", text: $appState.settings.atlasDeviceToken)
+                Button {
+                    appState.signInToAtlas()
+                } label: {
+                    Label(
+                        appState.isSigningInToAtlas ? "Opening Atlas…" : "Sign in with Atlas",
+                        systemImage: "person.crop.circle.badge.checkmark"
+                    )
+                }
+                .disabled(appState.isSigningInToAtlas)
+                if let error = appState.atlasSignInError {
+                    Text(error).font(.caption).foregroundStyle(.orange)
+                }
                 HStack {
                     Label(
                         appState.meetingStatus.displayName,
