@@ -67,8 +67,9 @@ struct SettingsView: View {
                     .onChange(of: appState.settings.meetingModeEnabled) { _, _ in
                         appState.refreshMeetingConfiguration()
                     }
-                TextField("Atlas HTTPS URL", text: $appState.settings.atlasBaseURL)
-                    .textContentType(.URL)
+                Text("Atlas server: atlas.thatworks.agency")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Button {
                     appState.signInToAtlas()
                 } label: {
@@ -78,6 +79,11 @@ struct SettingsView: View {
                     )
                 }
                 .disabled(appState.isSigningInToAtlas)
+                if let confirmation = appState.atlasSignInConfirmation {
+                    Label(confirmation, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
                 if let error = appState.atlasSignInError {
                     Text(error).font(.caption).foregroundStyle(.orange)
                 }

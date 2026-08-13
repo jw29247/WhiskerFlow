@@ -72,8 +72,9 @@ struct OnboardingView: View {
                 Text("Sign in with Atlas so scheduled calls can be recorded locally and uploaded as encrypted chunks. The connection token is stored securely in Keychain.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextField("Atlas HTTPS URL", text: $appState.settings.atlasBaseURL)
-                    .textFieldStyle(.roundedBorder)
+                Text("Connects to atlas.thatworks.agency")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Button {
                     appState.signInToAtlas()
                 } label: {
@@ -83,13 +84,18 @@ struct OnboardingView: View {
                     )
                 }
                 .disabled(appState.isSigningInToAtlas)
+                if let confirmation = appState.atlasSignInConfirmation {
+                    Label(confirmation, systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
                 if let error = appState.atlasSignInError {
                     Text(error).font(.caption).foregroundStyle(.orange)
                 }
                 HStack {
                     Image(systemName: appState.isAtlasPaired ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                         .foregroundStyle(appState.isAtlasPaired ? .green : .orange)
-                    Text(appState.isAtlasPaired ? "Paired" : "Pairing required")
+                    Text(appState.isAtlasPaired ? "Connected to Atlas" : "Pairing required")
                         .font(.caption)
                     Spacer()
                     Button("Re-check") { appState.refreshMeetingConfiguration() }

@@ -10,7 +10,7 @@ enum AtlasAuthSessionError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidBaseURL: return "Enter a valid Atlas HTTPS URL first."
+        case .invalidBaseURL: return "Atlas is unavailable right now."
         case .cancelled: return "Atlas sign-in was cancelled."
         case .invalidCallback: return "Atlas returned an invalid sign-in response."
         case .missingToken: return "Atlas did not return a device connection token."
@@ -22,8 +22,8 @@ enum AtlasAuthSessionError: LocalizedError {
 final class AtlasAuthSession: NSObject, ASWebAuthenticationPresentationContextProviding {
     private var session: ASWebAuthenticationSession?
 
-    func connect(baseURLString: String) async throws -> String {
-        guard let baseURL = URL(string: baseURLString), baseURL.scheme == "https" else {
+    func connect() async throws -> String {
+        guard let baseURL = URL(string: AppSettings.atlasProductionURL), baseURL.scheme == "https" else {
             throw AtlasAuthSessionError.invalidBaseURL
         }
 
