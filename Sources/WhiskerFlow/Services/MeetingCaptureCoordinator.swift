@@ -19,7 +19,7 @@ enum MeetingMenuBarStatus: String, Sendable {
     case .recording: return "Recording"
     case .uploading: return "Uploading"
     case .attention: return "Attention"
-    case .uncovered: return "Uncovered"
+    case .uncovered: return "No meeting scheduled"
     }
   }
 }
@@ -28,6 +28,7 @@ enum MeetingMenuBarStatus: String, Sendable {
 @Observable
 final class MeetingCaptureCoordinator {
   private static let schedulePollSeconds: UInt64 = 60
+  private static let scheduleWindowMs: Int64 = 7 * 24 * 60 * 60 * 1_000
   private static let preArmWindowMs: Int64 = 2 * 60 * 1_000
   private static let stopGraceMs: Int64 = 5 * 60 * 1_000
   private static let forecastChunkCount = 720  // two hours at ten seconds/chunk
@@ -60,6 +61,21 @@ final class MeetingCaptureCoordinator {
   private(set) var status: MeetingMenuBarStatus = .uncovered
   private(set) var statusDetail = "Pair a healthy Mac with Atlas to cover meetings."
   private(set) var activeMeetingTitle: String?
+  private(set) var scheduleIntents: [AtlasCaptureScheduleIntent] = []
+
+  var upcomingMeetingIntents: [AtlasCaptureScheduleIntent] {
+    let now = Int64(Date().timeIntervalSince1970 * 1_000)
+    return scheduleIntents
+      .filter { $0.endMs >= now }
+      .sorted { $0.startMs < $1.startMs }
+  }
+
+  var previousMeetingIntents: [AtlasCaptureScheduleIntent] {
+    let now = Int64(Date().timeIntervalSince1970 * 1_000)
+    return scheduleIntents
+      .filter { $0.endMs < now }
+      .sorted { $0.startMs > $1.startMs }
+  }
 
   init(
     settings: AppSettings, microphonePermission: MicrophonePermissionController,
@@ -131,6 +147,15 @@ final class MeetingCaptureCoordinator {
     }
   }
 
+  func startScheduledCapture(_ intent: AtlasCaptureScheduleIntent) {
+    guard activeSessionID == nil else { return }
+    Task { @MainActor [weak self] in await self?.startCapture(intent: intent) }
+  }
+
+  func refreshSchedule() {
+    Task { @MainActor [weak self] in await self?.pollSchedule() }
+  }
+
   func refreshConfiguration() {
     updateUnpairedStatus()
   }
@@ -153,8 +178,8 @@ final class MeetingCaptureCoordinator {
     if let client = atlasClient() {
       do {
         let fresh = try await client.schedule(
-          fromMs: now - Self.preArmWindowMs,
-          toMs: now + 24 * 60 * 60 * 1_000
+          fromMs: now - Self.scheduleWindowMs,
+          toMs: now + Self.scheduleWindowMs
         )
         settings.cacheMeetingSchedule(fresh)
         intents = fresh
@@ -175,6 +200,8 @@ final class MeetingCaptureCoordinator {
       status = .attention
       statusDetail = "Atlas is offline; scheduled calls will be captured locally and queued."
     }
+
+    scheduleIntents = intents
 
     if activeSessionID != nil {
       extendActiveCaptureIfNeeded(intents)
@@ -200,7 +227,7 @@ final class MeetingCaptureCoordinator {
 
   private func cachedSchedule(now: Int64) -> [AtlasCaptureScheduleIntent] {
     settings.cachedMeetingSchedule()
-      .filter { $0.endMs + Self.stopGraceMs >= now }
+      .filter { $0.endMs >= now - Self.scheduleWindowMs && $0.startMs <= now + Self.scheduleWindowMs }
       .sorted { $0.startMs < $1.startMs }
   }
 

@@ -16,7 +16,7 @@ struct SettingsView: View {
             advancedTab
                 .tabItem { Label("Advanced", systemImage: "terminal") }
         }
-        .frame(width: 560, height: 460)
+        .frame(width: 600, height: 640)
     }
 
     // MARK: - General
@@ -99,6 +99,8 @@ struct SettingsView: View {
                 Text("Capture is local-first: network failures leave encrypted chunks queued on this Mac. Audio is never sent to cloud speech recognition.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                meetingHub
             }
 
             Section("Output") {
@@ -146,6 +148,85 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
     }
+
+    private var meetingHub: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Meeting Hub", systemImage: "calendar.badge.clock")
+                    .font(.headline)
+                Spacer()
+                Button("Refresh") { appState.refreshMeetingSchedule() }
+                    .disabled(!appState.isAtlasPaired)
+            }
+
+            Button {
+                appState.toggleMeetingCapture()
+            } label: {
+                Label(
+                    appState.isMeetingCapturing ? "Stop recording" : "Start ad hoc recording",
+                    systemImage: appState.isMeetingCapturing ? "stop.circle.fill" : "record.circle"
+                )
+            }
+            .disabled(!appState.isAtlasPaired && !appState.isMeetingCapturing)
+
+            if appState.upcomingMeetings.isEmpty {
+                Text("No upcoming Atlas meetings in the next 7 days.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Upcoming · next 7 days")
+                    .font(.subheadline.weight(.semibold))
+                ForEach(appState.upcomingMeetings, id: \.eventID) { intent in
+                    meetingRow(intent, isPrevious: false)
+                }
+            }
+
+            if !appState.previousMeetings.isEmpty {
+                Text("Previous · last 7 days")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.top, 4)
+                ForEach(appState.previousMeetings, id: \.eventID) { intent in
+                    meetingRow(intent, isPrevious: true)
+                }
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func meetingRow(_ intent: AtlasCaptureScheduleIntent, isPrevious: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: isPrevious ? "clock.arrow.circlepath" : "calendar")
+                .foregroundStyle(isPrevious ? Color.secondary : Color.accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(intent.title)
+                    .lineLimit(1)
+                Text(Self.meetingDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(intent.startMs) / 1_000)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if isPrevious {
+                Text(intent.existingMeetingID == nil ? "Not recorded" : "In Atlas")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if appState.isMeetingCapturing && appState.activeMeetingTitle == intent.title {
+                Text("Recording")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else {
+                Button("Record") { appState.recordScheduledMeeting(intent) }
+                    .disabled(appState.isMeetingCapturing || !appState.isAtlasPaired)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private static let meetingDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter
+    }()
 
     // MARK: - Engine
 
