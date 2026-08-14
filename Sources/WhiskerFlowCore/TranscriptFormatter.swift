@@ -37,13 +37,22 @@ public struct FormattingOptions: Codable, Equatable, Sendable {
 
 public enum TranscriptFormatter {
     public static func format(_ text: String, options: FormattingOptions) -> String {
-        guard options.isActive else { return text }
-
-        var result = text
+        var result = removingTranscriptionArtifacts(text)
         if options.removeFillerWords { result = removingFillerWords(result) }
         if options.spokenLineCommands { result = applyingSpokenCommands(result) }
         if options.capitalizeSentences { result = capitalizingSentences(result) }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Speech engines can emit pause markers that are transcription artifacts,
+    /// not words spoken by the user. Remove them before any optional formatting
+    /// so they never reach the pasted or copied transcript.
+    private static func removingTranscriptionArtifacts(_ text: String) -> String {
+        text
+            .replacingPattern("\\[blank_audio\\]", with: " ")
+            .replacingPattern("\\.{3,}", with: " ")
+            .replacingPattern("[ \\t]{2,}", with: " ")
+            .replacingPattern("[ \\t]+([,.!?;:])", with: "$1")
     }
 
     /// A hyphen is a word boundary to `\b`, so plain boundaries would fire inside

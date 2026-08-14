@@ -8,14 +8,36 @@ final class TranscriptFormatterTests: XCTestCase {
         removeFillerWords: true
     )
 
-    func testEveryOptionDefaultsToOffAndFormattingIsIdentity() {
+    func testEveryOptionDefaultsToOffAndOptionalFormattingIsOtherwiseIdentity() {
         let options = FormattingOptions()
         XCTAssertFalse(options.spokenLineCommands)
         XCTAssertFalse(options.capitalizeSentences)
         XCTAssertFalse(options.removeFillerWords)
 
-        let text = "  um, hello new line world  "
-        XCTAssertEqual(TranscriptFormatter.format(text, options: options), text)
+        let text = "  hello world  "
+        XCTAssertEqual(TranscriptFormatter.format(text, options: options), "hello world")
+    }
+
+    func testRemovesPauseEllipsesWithoutRemovingOrdinaryPeriods() {
+        let options = FormattingOptions()
+
+        XCTAssertEqual(
+            TranscriptFormatter.format("I was thinking... about the next step.", options: options),
+            "I was thinking about the next step."
+        )
+        XCTAssertEqual(
+            TranscriptFormatter.format("Use example.com. Then send it.", options: options),
+            "Use example.com. Then send it."
+        )
+    }
+
+    func testRemovesBlankAudioMarkersAndTidiesSpacing() {
+        let options = FormattingOptions()
+
+        XCTAssertEqual(
+            TranscriptFormatter.format("Hello [BLANK_AUDIO] world [blank_audio].", options: options),
+            "Hello world."
+        )
     }
 
     func testSpokenCommandAtStartMiddleAndEnd() {
