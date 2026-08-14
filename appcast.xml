@@ -9,6 +9,13 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>0.8.4</title>
+      <pubDate>Fri, 14 Aug 2026 07:59:07 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Remove pause ellipses and blank-audio markers from transcripts.]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v0.8.4/WhiskerFlow-0.8.4.zip" sparkle:version="18" sparkle:shortVersionString="0.8.4" sparkle:edSignature="vDPjbyCFi7C9AWjhdqLbOduKmRGNXwI2UuHGA8WkS2twPF4FCvuHUG3zKXG8/mMsllE9lXSNaXzpfc+Jhp7FBA==" length="7466827" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>0.8.3</title>
       <pubDate>Thu, 13 Aug 2026 21:44:08 +0000</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
