@@ -9,6 +9,18 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>0.8.5</title>
+      <pubDate>Mon, 24 Aug 2026 22:20:15 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[WhiskerFlow now delivers a major step up in dictation: noticeably clearer wording with near-instant completion after you release the key. In our test recordings, the improved path produced fewer recognition errors than the previous default and completed an 82-second recording in under a second once warmed up, protecting the three-second experience for ordinary dictation.
+
+- Faster, clearer first-pass text with fewer misheard words, so you spend less time correcting what you just said.
+- Existing users on the previous default move automatically to the improved experience; other engine choices remain available.
+- Audio storage now looks after itself: WhiskerFlow keeps your newest 25 sessions, removes recordings older than 30 days, and cleans up stale orphan WAV files already on the device when it starts.
+- On first launch, the improved speech recognition may take a little longer to prepare or download; after that one-time setup, it stays ready locally for fast release-to-paste results.]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v0.8.5/WhiskerFlow-0.8.5.zip" sparkle:version="19" sparkle:shortVersionString="0.8.5" sparkle:edSignature="K5GU9Eas7F1ZHHPKUWKLraXlXKlDKm8IJV4ZAZiE/qrvzW8tnmNxC5Sj4AW1wb8r++c0xEGG/+9kWOtZ+GThAw==" length="16721402" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>0.8.3</title>
       <pubDate>Thu, 13 Aug 2026 21:44:08 +0000</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
