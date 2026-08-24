@@ -2,14 +2,32 @@ import Foundation
 
 /// Which transcription backend handles a recording.
 public enum TranscriptionEngineKind: String, Codable, CaseIterable, Sendable, Identifiable {
+    case parakeetTDTv3
     case whisperKit
     case appleSpeech
     case whisperCLI
 
     public var id: String { rawValue }
 
+    public static let defaultEngine: TranscriptionEngineKind = .parakeetTDTv3
+
+    /// Existing installs used WhisperKit Medium as their implicit default. Keep
+    /// explicit alternative choices intact while moving that legacy default to
+    /// the faster, more accurate engine.
+    public static func engineForStoredPreferences(
+        engine: TranscriptionEngineKind?,
+        model: WhisperModel?,
+        migrateLegacyDefault: Bool = true
+    ) -> TranscriptionEngineKind {
+        if migrateLegacyDefault, engine == .whisperKit, model == .medium {
+            return .parakeetTDTv3
+        }
+        return engine ?? defaultEngine
+    }
+
     public var displayName: String {
         switch self {
+        case .parakeetTDTv3: return "Parakeet TDT v3 (on-device)"
         case .whisperKit: return "WhisperKit (on-device)"
         case .appleSpeech: return "Apple Speech (built-in)"
         case .whisperCLI: return "Whisper CLI (advanced)"
@@ -18,6 +36,7 @@ public enum TranscriptionEngineKind: String, Codable, CaseIterable, Sendable, Id
 
     public var blurb: String {
         switch self {
+        case .parakeetTDTv3: return "Faster, accurate on-device dictation, recommended for near-instant results."
         case .whisperKit: return "Fast, accurate, runs on the Neural Engine. Downloads a model on first use."
         case .appleSpeech: return "No download, fully offline, built into macOS."
         case .whisperCLI: return "Use your own openai-whisper command. Requires a local install."

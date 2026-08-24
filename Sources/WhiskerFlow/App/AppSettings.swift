@@ -77,6 +77,8 @@ final class AppSettings {
 
     @ObservationIgnored private(set) var legacySelectedDeviceID: String?
 
+    private static let legacyParakeetMigrationKey = "parakeetTDTv3DefaultMigrated"
+
     var launchAtLogin: Bool {
         didSet {
             defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
@@ -88,8 +90,24 @@ final class AppSettings {
         self.defaults = defaults
         self.meetingTokenStore = MeetingCaptureTokenStore()
 
-        engine = defaults.string(forKey: Keys.engine).flatMap(TranscriptionEngineKind.init) ?? .whisperKit
-        model = defaults.string(forKey: Keys.model).flatMap(WhisperModel.init) ?? .tiny
+        let storedEngine = defaults.string(forKey: Keys.engine).flatMap(TranscriptionEngineKind.init)
+        let storedModel = defaults.string(forKey: Keys.model).flatMap(WhisperModel.init)
+        let shouldMigrateLegacyDefault = !defaults.bool(forKey: Self.legacyParakeetMigrationKey)
+            && storedEngine == .whisperKit
+            && storedModel == .medium
+        if shouldMigrateLegacyDefault {
+            defaults.set(true, forKey: Self.legacyParakeetMigrationKey)
+        }
+        let resolvedEngine = TranscriptionEngineKind.engineForStoredPreferences(
+            engine: storedEngine,
+            model: storedModel,
+            migrateLegacyDefault: shouldMigrateLegacyDefault
+        )
+        engine = resolvedEngine
+        if resolvedEngine == .parakeetTDTv3, storedEngine == .whisperKit {
+            defaults.set(resolvedEngine.rawValue, forKey: Keys.engine)
+        }
+        model = storedModel ?? .tiny
         language = Self.migratedLanguage(from: defaults)
         hotkey = defaults.string(forKey: Keys.hotkey).flatMap(HotkeyTrigger.init) ?? .fn
         customHotkey = Self.loadCustomHotkey(from: defaults) ?? .default

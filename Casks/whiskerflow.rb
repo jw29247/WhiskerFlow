@@ -1,6 +1,6 @@
 cask "whiskerflow" do
-  version "0.8.3"
-  sha256 "eca46ade79d6acc1e6501d1a2e4c1264493956c075ef1bd639541cc0fb03db90"
+  version "0.8.4"
+  sha256 "a2b664ef0a7b5117399da69b0d58186dcffcc3347463e5ec8aa78a807ffe0176"
 
   url "https://github.com/jw29247/WhiskerFlow/releases/download/v#{version}/WhiskerFlow-#{version}.dmg"
   name "WhiskerFlow"
@@ -15,7 +15,8 @@ cask "whiskerflow" do
     WhiskerFlow needs Microphone and Accessibility permissions to record and
     paste at your cursor. Grant them in System Settings > Privacy & Security.
 
-    The first transcription downloads a Whisper model (~150 MB). To stay fully
-    offline, switch the engine to "Apple Speech (built-in)" in Settings.
+    The first transcription may prepare or download the on-device speech model.
+    To stay fully offline, switch the engine to "Apple Speech (built-in)" in
+    Settings.
   EOS
 end

@@ -77,6 +77,9 @@ public final class TranscriptStore {
     private let now: () -> Date
     private let removeAudioFile: (String) -> Void
     private let retentionInterval: TimeInterval
+    private let retentionLimit: Int
+    private let recordingsDirectory: URL?
+    private let fileManager: FileManager
     private let moveItem: (URL, URL) throws -> Void
     private let copyItem: (URL, URL) throws -> Void
     private var persistenceSuspended = false
@@ -87,6 +90,9 @@ public final class TranscriptStore {
         fileURL: URL,
         now: @escaping () -> Date = Date.init,
         retentionInterval: TimeInterval = 30 * 24 * 60 * 60,
+        retentionLimit: Int = 25,
+        recordingsDirectory: URL? = nil,
+        fileManager: FileManager = .default,
         removeAudioFile: @escaping (String) -> Void = { path in
             guard !path.isEmpty else { return }
             try? FileManager.default.removeItem(atPath: path)
@@ -101,6 +107,9 @@ public final class TranscriptStore {
         self.fileURL = fileURL
         self.now = now
         self.retentionInterval = retentionInterval
+        self.retentionLimit = max(1, retentionLimit)
+        self.recordingsDirectory = recordingsDirectory
+        self.fileManager = fileManager
         self.removeAudioFile = removeAudioFile
         self.moveItem = moveItem
         self.copyItem = copyItem
@@ -114,6 +123,7 @@ public final class TranscriptStore {
         persistenceSuspended = false
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             records = []
+            try pruneExpired()
             return
         }
 
@@ -206,12 +216,48 @@ public final class TranscriptStore {
 
     public func pruneExpired() throws {
         let cutoff = now().addingTimeInterval(-retentionInterval)
-        let expired = records.filter { $0.createdAt < cutoff }
-        for record in expired {
+        let ordered = records.sorted { lhs, rhs in
+            if lhs.createdAt == rhs.createdAt { return lhs.id.uuidString > rhs.id.uuidString }
+            return lhs.createdAt > rhs.createdAt
+        }
+        let recent = ordered.filter { $0.createdAt >= cutoff }
+        let retained = Array(recent.prefix(retentionLimit))
+        let removedRecords = ordered.filter { record in
+            !retained.contains { $0.id == record.id }
+        }
+        for record in removedRecords {
             removeAudioFile(record.audioFilePath)
         }
-        records.removeAll { $0.createdAt < cutoff }
+        records = retained
+        removeOldOrphanedAudioFiles(cutoff: cutoff)
         try persist()
+    }
+
+    private func removeOldOrphanedAudioFiles(cutoff: Date) {
+        guard let recordingsDirectory,
+              let urls = try? fileManager.contentsOfDirectory(
+                  at: recordingsDirectory,
+                  includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey],
+                  options: [.skipsHiddenFiles]
+              ) else { return }
+
+        let retainedPaths = Set(records.map { standardizedPath($0.audioFilePath) })
+        for url in urls where url.pathExtension.lowercased() == "wav" {
+            let path = standardizedPath(url.path)
+            guard !retainedPaths.contains(path),
+                  let values = try? url.resourceValues(
+                      forKeys: [.isRegularFileKey, .contentModificationDateKey]
+                  ),
+                  values.isRegularFile == true,
+                  let modifiedAt = values.contentModificationDate,
+                  modifiedAt < cutoff else { continue }
+            removeAudioFile(url.path)
+        }
+    }
+
+    private func standardizedPath(_ path: String) -> String {
+        guard !path.isEmpty else { return "" }
+        return URL(fileURLWithPath: path).standardizedFileURL.path
     }
 
     /// Success is the move/copy result, never a `fileExists` probe: an unrelated

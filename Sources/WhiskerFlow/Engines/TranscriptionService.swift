@@ -15,6 +15,7 @@ struct MeetingAudioWindow: Sendable {
 /// Picks the configured engine, warms it up, and falls back to Apple Speech
 /// when the primary engine is unavailable or fails (e.g. offline first run).
 actor TranscriptionService {
+  private let parakeetTDTv3 = ParakeetTDTv3Engine()
   private let whisperKit = WhisperKitEngine()
   private let appleSpeech = AppleSpeechEngine()
   private var meetingSpeakerKit: SpeakerKit?
@@ -22,6 +23,13 @@ actor TranscriptionService {
   @discardableResult
   func prepare(kind: TranscriptionEngineKind, model: WhisperModel, language: String?) async -> Bool {
     switch kind {
+    case .parakeetTDTv3:
+      do {
+        try await parakeetTDTv3.prepare(model: model, language: language)
+        return true
+      } catch {
+        return false
+      }
     case .whisperKit:
       do {
         try await whisperKit.prepare(model: model, language: language)
@@ -114,7 +122,7 @@ actor TranscriptionService {
           centroids.append(centroid)
           centroidCounts.append(1)
           usedGlobalIDs.insert(globalID)
-        }
+    }
         localToGlobal[localID] = globalID
       }
 
@@ -214,6 +222,8 @@ actor TranscriptionService {
     cliConfiguration: WhisperConfiguration
   ) async throws -> TranscriptionResult {
     switch kind {
+    case .parakeetTDTv3:
+      return try await parakeetTDTv3.transcribe(request)
     case .whisperKit:
       return try await whisperKit.transcribe(request)
     case .appleSpeech:

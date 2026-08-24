@@ -529,12 +529,18 @@ enum AudioFileWriter {
     }
 
     static func makeRecordingURL() throws -> URL {
+        guard let folder = recordingsDirectoryURL() else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder.appendingPathComponent("\(UUID().uuidString).wav")
+    }
+
+    static func recordingsDirectoryURL() -> URL? {
         guard let root = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
-        ).first else { throw CocoaError(.fileNoSuchFile) }
-        let folder = root.appendingPathComponent("WhiskerFlow/Recordings", isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        return folder.appendingPathComponent("\(UUID().uuidString).wav")
+        ).first else { return nil }
+        return root.appendingPathComponent("WhiskerFlow/Recordings", isDirectory: true)
     }
 }

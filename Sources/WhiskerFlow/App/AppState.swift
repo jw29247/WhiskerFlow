@@ -161,7 +161,7 @@ final class AppState {
         switch status {
         case .idle:
             switch modelState {
-            case .preparing: return "Preparing \(settings.model.displayName.lowercased())…"
+            case .preparing: return "Preparing \(settings.engine.displayName.lowercased())…"
             case .failed(let message): return message
             default: return "Hold \(settings.hotkeyDisplayName) to dictate"
             }
@@ -343,7 +343,7 @@ final class AppState {
         let model = settings.model
         let language = settings.resolvedLanguage
         let allowFallback = settings.allowAppleFallback
-        guard engine == .whisperKit else {
+        guard engine == .whisperKit || engine == .parakeetTDTv3 else {
             modelState = .ready
             return
         }
@@ -1399,6 +1399,9 @@ final class AppState {
 extension TranscriptStore {
     static func defaultStore() -> TranscriptStore {
         let root = StorageLocations.applicationSupportRootOrTemporary()
-        return TranscriptStore(fileURL: root.appendingPathComponent("transcripts.json"))
+        return TranscriptStore(
+            fileURL: root.appendingPathComponent("transcripts.json"),
+            recordingsDirectory: AudioFileWriter.recordingsDirectoryURL()
+        )
     }
 }

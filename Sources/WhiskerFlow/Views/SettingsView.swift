@@ -241,7 +241,7 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                if appState.settings.engine != .appleSpeech {
+                if appState.settings.engine == .whisperKit {
                     Picker("Model", selection: $appState.settings.model) {
                         ForEach(WhisperModel.allCases) { Text($0.displayName).tag($0) }
                     }
@@ -274,7 +274,7 @@ struct SettingsView: View {
         case .unloaded:
             Label("Not loaded", systemImage: "circle")
         case .preparing:
-            Label("Preparing \(appState.settings.model.displayName)…", systemImage: "arrow.down.circle")
+            Label("Preparing \(appState.settings.engine.displayName)…", systemImage: "arrow.down.circle")
         case .ready:
             Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
         case .failed(let message):

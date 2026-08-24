@@ -188,6 +188,7 @@ struct TranscriptDetailView: View {
 
     private func shortEngineName(_ kind: TranscriptionEngineKind) -> String {
         switch kind {
+        case .parakeetTDTv3: return "Parakeet TDT v3"
         case .whisperKit: return "WhisperKit"
         case .appleSpeech: return "Apple Speech"
         case .whisperCLI: return "Whisper CLI"

@@ -49,6 +49,99 @@ final class TranscriptStoreCleanupTests: XCTestCase {
         XCTAssertEqual(removed.paths, ["/tmp/stale.m4a"])
     }
 
+    func testPruneKeepsOnlyTheNewest25Sessions() throws {
+        let now = Date(timeIntervalSince1970: 100_000_000)
+        let removed = RemovedPaths()
+        let store = TranscriptStore(
+            fileURL: tempURL(),
+            now: { now },
+            retentionLimit: 25,
+            removeAudioFile: { removed.paths.append($0) }
+        )
+        let records = (0..<26).map { index in
+            TranscriptRecord(
+                text: "session \(index)",
+                audioFilePath: "/tmp/session-\(index).wav",
+                createdAt: now.addingTimeInterval(TimeInterval(index)),
+                status: .transcribed
+            )
+        }
+        try store.replaceAll(records)
+        try store.pruneExpired()
+
+        XCTAssertEqual(store.records.count, 25)
+        XCTAssertFalse(store.records.contains { $0.text == "session 0" })
+        XCTAssertEqual(removed.paths, ["/tmp/session-0.wav"])
+    }
+
+    func testLoadRemovesOldOrphanWavsButKeepsRecentOrphanWavs() throws {
+        let now = Date(timeIntervalSince1970: 100_000_000)
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WhiskerFlowRecordings-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let oldOrphan = directory.appendingPathComponent("old.wav")
+        let recentOrphan = directory.appendingPathComponent("recent.wav")
+        try Data("old".utf8).write(to: oldOrphan)
+        try Data("recent".utf8).write(to: recentOrphan)
+        try FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-31 * 24 * 60 * 60)],
+            ofItemAtPath: oldOrphan.path
+        )
+        try FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-2 * 24 * 60 * 60)],
+            ofItemAtPath: recentOrphan.path
+        )
+
+        let url = directory.appendingPathComponent("transcripts.json")
+        let record = TranscriptRecord(
+            text: "retained",
+            audioFilePath: directory.appendingPathComponent("retained.wav").path,
+            createdAt: now,
+            status: .transcribed
+        )
+        let data = try JSONEncoder.whiskerFlow.encode([record])
+        try data.write(to: url)
+
+        let store = TranscriptStore(
+            fileURL: url,
+            now: { now },
+            recordingsDirectory: directory
+        )
+        try store.load()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldOrphan.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: recentOrphan.path))
+        XCTAssertEqual(store.records.map(\.id), [record.id])
+    }
+
+    func testLoadSweepsOldOrphansWhenTranscriptIndexIsMissing() throws {
+        let now = Date(timeIntervalSince1970: 100_000_000)
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WhiskerFlowMissingIndex-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let oldOrphan = directory.appendingPathComponent("old.wav")
+        try Data("old".utf8).write(to: oldOrphan)
+        try FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-31 * 24 * 60 * 60)],
+            ofItemAtPath: oldOrphan.path
+        )
+
+        let url = directory.appendingPathComponent("transcripts.json")
+        let store = TranscriptStore(
+            fileURL: url,
+            now: { now },
+            recordingsDirectory: directory
+        )
+        try store.load()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldOrphan.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
     func testTranscribingRecordsAreNotInRetryQueue() throws {
         let store = TranscriptStore(fileURL: tempURL())
         let inProgress = TranscriptRecord(text: "", audioFilePath: "/tmp/x.m4a", status: .transcribing)

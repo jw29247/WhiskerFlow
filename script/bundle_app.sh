@@ -21,6 +21,7 @@ if [[ "$CONFIGURATION" == "release" ]]; then
   # Keep developer/workspace paths out of both the executable and its dSYM.
   swift build --configuration "$CONFIGURATION" \
     -Xswiftc -debug-prefix-map -Xswiftc "$ROOT_DIR=." \
+    -Xcc "-fdebug-prefix-map=$ROOT_DIR=." \
     -Xswiftc -Xfrontend -Xswiftc -no-clang-module-breadcrumbs
 else
   swift build --configuration "$CONFIGURATION"
