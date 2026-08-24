@@ -144,7 +144,7 @@
 
 - [x] **Step 4: Bump the release version**
 
-  Run `script/bump_version.sh 0.8.0`, using a minor release because the default transcription behavior and storage lifecycle are user-visible improvements. **Completed: build 14.**
+  Run `script/bump_version.sh 0.8.5`, using a minor release because the default transcription behavior and storage lifecycle are user-visible improvements. **Completed: build 19.**
 
 ### Task 5: Sign, notarize, publish, and verify the update
 
