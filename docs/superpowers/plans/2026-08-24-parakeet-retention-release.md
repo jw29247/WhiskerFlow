@@ -165,14 +165,14 @@
 
   Verify the DMG and Sparkle ZIP exist, are signed/notarized/stapled, the appcast enclosure points at the new ZIP, and the cask checksum matches the DMG. **Completed.**
 
-- [ ] **Step 4: Commit and push source/appcast metadata**
+- [x] **Step 4: Commit and push source/appcast metadata**
 
   Commit the engine, retention, tests, version, appcast, and cask changes, then push `main` so the live appcast can advertise the release.
 
-- [ ] **Step 5: Create the GitHub release with benefit-led notes**
+- [x] **Step 5: Create the GitHub release with benefit-led notes**
 
   Publish both the DMG and Sparkle ZIP with notes focused on faster, clearer dictation and automatic storage protection, not implementation names.
 
-- [ ] **Step 6: Verify the live update path**
+- [x] **Step 6: Verify the live update path**
 
   Re-fetch the raw appcast from GitHub, confirm the new version and ZIP URL resolve, verify both GitHub assets, and run the installed-app update check or confirm Sparkle’s update feed sees the new release.
