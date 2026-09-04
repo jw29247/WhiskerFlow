@@ -18,73 +18,19 @@ struct MeetingAtlasRecordingCompletion: Sendable {
     let duplicate: Bool
 }
 
-protocol MeetingAtlasClient: Sendable {
-    func schedule(fromMs: Int64, toMs: Int64) async throws -> [AtlasCaptureScheduleIntent]
-    func heartbeat(
-        appVersion: String,
-        permissionState: [String: String],
-        diskState: String,
-        captureState: String,
-        lastFailureReason: String?
-    ) async throws
-    func createMeeting(
-        captureSessionID: UUID,
-        title: String,
-        occurredAtMs: Int64,
-        eventID: String?
-    ) async throws -> (meetingID: String, created: Bool)
-    func prepareRecording(
-        meetingID: String,
-        captureSessionID: UUID,
-        trackChunkCounts: [MeetingAudioTrack: Int],
-        sourceManifestHash: String?,
-        playbackChunkCount: Int?
-    ) async throws -> String
-    func uploadChunk(
-        artifactID: String,
-        descriptor: MeetingRecordingChunkDescriptor,
-        body: Data
-    ) async throws
-    func uploadPlaybackChunk(
-        artifactID: String,
-        descriptor: MeetingRecordingChunkDescriptor,
-        body: Data
-    ) async throws
-    func completePlayback(artifactID: String) async throws
-    func completeRecording(
-        artifactID: String,
-        durationMs: Int64,
-        trackChunkCounts: [MeetingAudioTrack: Int],
-        hasSourceGap: Bool,
-        missingTracks: [MeetingAudioTrack],
-        canonicalChecksum: String?,
-        sourceManifestHash: String?,
-        modelVersion: String?
-    ) async throws -> MeetingAtlasRecordingCompletion
-    func appendSegments(meetingID: String, turns: [MeetingSpeakerTurn]) async throws
-    func finalize(
-        meetingID: String,
-        artifactID: String,
-        transcriptionState: String,
-        status: String
-    ) async throws
-}
-
 enum MeetingAtlasClientError: LocalizedError {
-    case notPaired
     case invalidResponse
     case server(String)
 
     var errorDescription: String? {
         switch self {
-        case .notPaired: return "Pair WhiskerFlow with Atlas to enable Meeting Mode."
         case .invalidResponse: return "Atlas returned an invalid meeting capture response."
         case .server(let message): return message
         }
     }
 }
 
-final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendable {
+final class MeetingAtlasClient: @unchecked Sendable {
     private let baseURL: URL
     private let token: String
     private let session: URLSession

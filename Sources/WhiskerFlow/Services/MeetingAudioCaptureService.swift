@@ -5,19 +5,13 @@ import ScreenCaptureKit
 import WhiskerFlowAppSupport
 
 enum MeetingAudioCaptureError: LocalizedError {
-    case microphoneUnavailable
-    case screenRecordingPermissionRequired
     case displayUnavailable
     case streamStartFailed(String)
-    case sampleConversionFailed
 
     var errorDescription: String? {
         switch self {
-        case .microphoneUnavailable: return "The microphone is unavailable."
-        case .screenRecordingPermissionRequired: return "Screen Recording permission is required to capture Mac audio."
         case .displayUnavailable: return "No Mac display is available for system-audio capture."
         case .streamStartFailed(let message): return "Mac audio capture could not start: \(message)"
-        case .sampleConversionFailed: return "Mac audio could not be normalized for recording."
         }
     }
 }
@@ -28,8 +22,6 @@ enum MeetingAudioCaptureError: LocalizedError {
 @MainActor
 final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelegate {
     private let microphone: AudioCaptureService
-    private let store: EncryptedMeetingChunkStore
-    private let sessionID: UUID
     private let writer: MeetingPCMChunkWriter
     private let microphonePending = LockedAudioBuffer()
     private let systemPending = LockedAudioBuffer()
@@ -40,7 +32,6 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
     private var systemSampleCount = 0
 
     var onFailure: ((Error) -> Void)?
-    var onLevel: ((Float) -> Void)?
 
     init(
         microphone: AudioCaptureService? = nil,
@@ -48,8 +39,6 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         sessionID: UUID
     ) {
         self.microphone = microphone ?? AudioCaptureService()
-        self.store = store
-        self.sessionID = sessionID
         self.writer = MeetingPCMChunkWriter(store: store, sessionID: sessionID)
         super.init()
     }
@@ -72,7 +61,6 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
                 onFailure?(error)
             }
         }
-        microphone.onLevel = { [weak self] level, _ in self?.onLevel?(level) }
         do {
             let content = try await SCShareableContent.current
             guard let display = content.displays.first else { throw MeetingAudioCaptureError.displayUnavailable }
@@ -136,10 +124,6 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         isRunning = false
         microphone.cancel()
         microphone.onSamples = nil
-    }
-
-    func chunkCounts() -> [MeetingAudioTrack: Int] {
-        writer.chunkCounts()
     }
 
     var sourceGapDetected: Bool {

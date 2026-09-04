@@ -19,15 +19,6 @@ public enum MeetingChunkUploadState: String, Codable, Sendable {
     case uploaded
 }
 
-public enum MeetingCoverageStatus: String, Codable, CaseIterable, Sendable {
-    case covered
-    case partial
-    case recordedPendingUpload = "recorded_pending_upload"
-    case recordedPendingTranscription = "recorded_pending_transcription"
-    case uncovered
-    case failed
-}
-
 public struct MeetingRecordingChunkDescriptor: Codable, Equatable, Sendable {
     public let track: MeetingAudioTrack
     public let sequence: Int
@@ -145,12 +136,6 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
 
     public var pendingChunks: [MeetingRecordingChunkDescriptor] {
         chunks.filter { $0.uploadState == .pending }
-    }
-
-    public var isCompleteLocally: Bool {
-        expectedChunkCounts.allSatisfy { track, expected in
-            chunks.filter { $0.track == track }.count == expected
-        }
     }
 
     public mutating func attachAtlasReferences(meetingID: String, artifactID: String) {

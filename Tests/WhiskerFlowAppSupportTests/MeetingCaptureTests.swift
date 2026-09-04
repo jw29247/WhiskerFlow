@@ -5,7 +5,7 @@ import XCTest
 final class MeetingCaptureTests: XCTestCase {
     func testEncryptedChunkRoundTripsAndRecoveryIgnoresPartialFiles() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("whiskerflow-meeting-tests-(UUID().uuidString)")
+            .appendingPathComponent("whiskerflow-meeting-tests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
 
         let key = SymmetricKey(size: .bits256)
@@ -46,7 +46,7 @@ final class MeetingCaptureTests: XCTestCase {
 
     func testChunkManifestIsIdempotentForExistingSequence() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("whiskerflow-meeting-tests-(UUID().uuidString)")
+            .appendingPathComponent("whiskerflow-meeting-tests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
 
         let store = EncryptedMeetingChunkStore(
@@ -81,7 +81,7 @@ final class MeetingCaptureTests: XCTestCase {
 
     func testChunkManifestGrowsBeyondTheInitialDurationForecast() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("whiskerflow-meeting-tests-(UUID().uuidString)")
+            .appendingPathComponent("whiskerflow-meeting-tests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
 
         let store = EncryptedMeetingChunkStore(
@@ -119,7 +119,7 @@ final class MeetingCaptureTests: XCTestCase {
 
     func testSourceManifestChecksumIsStableAcrossUploadRetries() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("whiskerflow-meeting-tests-(UUID().uuidString)")
+            .appendingPathComponent("whiskerflow-meeting-tests-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
 
         let store = EncryptedMeetingChunkStore(

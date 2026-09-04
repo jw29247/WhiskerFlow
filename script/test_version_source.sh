@@ -1,48 +1,31 @@
 #!/usr/bin/env bash
-
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INFO_PLIST="$ROOT_DIR/Resources/Info.plist"
-BUMP_SCRIPT="$ROOT_DIR/script/bump_version.sh"
-WORKFLOW="$ROOT_DIR/.github/workflows/release.yml"
-DERIVATION="PlistBuddy -c 'Print :CFBundleShortVersionString'"
+TEST_ROOT="$(mktemp -d)"
+trap 'rm -rf "$TEST_ROOT"' EXIT
+mkdir -p "$TEST_ROOT/script" "$TEST_ROOT/Resources"
+cp "$ROOT_DIR/script/bump_version.sh" "$TEST_ROOT/script/"
+cp "$ROOT_DIR/Resources/Info.plist" "$TEST_ROOT/Resources/"
+PLIST="$TEST_ROOT/Resources/Info.plist"
+OLD_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"
 
-for script in package_release.sh notarize.sh; do
-  path="$ROOT_DIR/script/$script"
+bash "$TEST_ROOT/script/bump_version.sh" 9.8.7 >/dev/null
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")" == 9.8.7 ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")" == "$((OLD_BUILD + 1))" ]]
+cp "$PLIST" "$TEST_ROOT/expected.plist"
 
-  if grep -q 'VERSION:-0\.' "$path"; then
-    echo "FAIL: $script hardcodes a stale version default; derive it from Resources/Info.plist" >&2
+for invalid in '' '1.2' 'not-a-version'; do
+  if bash "$TEST_ROOT/script/bump_version.sh" "$invalid" >/dev/null 2>&1; then
+    echo "FAIL: invalid version was accepted: $invalid" >&2
     exit 1
   fi
-
-  if ! grep -qF "$DERIVATION" "$path"; then
-    echo "FAIL: $script must read the version from Resources/Info.plist via PlistBuddy" >&2
-    exit 1
-  fi
+  cmp "$PLIST" "$TEST_ROOT/expected.plist"
 done
 
-echo "PASS: release scripts derive the version from Resources/Info.plist"
-
-if [[ ! -f "$BUMP_SCRIPT" ]]; then
-  echo "FAIL: script/bump_version.sh must exist so the version is bumped in one place" >&2
+if VERSION=99.98.97 bash "$ROOT_DIR/script/notarize.sh" >"$TEST_ROOT/release.log" 2>&1; then
+  echo "FAIL: release accepted a version that disagrees with Info.plist" >&2
   exit 1
 fi
-
-if [[ ! -x "$BUMP_SCRIPT" ]]; then
-  echo "FAIL: script/bump_version.sh must be executable" >&2
-  exit 1
-fi
-
-echo "PASS: script/bump_version.sh exists and is executable"
-
-if ! grep -qF "$DERIVATION" "$WORKFLOW"; then
-  echo "FAIL: release.yml must compare the tag against the Resources/Info.plist version" >&2
-  exit 1
-fi
-
-echo "PASS: release.yml guards the tag against the Resources/Info.plist version"
-
-[[ -f "$INFO_PLIST" ]] || { echo "FAIL: Resources/Info.plist not found" >&2; exit 1; }
-
-echo "PASS: Resources/Info.plist is the single source of the version"
+grep -q 'does not match Info.plist version' "$TEST_ROOT/release.log"
+echo "PASS: version bump increments the build; invalid versions leave the plist intact; release rejects version skew"

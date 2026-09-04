@@ -116,19 +116,15 @@ public struct TranscriptionRequest: Sendable {
     public var audioURL: URL
     /// BCP-47 language code, or nil to let the engine auto-detect.
     public var language: String?
-    /// Optional priming text (names, jargon) to bias recognition.
-    public var initialPrompt: String?
     public var model: WhisperModel
 
     public init(
         audioURL: URL,
         language: String? = "en",
-        initialPrompt: String? = nil,
         model: WhisperModel = .base
     ) {
         self.audioURL = audioURL
         self.language = language
-        self.initialPrompt = initialPrompt
         self.model = model
     }
 }
@@ -162,25 +158,6 @@ public struct TranscriptionResult: Sendable, Equatable {
         self.language = language
         self.duration = duration
     }
-}
-
-/// A pluggable speech-to-text backend.
-public protocol TranscriptionEngine: Sendable {
-    var kind: TranscriptionEngineKind { get }
-
-    /// Whether the engine can run right now (e.g. CLI installed, permission granted).
-    func isAvailable() async -> Bool
-
-    /// Warm up / load the model so the first real transcription isn't penalized.
-    /// The language decides whether multilingual weights are needed.
-    func prepare(model: WhisperModel, language: String?) async throws
-
-    func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult
-}
-
-public extension TranscriptionEngine {
-    func isAvailable() async -> Bool { true }
-    func prepare(model: WhisperModel, language: String?) async throws {}
 }
 
 public enum TranscriptionError: LocalizedError, Equatable {

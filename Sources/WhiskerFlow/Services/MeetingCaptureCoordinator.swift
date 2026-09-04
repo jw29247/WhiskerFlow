@@ -50,7 +50,6 @@ final class MeetingCaptureCoordinator {
   private var activeIntent: AtlasCaptureScheduleIntent?
   private var activeSessionID: UUID?
   private var audioCapture: MeetingAudioCaptureService?
-  private var localProcessor: MeetingLocalProcessor?
   private var stopTask: Task<Void, Never>?
   private var activeCaptureStopAtMs: Int64?
   private var activeOverlapDetected = false
@@ -130,7 +129,7 @@ final class MeetingCaptureCoordinator {
     if activeSessionID != nil {
       let drain = Task { @MainActor [weak self] () in
         guard let self else { return }
-        await self.stopCapture(reason: "shutdown")
+        await self.stopCapture()
       }
       let completed = await waitForShutdownTask(drain, timeout: 3)
       if !completed { drain.cancel() }
@@ -141,7 +140,7 @@ final class MeetingCaptureCoordinator {
 
   func toggleManualCapture() {
     if activeSessionID != nil {
-      Task { @MainActor [weak self] in await self?.stopCapture(reason: "manual") }
+      Task { @MainActor [weak self] in await self?.stopCapture() }
     } else {
       Task { @MainActor [weak self] in await self?.startCapture(intent: nil) }
     }
@@ -260,7 +259,7 @@ final class MeetingCaptureCoordinator {
     stopTask = Task { @MainActor [weak self] in
       try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
       guard !Task.isCancelled else { return }
-      await self?.stopCapture(reason: "scheduled_end")
+      await self?.stopCapture()
     }
   }
 
@@ -350,7 +349,7 @@ final class MeetingCaptureCoordinator {
     }
   }
 
-  private func stopCapture(reason: String) async {
+  private func stopCapture() async {
     guard let sessionID = activeSessionID, let capture = audioCapture else { return }
     stopTask?.cancel()
     stopTask = nil
@@ -374,7 +373,6 @@ final class MeetingCaptureCoordinator {
         sourceGapDetected: sourceGapDetected
       )
       let processor = MeetingLocalProcessor(transcription: transcription)
-      localProcessor = processor
       let result = try await processor.process(
         manifest: try store.loadManifest(sessionID: sessionID),
         store: store,
@@ -386,8 +384,7 @@ final class MeetingCaptureCoordinator {
         turns: result.turns,
         durationMs: result.durationMs,
         sourceGapDetected: sourceGapDetected,
-        modelVersion: result.modelVersion,
-        reason: reason
+        modelVersion: result.modelVersion
       )
     } catch {
       lastFailureCode = "local_processing"
@@ -406,10 +403,8 @@ final class MeetingCaptureCoordinator {
     turns: [MeetingSpeakerTurn],
     durationMs: Int64,
     sourceGapDetected: Bool,
-    modelVersion: String?,
-    reason: String
+    modelVersion: String?
   ) async {
-    _ = reason
     guard let client = atlasClient() else {
       status = .attention
       statusDetail = "Recording and transcript are retained locally until Atlas is paired."
@@ -589,7 +584,6 @@ final class MeetingCaptureCoordinator {
         // user or later repair can establish that no source gap exists.
         let recoveredSourceGap = manifest.sourceGapDetected || manifest.state == .recording
         let processor = MeetingLocalProcessor(transcription: transcription)
-        localProcessor = processor
         try store.markState(
           sessionID: session.sessionID,
           state: .awaitingTranscription,
@@ -608,8 +602,7 @@ final class MeetingCaptureCoordinator {
           turns: result.turns,
           durationMs: result.durationMs,
           sourceGapDetected: recoveredSourceGap,
-          modelVersion: result.modelVersion,
-          reason: "recovery"
+          modelVersion: result.modelVersion
         )
       } catch {
         try? store.markState(sessionID: session.sessionID, state: .failed)
@@ -624,17 +617,13 @@ final class MeetingCaptureCoordinator {
     uploadTask = nil
   }
 
-  private static var forecastChunkCounts: [MeetingAudioTrack: Int] {
-    Dictionary(uniqueKeysWithValues: MeetingAudioTrack.allCases.map { ($0, forecastChunkCount) })
-  }
-
   private func atlasClient() -> MeetingAtlasClient? {
     guard let baseURL = URL(string: settings.atlasBaseURL),
       baseURL.scheme == "https",
       let token = keychain.read(),
       !token.isEmpty
     else { return nil }
-    return URLSessionMeetingAtlasClient(baseURL: baseURL, token: token)
+    return MeetingAtlasClient(baseURL: baseURL, token: token)
   }
 
   private func heartbeatLoop() async {
