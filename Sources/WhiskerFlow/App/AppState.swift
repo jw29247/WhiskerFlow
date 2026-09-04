@@ -1100,8 +1100,8 @@ final class AppState {
         }
     }
 
-    /// Write captured samples to a WAV and transcribe via the standard engine
-    /// path (used for non-streaming engines and the streaming-empty fallback).
+    /// Persist captured audio for interrupted-decode recovery, then let Parakeet
+    /// use the existing samples without reading and converting the WAV again.
     private func transcribeCapturedSamples(
         _ samples: [Float],
         conversionFailures: Int,
@@ -1133,8 +1133,11 @@ final class AppState {
             return
         }
         do {
-            let url = try AudioFileWriter.makeRecordingURL()
-            try AudioFileWriter.writeWAV(samples: samples, to: url)
+            let url = try await Task.detached(priority: .userInitiated) {
+                let url = try AudioFileWriter.makeRecordingURL()
+                try AudioFileWriter.writeWAV(samples: samples, to: url)
+                return url
+            }.value
             let record = TranscriptRecord(
                 text: "",
                 audioFilePath: url.path,
@@ -1153,7 +1156,8 @@ final class AppState {
                 record,
                 pasteTarget: pasteTarget,
                 configuration: configuration,
-                sessionID: sessionID
+                sessionID: sessionID,
+                capturedSamples: configuration.engine == .parakeetTDTv3 ? samples : nil
             )
         } catch {
             handleStorageError(error, message: "Recording failed")
@@ -1164,7 +1168,8 @@ final class AppState {
         _ record: TranscriptRecord,
         pasteTarget: NSRunningApplication?,
         configuration: TranscriptionJobConfiguration,
-        sessionID: UUID?
+        sessionID: UUID?,
+        capturedSamples: [Float]? = nil
     ) async {
         guard !activeTranscriptionIDs.contains(record.id) else { return }
         await Observability.tracer.spanBuilder(spanName: "transcription.run").withActiveSpan { span in
@@ -1173,7 +1178,8 @@ final class AppState {
                 pasteTarget: pasteTarget,
                 configuration: configuration,
                 sessionID: sessionID,
-                span: span
+                span: span,
+                capturedSamples: capturedSamples
             )
         }
     }
@@ -1183,7 +1189,8 @@ final class AppState {
         pasteTarget: NSRunningApplication?,
         configuration: TranscriptionJobConfiguration,
         sessionID: UUID?,
-        span: any SpanBase
+        span: any SpanBase,
+        capturedSamples: [Float]?
     ) async {
         let telemetryStartedAt = Date()
         var telemetryOutcome = "error"
@@ -1191,7 +1198,8 @@ final class AppState {
         span.setAttributes([
             "transcription.engine": .string(configuration.engine.rawValue),
             "transcription.model": .string(configuration.model.rawValue),
-            "transcription.retry": .bool(isRetry)
+            "transcription.retry": .bool(isRetry),
+            "transcription.input": .string(capturedSamples == nil ? "file" : "samples")
         ])
         defer {
             let attributes: [String: AttributeValue] = [
@@ -1238,12 +1246,15 @@ final class AppState {
                 model: configuration.model,
                 language: configuration.language,
                 cliConfiguration: configuration.cliConfiguration,
-                allowAppleFallback: configuration.allowAppleFallback
+                allowAppleFallback: configuration.allowAppleFallback,
+                capturedSamples: capturedSamples
             )
-            let finalText = TranscriptFormatter.format(
-                configuration.vocabulary.apply(to: outcome.result.text),
-                options: configuration.formatting
-            )
+            let finalText = await Task.detached(priority: .userInitiated) {
+                TranscriptFormatter.format(
+                    configuration.vocabulary.apply(to: outcome.result.text),
+                    options: configuration.formatting
+                )
+            }.value
             try store.markTranscribed(
                 id: record.id,
                 text: finalText,

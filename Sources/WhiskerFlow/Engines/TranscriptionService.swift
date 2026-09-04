@@ -187,7 +187,8 @@ actor TranscriptionService {
     model: WhisperModel,
     language: String?,
     cliConfiguration: WhisperConfiguration,
-    allowAppleFallback: Bool
+    allowAppleFallback: Bool,
+    capturedSamples: [Float]? = nil
   ) async throws -> TranscriptionOutcome {
     let request = TranscriptionRequest(
       audioURL: audioURL,
@@ -196,6 +197,16 @@ actor TranscriptionService {
     )
 
     do {
+      if kind == .parakeetTDTv3, let capturedSamples {
+        do {
+          let result = try await parakeetTDTv3.transcribe(samples: capturedSamples, model: model, language: language)
+          return TranscriptionOutcome(result: result, engine: kind)
+        } catch {
+          if Task.isCancelled { throw error }
+          // Audio and a retryable record are already durable. Retain the file
+          // decoder and Apple fallback if the direct sample path fails.
+        }
+      }
       let result = try await primaryTranscribe(
         request, kind: kind, cliConfiguration: cliConfiguration)
       return TranscriptionOutcome(result: result, engine: kind)

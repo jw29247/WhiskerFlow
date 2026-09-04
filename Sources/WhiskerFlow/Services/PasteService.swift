@@ -30,6 +30,7 @@ struct PasteService {
 
         pasteboard.clearContents()
         pasteboard.setString(text.normalizedForDelivery, forType: .string)
+        let deliveryChangeCount = pasteboard.changeCount
 
         guard hasAccessibilityPermission else {
             requestAccessibilityPermission()
@@ -38,10 +39,11 @@ struct PasteService {
 
         Task { @MainActor in
             await Self.activateAndConfirm(application)
+            guard pasteboard.changeCount == deliveryChangeCount else { return }
             Self.sendPasteKeyEvent()
             // Restore the previous clipboard once the paste has been delivered.
             try? await Task.sleep(nanoseconds: 450_000_000)
-            Self.restore(saved, to: pasteboard)
+            Self.restore(saved, to: pasteboard, ifUnchangedSince: deliveryChangeCount)
         }
 
         return true
@@ -81,8 +83,10 @@ struct PasteService {
         } ?? []
     }
 
-    private static func restore(_ snapshot: [[NSPasteboard.PasteboardType: Data]], to pasteboard: NSPasteboard) {
-        guard !snapshot.isEmpty else { return }
+    static func restore(_ snapshot: [[NSPasteboard.PasteboardType: Data]], to pasteboard: NSPasteboard, ifUnchangedSince changeCount: Int) {
+        // A new Copy action owns the clipboard immediately. An earlier delayed
+        // paste must never replace it, forcing the user to copy a second time.
+        guard pasteboard.changeCount == changeCount, !snapshot.isEmpty else { return }
         pasteboard.clearContents()
         let items = snapshot.map { contents -> NSPasteboardItem in
             let item = NSPasteboardItem()
