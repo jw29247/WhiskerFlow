@@ -13,8 +13,9 @@ final class DictationPerformanceTests: XCTestCase {
         }
         let records = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: manifest))) as! [[String: Any]]
         let paths = Array(Set(records.compactMap { $0["audioFilePath"] as? String })).sorted()
-        let engine = ParakeetTDTv3Engine()
-        try await engine.prepare()
+        let service = TranscriptionService()
+        let ready = await service.prepare(kind: .parakeetTDTv3, model: .medium, language: "en")
+        XCTAssertTrue(ready)
         let converter = AudioConverter()
         var measurements: [[String: Any]] = []
         for path in paths {
@@ -24,12 +25,15 @@ final class DictationPerformanceTests: XCTestCase {
                 // Alternate which runs first to reduce systematic thermal/cache bias.
                 for mode in (iteration.isMultiple(of: 2) ? ["file", "capture"] : ["capture", "file"]) {
                     let start = ContinuousClock.now
-                    let result: TranscriptionResult
-                    if mode == "file" {
-                        result = try await engine.transcribe(TranscriptionRequest(audioURL: URL(fileURLWithPath: path), language: "en", model: .medium))
-                    } else {
-                        result = try await engine.transcribe(samples: samples, model: .medium, language: "en")
-                    }
+                    let outcome = try await service.transcribe(
+                        audioURL: URL(fileURLWithPath: path), kind: .parakeetTDTv3,
+                        model: .medium, language: "en",
+                        cliConfiguration: WhisperConfiguration(command: "", argumentsTemplate: ""),
+                        allowAppleFallback: false,
+                        capturedSamples: mode == "capture" ? samples : nil
+                    )
+                    let result = outcome.result
+                    XCTAssertEqual(outcome.engine, .parakeetTDTv3)
                     let elapsed = start.duration(to: .now)
                     let ms = Double(elapsed.components.seconds) * 1_000 + Double(elapsed.components.attoseconds) / 1e15
                     if reference == nil { reference = result.text }
