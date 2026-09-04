@@ -11,7 +11,7 @@ Investigate: capture-to-file work on the main actor; model preparation reentranc
 ## Implementation and verification plan
 
 - Preserve Parakeet TDT v3 int8 model/decoder settings. Coalesce concurrent warm-up and transcription preparation into one model-loading task.
-- Decode captured 16 kHz samples directly, deliver the result, then persist the WAV/history through the existing tracked background persistence path. Preserve durable file retry and Apple fallback for failures. Move fallback WAV encoding off the main actor.
+- Initial candidate: decode captured 16 kHz samples directly and persist after delivery. Release review superseded that ordering: save the WAV and retryable record before decoding, encoding the WAV off the main actor. Then decode existing samples without reading/converting the file again. Preserve durable file retry and Apple fallback for failures.
 - Fast-path already-normalized ASCII clipboard text and cache regexes for other text; count word boundaries without allocating normalized text and word arrays. Differential Unicode/whitespace tests compare against the old implementation.
 - Guard delayed clipboard restoration with the pasteboard change count so newer Copy actions win. Test with a private pasteboard.
 - UI draft-state corrections are owned by the concurrent UI task, not this change.
@@ -46,3 +46,5 @@ Local raw evidence (contains private transcript text; ignored by git): `.build/p
 ## Release 0.8.7
 
 The performance changes were integrated onto released 0.8.6 in an isolated checkout, preserving its cleanup and excluding unfinished meeting and UI changes in the shared checkout. Version 0.8.7 uses build 21. The measurements above remain measurements of the initial benchmark candidate against installed 0.8.5. Release integration receives a fresh release-mode test suite and real-audio equivalence check before signing and publication.
+
+Release review found that persistence after decoding could lose captured audio if the app exited during model preparation or recognition. The shipping integration restores durable WAV and retryable-record creation before decoding; encoding and transcript formatting run off the main actor. Sample decoding shares the existing history, telemetry, and fallback lifecycle. Consequently, the earlier candidate timing table must not be treated as a measured speedup for the final release. The model-loading and text-processing changes remain; the same recordings are checked for exact-output equivalence on the integrated release.
