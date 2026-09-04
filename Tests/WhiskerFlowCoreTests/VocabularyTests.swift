@@ -168,12 +168,4 @@ final class VocabularyTests: XCTestCase {
         }
     }
 
-    func testCompiledVocabularyMatchesVocabularyApply() {
-        let vocab = Vocabulary(rules: [
-            VocabularyRule(find: "x", replaceWith: "$1&"),
-            VocabularyRule(find: "cat", replaceWith: "dog")
-        ])
-        let compiled = CompiledVocabulary(vocab)
-        XCTAssertEqual(compiled.apply(to: "x the category cat"), vocab.apply(to: "x the category cat"))
-    }
 }

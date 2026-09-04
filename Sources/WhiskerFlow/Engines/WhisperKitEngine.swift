@@ -6,15 +6,11 @@ import WhiskerFlowCore
 
 /// Primary engine: on-device Whisper via CoreML / Neural Engine. The model is
 /// loaded once and kept warm, so only the first transcription pays the load cost.
-actor WhisperKitEngine: TranscriptionEngine {
+actor WhisperKitEngine: Sendable {
     private var pipe: WhisperKit?
     /// Keyed by identifier, not by `WhisperModel`, so switching between the
     /// English-only and multilingual variants of one size reloads the pipe.
     private var loadedIdentifier: String?
-
-    nonisolated var kind: TranscriptionEngineKind { .whisperKit }
-
-    func isAvailable() async -> Bool { true }
 
     func prepare(model: WhisperModel, language: String?) async throws {
         let identifier = model.whisperKitIdentifier(

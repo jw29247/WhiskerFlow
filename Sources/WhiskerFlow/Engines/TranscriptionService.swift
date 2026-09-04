@@ -25,7 +25,7 @@ actor TranscriptionService {
     switch kind {
     case .parakeetTDTv3:
       do {
-        try await parakeetTDTv3.prepare(model: model, language: language)
+        try await parakeetTDTv3.prepare()
         return true
       } catch {
         return false
@@ -74,10 +74,6 @@ actor TranscriptionService {
       meetingSpeakerKit = nil
       return false
     }
-  }
-
-  func diarizeMeeting(samples: [Float]) async throws -> [SpeakerSegment] {
-    try await ensureMeetingSpeakerKit().diarize(audioArray: samples).segments
   }
 
   /// Diarizes bounded windows so a long meeting does not require one massive
@@ -190,14 +186,12 @@ actor TranscriptionService {
     kind: TranscriptionEngineKind,
     model: WhisperModel,
     language: String?,
-    initialPrompt: String?,
     cliConfiguration: WhisperConfiguration,
     allowAppleFallback: Bool
   ) async throws -> TranscriptionOutcome {
     let request = TranscriptionRequest(
       audioURL: audioURL,
       language: language,
-      initialPrompt: initialPrompt,
       model: model
     )
 

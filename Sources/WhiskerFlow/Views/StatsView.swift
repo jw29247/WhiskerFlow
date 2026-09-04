@@ -83,7 +83,6 @@ private struct MiniBarChart: View {
     }
 
     private func barHeight(_ value: Int, max maxValue: Int, available: CGFloat) -> CGFloat {
-        guard maxValue > 0 else { return 2 }
         return max(2, available * CGFloat(value) / CGFloat(maxValue))
     }
 }

@@ -3,10 +3,9 @@
 On-device push-to-talk dictation for macOS. Hold a key, speak, release — WhiskerFlow
 transcribes locally and pastes the text wherever your cursor is.
 
-- **Fast & private** — transcription runs on-device via [WhisperKit](https://github.com/argmaxinc/WhisperKit)
-  (Whisper on the Apple Neural Engine). Audio and transcript text are never sent
-  to a server; privacy-safe operational telemetry goes to the project's
-  self-hosted Superlog instance.
+- **Fast & private** — dictation uses Parakeet TDT v3 on-device by default. Optional
+  Meeting Mode uploads meeting recordings and transcripts to the connected Atlas
+  account. Operational telemetry excludes audio and transcript text.
 - **Zero-setup install** — no Python, no Homebrew Whisper. The model downloads itself on first use.
 - **Works offline too** — a built-in Apple Speech engine needs no download at all.
 - **Floating HUD** with a live level meter, a rich menu-bar popover, searchable/editable
@@ -54,7 +53,8 @@ and dictation stats. The menu-bar icon gives quick access to recent transcripts.
 
 | Engine | Download | Offline | Notes |
 | --- | --- | --- | --- |
-| WhisperKit (default) | ~150 MB model on first use | after download | Best accuracy, Neural Engine |
+| Parakeet TDT v3 (default) | model on first use | after download | Fast on-device dictation, Apple Silicon |
+| WhisperKit | depends on model size | after download | Optional live transcription, Neural Engine |
 | Apple Speech | none | always | Built into macOS, instant |
 | Whisper CLI (advanced) | your own `openai-whisper` | yes | Point at a local install |
 
@@ -64,7 +64,7 @@ Pick the engine, model size, and language in **Settings → Engine**.
 
 ```sh
 swift build          # build
-swift test           # run the WhiskerFlowCore test suite
+swift test           # run the Core and AppSupport test suites
 swift run WhiskerFlow # run (or use script/build_and_run.sh to run as a .app bundle)
 ```
 
@@ -90,13 +90,13 @@ swift script/make_icon.swift Resources/AppIcon.iconset && \
 ## Architecture
 
 - **`WhiskerFlowCore`** — pure, dependency-free, unit-tested: the transcript store,
-  analytics, search, vocabulary, the `TranscriptionEngine` protocol, and shared value types.
+  analytics, search, vocabulary, transcription request/result models, and shared value types.
 - **`WhiskerFlow`** (app target) — SwiftUI/AppKit UI plus the engines
-  (`WhisperKitEngine`, `AppleSpeechEngine`, `WhisperCLIEngine`) behind a
+  (`ParakeetTDTv3Engine`, `WhisperKitEngine`, `AppleSpeechEngine`, `WhisperCLIEngine`) behind a
   `TranscriptionService` coordinator, audio capture, paste, and hotkey services.
 
 ## Notes on signing
 
-The bundled build is ad-hoc signed for personal/friend distribution. Real
-notarization needs an Apple Developer ID — wire your credentials into
-`script/package_release.sh` (`codesign` + `xcrun notarytool`) when you have them.
+Local builds use ad-hoc signing. Public releases use `script/notarize.sh` with
+Developer ID signing, Apple notarization, and a signed Sparkle update archive.
+See [AGENT.md](AGENT.md) for the complete release and appcast publishing steps.

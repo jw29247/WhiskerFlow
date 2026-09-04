@@ -4,16 +4,9 @@ import WhiskerFlowCore
 
 /// Advanced engine: shells out to a user-provided `openai-whisper` CLI.
 /// Fixes the original deadlock (concurrent pipe drain) and adds a timeout.
-struct WhisperCLIEngine: TranscriptionEngine {
+struct WhisperCLIEngine: Sendable {
     let configuration: WhisperConfiguration
     var timeout: TimeInterval = 180
-
-    nonisolated var kind: TranscriptionEngineKind { .whisperCLI }
-
-    func isAvailable() async -> Bool {
-        guard let resolved = Self.resolveCommand(configuration.command) else { return false }
-        return FileManager.default.isExecutableFile(atPath: resolved)
-    }
 
     func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
         let outputDirectory = FileManager.default.temporaryDirectory

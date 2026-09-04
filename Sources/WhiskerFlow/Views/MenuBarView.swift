@@ -8,7 +8,7 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
 
     private var recents: [TranscriptRecord] {
-        appState.records.filter { $0.status == .transcribed }.prefix(3).map { $0 }
+        Array(appState.records.lazy.filter { $0.status == .transcribed }.prefix(3))
     }
 
     var body: some View {

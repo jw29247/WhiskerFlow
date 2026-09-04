@@ -409,7 +409,7 @@ final class AppState {
         deviceRefreshTask = Task { @MainActor [weak self] in
             await Task.yield()
             guard !Task.isCancelled, let self else { return }
-            let refreshed = Microphone.availableInputDevices()
+            let refreshed = CoreAudioDeviceCatalog.availableInputs()
             self.devices = refreshed
 
             // Picker option and selection changes must not occur in the same
@@ -420,12 +420,9 @@ final class AppState {
                 self.settings.finishLegacyMicrophoneMigration(
                     MicrophoneSelection.migrate(legacyDeviceID: legacyID, devices: refreshed)
                 )
-            } else {
-                self.settings.selectedInput = MicrophoneSelection.reconcile(
-                    self.settings.selectedInput,
-                    devices: refreshed
-                )
             }
+            // Keep the preferred UID while disconnected; captureCandidates supplies
+            // the temporary system-default fallback when recording starts.
         }
     }
 
@@ -454,9 +451,7 @@ final class AppState {
 
     func refreshPermissionsAfterActivation() {
         refreshAccessibilityPermission()
-        let previous = microphonePermission.authorizationState
-        microphonePermission.refreshForApplicationActivation()
-        handleMicrophoneAuthorizationTransition(from: previous)
+        refreshMicrophonePermission()
         refreshScreenRecordingPermission()
         meetingCapture.refreshConfiguration()
     }
@@ -665,7 +660,7 @@ final class AppState {
         }
 
         do {
-            let currentDevices = Microphone.availableInputDevices()
+            let currentDevices = CoreAudioDeviceCatalog.availableInputs()
             let preferredInputSelection: AudioInputSelection
             if let legacyID = settings.legacySelectedDeviceID {
                 preferredInputSelection = MicrophoneSelection.migrate(
@@ -673,10 +668,7 @@ final class AppState {
                     devices: currentDevices
                 )
             } else {
-                preferredInputSelection = MicrophoneSelection.reconcile(
-                    settings.selectedInput,
-                    devices: currentDevices
-                )
+                preferredInputSelection = settings.selectedInput
             }
             refreshDevices()
             guard recordingCoordinator.phase == .preparing(sessionID) else {
@@ -1245,7 +1237,6 @@ final class AppState {
                 kind: configuration.engine,
                 model: configuration.model,
                 language: configuration.language,
-                initialPrompt: nil,
                 cliConfiguration: configuration.cliConfiguration,
                 allowAppleFallback: configuration.allowAppleFallback
             )

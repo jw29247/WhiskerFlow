@@ -4,15 +4,7 @@ import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
 /// Built-in, zero-download fallback using the on-device Speech framework.
-actor AppleSpeechEngine: TranscriptionEngine {
-    nonisolated var kind: TranscriptionEngineKind { .appleSpeech }
-
-    func isAvailable() async -> Bool {
-        let status = SFSpeechRecognizer.authorizationStatus()
-        guard status == .authorized || status == .notDetermined else { return false }
-        return SFSpeechRecognizer()?.isAvailable ?? false
-    }
-
+actor AppleSpeechEngine: Sendable {
     func requestAuthorization() async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             SFSpeechRecognizer.requestAuthorization { status in

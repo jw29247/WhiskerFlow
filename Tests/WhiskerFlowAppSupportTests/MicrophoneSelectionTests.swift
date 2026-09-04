@@ -21,16 +21,6 @@ final class MicrophoneSelectionTests: XCTestCase {
         )
     }
 
-    func testPreferredDeviceRemainsRememberedWhenItDisappears() {
-        XCTAssertEqual(
-            MicrophoneSelection.reconcile(
-                .device(uid: "usb-uid"),
-                devices: [devices[0]]
-            ),
-            .device(uid: "usb-uid")
-        )
-    }
-
     func testConnectedPreferredDeviceIsTriedBeforeSystemDefault() {
         XCTAssertEqual(
             MicrophoneSelection.captureCandidates(
@@ -41,20 +31,13 @@ final class MicrophoneSelectionTests: XCTestCase {
         )
     }
 
-    func testDisconnectedPreferredDeviceUsesSystemDefaultWithoutForgettingIt() {
+    func testDisconnectedPreferredDeviceUsesSystemDefault() {
         XCTAssertEqual(
             MicrophoneSelection.captureCandidates(
                 for: .device(uid: "usb-uid"),
                 devices: [devices[0]]
             ),
             [.systemDefault]
-        )
-        XCTAssertEqual(
-            MicrophoneSelection.reconcile(
-                .device(uid: "usb-uid"),
-                devices: [devices[0]]
-            ),
-            .device(uid: "usb-uid")
         )
     }
 

@@ -78,10 +78,6 @@ public final class MicrophonePermissionController {
         return authorizationState
     }
 
-    public func refreshForApplicationActivation() {
-        refresh()
-    }
-
     @discardableResult
     public func requestIfNeeded() async -> MicrophoneAuthorizationState {
         refresh()

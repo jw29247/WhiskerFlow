@@ -7,16 +7,10 @@ import WhiskerFlowCore
 /// FluidAudio owns the model cache under Application Support. Keeping the
 /// manager alive means model loading and Core ML compilation happen during the
 /// app warm-up rather than on the release-to-paste path.
-actor ParakeetTDTv3Engine: TranscriptionEngine {
+actor ParakeetTDTv3Engine: Sendable {
     private var manager: AsrManager?
 
-    nonisolated var kind: TranscriptionEngineKind { .parakeetTDTv3 }
-
-    func isAvailable() async -> Bool {
-        SystemInfo.isAppleSilicon
-    }
-
-    func prepare(model: WhisperModel, language: String?) async throws {
+    func prepare() async throws {
         guard SystemInfo.isAppleSilicon else {
             throw TranscriptionError.engineUnavailable(.parakeetTDTv3)
         }
@@ -37,7 +31,7 @@ actor ParakeetTDTv3Engine: TranscriptionEngine {
     }
 
     func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
-        try await prepare(model: request.model, language: request.language)
+        try await prepare()
         guard let manager else {
             throw TranscriptionError.modelUnavailable("Parakeet TDT v3")
         }
