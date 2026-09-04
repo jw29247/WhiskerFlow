@@ -9,6 +9,13 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>0.8.7</title>
+      <pubDate>Fri, 04 Sep 2026 21:34:55 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Faster dictation processing with recovery-safe captured audio, lighter Copy and history processing, shared model warm-up, and reliable clipboard restoration.]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v0.8.7/WhiskerFlow-0.8.7.zip" sparkle:version="21" sparkle:shortVersionString="0.8.7" sparkle:edSignature="sUVuBA0yBuZEDZvTrIUEoCqqiCQgCO7TV5/k+0foqUUvNr+QA8+Vp1cuWefLRUCFZ1PznaGFnp2RN72Odq6AAw==" length="16715754" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>0.8.6</title>
       <pubDate>Fri, 04 Sep 2026 20:52:37 +0000</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
