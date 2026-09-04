@@ -46,17 +46,23 @@ public enum MeetingCoachMetrics {
         let valid = inputs.filter { $0.elapsedSeconds.isFinite && $0.durationSeconds.isFinite && $0.elapsedSeconds >= 0 && $0.durationSeconds > 0 }
         let windowEnd = valid.map { $0.elapsedSeconds + $0.durationSeconds }.max() ?? 0
         let windowStart = max(0, windowEnd - windowSeconds)
-        var own = 0.0, system = 0.0, overlap = 0.0
+        var ownIntervals: [Range<TimeInterval>] = []
+        var systemIntervals: [Range<TimeInterval>] = []
         var missingOwn = false, missingSystem = false
         for input in valid {
-            let duration = max(0, min(input.elapsedSeconds + input.durationSeconds, windowEnd) - max(input.elapsedSeconds, windowStart))
-            guard duration > 0 else { continue }
+            let start = max(input.elapsedSeconds, windowStart)
+            let end = min(input.elapsedSeconds + input.durationSeconds, windowEnd)
+            guard end > start else { continue }
             missingOwn = missingOwn || input.ownMicActivity == nil
             missingSystem = missingSystem || input.systemActivity == nil
-            if input.ownMicActivity == true { own += duration }
-            if input.systemActivity == true { system += duration }
-            if input.ownMicActivity == true && input.systemActivity == true { overlap += duration }
+            if input.ownMicActivity == true { ownIntervals.append(start..<end) }
+            if input.systemActivity == true { systemIntervals.append(start..<end) }
         }
+        let mergedOwn = merge(ownIntervals)
+        let mergedSystem = merge(systemIntervals)
+        let own = duration(of: mergedOwn)
+        let system = duration(of: mergedSystem)
+        let overlap = intersectionDuration(mergedOwn, mergedSystem)
         let certainty: MeetingActivityCertainty
         if missingOwn && missingSystem { certainty = .missingBothTracks }
         else if missingOwn { certainty = .missingOwnMicTrack }
@@ -64,6 +70,36 @@ public enum MeetingCoachMetrics {
         else if overlap > 0 { certainty = .uncertainOverlap }
         else { certainty = .reliable }
         return .init(windowDurationSeconds: min(windowSeconds, windowEnd), ownMicActiveSeconds: min(windowSeconds, own), systemActiveSeconds: min(windowSeconds, system), overlapSeconds: min(windowSeconds, overlap), certainty: certainty)
+    }
+
+    private static func merge(_ intervals: [Range<TimeInterval>]) -> [Range<TimeInterval>] {
+        let sorted = intervals.sorted { $0.lowerBound < $1.lowerBound }
+        var result: [Range<TimeInterval>] = []
+        for interval in sorted {
+            guard let last = result.last, interval.lowerBound <= last.upperBound else {
+                result.append(interval)
+                continue
+            }
+            result[result.count - 1] = last.lowerBound..<max(last.upperBound, interval.upperBound)
+        }
+        return result
+    }
+
+    private static func duration(of intervals: [Range<TimeInterval>]) -> TimeInterval {
+        intervals.reduce(0) { $0 + $1.upperBound - $1.lowerBound }
+    }
+
+    private static func intersectionDuration(_ lhs: [Range<TimeInterval>], _ rhs: [Range<TimeInterval>]) -> TimeInterval {
+        var total = 0.0
+        var left = 0
+        var right = 0
+        while left < lhs.count, right < rhs.count {
+            let start = max(lhs[left].lowerBound, rhs[right].lowerBound)
+            let end = min(lhs[left].upperBound, rhs[right].upperBound)
+            if end > start { total += end - start }
+            if lhs[left].upperBound < rhs[right].upperBound { left += 1 } else { right += 1 }
+        }
+        return total
     }
 
     public static func canPrompt(elapsedSeconds: TimeInterval, lastPromptElapsedSeconds: TimeInterval?) -> Bool {

@@ -15,6 +15,13 @@ final class AssistantCoreTests: XCTestCase {
         XCTAssertEqual(SpokenSelfCorrection.resolve("Meet Thursday, sorry, Friday, or Saturday."), "Meet Thursday, sorry, Friday, or Saturday.")
     }
 
+    func testSpokenCorrectionSupportsNaturalIMeanAndBoundedScratchThat() {
+        XCTAssertEqual(SpokenSelfCorrection.resolve("Meet on Thursday, I mean Friday."), "Meet on Friday.")
+        XCTAssertEqual(SpokenSelfCorrection.resolve("Send the old version, scratch that, send the new version."), "Send the new version.")
+        XCTAssertEqual(SpokenSelfCorrection.resolve("She wrote “Thursday,” I mean Friday."), "She wrote “Thursday,” I mean Friday.")
+        XCTAssertEqual(SpokenSelfCorrection.resolve("Do not send the old version, scratch that, send the new version."), "Do not send the old version, scratch that, send the new version.")
+    }
+
     func testWritingAndRecordModelsRoundTripThroughCodable() throws {
         let now = Date(timeIntervalSince1970: 1_725_552_000)
         let draft = PendingQuickCaptureDraft(id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!, rawText: "Call Acme tomorrow", kind: .taskDraft, createdAt: now, updatedAt: now, syncState: .pending)
@@ -42,6 +49,16 @@ final class AssistantCoreTests: XCTestCase {
         XCTAssertFalse(MeetingCoachMetrics.canPrompt(elapsedSeconds: 59.9, lastPromptElapsedSeconds: 0))
         XCTAssertTrue(MeetingCoachMetrics.canPrompt(elapsedSeconds: 60, lastPromptElapsedSeconds: 0))
         XCTAssertTrue(MeetingCoachMetrics.canPrompt(elapsedSeconds: 0, lastPromptElapsedSeconds: nil))
+    }
+
+    func testMeetingMetricsDoNotDoubleCountOverlappingInputs() {
+        let result = MeetingCoachMetrics.accumulate(inputs: [
+            .init(elapsedSeconds: 0, durationSeconds: 40, ownMicActivity: true, systemActivity: false),
+            .init(elapsedSeconds: 20, durationSeconds: 40, ownMicActivity: true, systemActivity: false)
+        ])
+        XCTAssertEqual(result.ownMicActiveSeconds, 60)
+        XCTAssertEqual(result.systemActiveSeconds, 0)
+        XCTAssertEqual(result.overlapSeconds, 0)
     }
 
     func testInferencePolicyDeniesEveryUnsafeConditionWithoutFallback() {

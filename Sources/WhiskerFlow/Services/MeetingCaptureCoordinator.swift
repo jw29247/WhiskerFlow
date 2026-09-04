@@ -27,6 +27,7 @@ enum MeetingMenuBarStatus: String, Sendable {
 @MainActor
 @Observable
 final class MeetingCaptureCoordinator {
+  let assistant = MeetingAssistantController()
   private static let schedulePollSeconds: UInt64 = 60
   private static let scheduleWindowMs: Int64 = 7 * 24 * 60 * 60 * 1_000
   private static let preArmWindowMs: Int64 = 2 * 60 * 1_000
@@ -339,6 +340,9 @@ final class MeetingCaptureCoordinator {
         occurredAtMs: intent?.startMs ?? Int64(Date().timeIntervalSince1970 * 1_000)
       )
       let capture = MeetingAudioCaptureService(store: store, sessionID: sessionID)
+      capture.onActivity = { [weak assistant] input in
+        assistant?.recordActivity(input)
+      }
       capture.onFailure = { [weak self] error in
         Task { @MainActor [weak self] in
           guard let self, self.canPublishStatus(for: sessionID) else { return }
@@ -355,6 +359,7 @@ final class MeetingCaptureCoordinator {
       self.activeIntent = intent
       self.activeOverlapDetected = intent?.overlapsPrevious ?? false
       self.activeMeetingTitle = intent?.title ?? "Ad hoc meeting"
+      assistant.begin(sessionID: sessionID, title: self.activeMeetingTitle ?? "Ad hoc meeting")
       lastFailureCode = nil
       if activeOverlapDetected {
         status = .attention
@@ -399,6 +404,7 @@ final class MeetingCaptureCoordinator {
     activeIntent = nil
     status = .uploading
     statusDetail = "Finishing local recording and transcription."
+    assistant.end(sessionID: sessionID)
 
     do {
       _ = try await capture.stop()
@@ -465,6 +471,14 @@ final class MeetingCaptureCoordinator {
         lastFailureCode = nil
       }
       lastAtlasMeetingID = try store.loadManifest(sessionID: sessionID).atlasMeetingID
+      let completedManifest = try store.loadManifest(sessionID: sessionID)
+      if let meetingReference = completedManifest.atlasMeetingID {
+        await assistant.finalize(
+          sessionID: sessionID,
+          meetingReference: meetingReference,
+          durationMilliseconds: completedManifest.durationMs ?? 0
+        )
+      }
       try store.removeSession(sessionID: sessionID)
     } catch {
       try? store.markState(sessionID: sessionID, state: .failed)

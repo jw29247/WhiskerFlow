@@ -5,6 +5,7 @@ import Foundation
 import Logging
 import ScreenCaptureKit
 import WhiskerFlowAppSupport
+import WhiskerFlowCore
 
 enum MeetingAudioCaptureError: LocalizedError {
     case microphoneUnavailable
@@ -47,6 +48,12 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
     private var systemStreamRecoveryTask: Task<Void, Never>?
     private var systemStreamRecoveryFailed = false
     private var systemStreamNeedsRestart = false
+    private var activityTask: Task<Void, Never>?
+    private var activityStartedAt: TimeInterval?
+    private var microphoneActivity = false
+    private var systemActivity = false
+    private var sawMicrophoneSamples = false
+    private var sawSystemSamples = false
     private var sleepActivity: NSObjectProtocol?
     private var sleepObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
@@ -55,6 +62,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
 
     var onFailure: ((Error) -> Void)?
     var onLevel: ((Float) -> Void)?
+    var onActivity: ((MeetingActivityInput) -> Void)?
 
     init(
         microphone: AudioCaptureService? = nil,
@@ -105,6 +113,8 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         microphone.onSamples = { [weak self] samples in
           guard let self else { return }
           guard self.acceptingSamples else { return }
+          self.sawMicrophoneSamples = true
+          self.microphoneActivity = self.microphoneActivity || Self.hasAudibleActivity(samples)
           do {
                 _ = try writer.append(
                     samples,
@@ -136,6 +146,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
             )
             acceptingSamples = true
             isRunning = true
+            startActivityUpdates()
           } catch {
             acceptingSamples = false
             if let activeStream = self.stream {
@@ -175,6 +186,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
   func stop() async throws -> [MeetingRecordingChunkDescriptor] {
     acceptingSamples = false
     isRunning = false
+    stopActivityUpdates()
     microphoneRecoveryTask?.cancel()
     microphoneRecoveryTask = nil
     systemStreamRecoveryTask?.cancel()
@@ -196,6 +208,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
     func cancel() async {
         acceptingSamples = false
         isRunning = false
+        stopActivityUpdates()
         microphoneRecoveryTask?.cancel()
         microphoneRecoveryTask = nil
         systemStreamRecoveryTask?.cancel()
@@ -401,6 +414,8 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard acceptingSamples else { return }
+            sawSystemSamples = true
+            systemActivity = systemActivity || Self.hasAudibleActivity(samples)
             do {
                 _ = try writer.append(samples, track: .system, sourceStartMs: Int64(systemSampleCount / 16))
                 systemSampleCount += samples.count
@@ -410,6 +425,47 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
                 onFailure?(error)
             }
         }
+    }
+
+    private func startActivityUpdates() {
+        activityTask?.cancel()
+        activityStartedAt = ProcessInfo.processInfo.systemUptime
+        microphoneActivity = false
+        systemActivity = false
+        sawMicrophoneSamples = false
+        sawSystemSamples = false
+        activityTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled, let self, let startedAt = self.activityStartedAt else { return }
+                let elapsed = max(0, ProcessInfo.processInfo.systemUptime - startedAt)
+                self.onActivity?(.init(
+                    elapsedSeconds: max(0, elapsed - 1), durationSeconds: min(1, elapsed),
+                    ownMicActivity: self.sawMicrophoneSamples ? self.microphoneActivity : nil,
+                    systemActivity: self.sawSystemSamples ? self.systemActivity : nil
+                ))
+                self.microphoneActivity = false
+                self.systemActivity = false
+                self.sawMicrophoneSamples = false
+                self.sawSystemSamples = false
+            }
+        }
+    }
+
+    private func stopActivityUpdates() {
+        activityTask?.cancel()
+        activityTask = nil
+        activityStartedAt = nil
+        microphoneActivity = false
+        systemActivity = false
+        sawMicrophoneSamples = false
+        sawSystemSamples = false
+    }
+
+    nonisolated static func hasAudibleActivity(_ samples: [Float]) -> Bool {
+        guard !samples.isEmpty else { return false }
+        let meanSquare = samples.reduce(0.0) { $0 + Double($1 * $1) } / Double(samples.count)
+        return meanSquare.squareRoot() >= 0.015
     }
 
     nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
