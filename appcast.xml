@@ -9,6 +9,13 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>0.8.6</title>
+      <pubDate>Fri, 04 Sep 2026 20:52:37 +0000</pubDate>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[Maintenance release: removes unused code and redundant abstractions, simplifies tests, and strengthens bundle and version checks. Source integrations: see the breaking library API changes in the release notes.]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v0.8.6/WhiskerFlow-0.8.6.zip" sparkle:version="20" sparkle:shortVersionString="0.8.6" sparkle:edSignature="HAIkeKe0j6Xoei6styQ5hCUkGBd6gLS+CSCdexanD9wvb3IVCGE7AhRe3XQp5UkvEs4AyK32cSLSctqRFm5JAg==" length="16704866" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>0.8.5</title>
       <pubDate>Mon, 24 Aug 2026 22:20:15 +0000</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
