@@ -95,6 +95,22 @@ swift script/make_icon.swift Resources/AppIcon.iconset && \
   (`ParakeetTDTv3Engine`, `WhisperKitEngine`, `AppleSpeechEngine`, `WhisperCLIEngine`) behind a
   `TranscriptionService` coordinator, audio capture, paste, and hotkey services.
 
+## Source compatibility in 0.8.6
+
+This is a breaking source release for packages importing `WhiskerFlowCore` or
+`WhiskerFlowAppSupport`. The macOS app's saved data and settings remain compatible.
+
+Removed APIs: `TranscriptionEngine`, `TranscriptionRequest.initialPrompt` (including
+its initializer argument), `AudioCapturing`, `SampleTranscribing`,
+`AudioDeviceCataloging`, `AudioTapFormatPolicy`, `MicrophoneSelection.reconcile`,
+`MicrophonePermissionController.refreshForApplicationActivation`,
+`AgencyVocabularyPolicy.initialVocabulary`, `MeetingCoverageStatus`, and
+`MeetingRecordingSessionManifest.isCompleteLocally`.
+
+Source integrations should call their engine implementations directly, omit the
+unused prompt, retain the selected microphone UID, and use `refresh()` for
+permission refresh. Audio taps use the input node's hardware input format.
+
 ## Notes on signing
 
 Local builds use ad-hoc signing. Public releases use `script/notarize.sh` with
