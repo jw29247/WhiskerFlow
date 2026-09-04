@@ -4,7 +4,7 @@ import SpeakerKit
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
-struct MeetingLocalProcessingResult: Sendable {
+struct MeetingLocalProcessingResult: Codable, Sendable {
   let turns: [MeetingSpeakerTurn]
   let modelVersion: String
   let durationMs: Int64
@@ -27,9 +27,12 @@ actor MeetingLocalProcessor {
     language: String?
   ) async throws -> MeetingLocalProcessingResult {
     let processingDirectory = try makeProcessingDirectory(sessionID: manifest.sessionID)
+    defer { try? FileManager.default.removeItem(at: processingDirectory) }
+    let canonicalTrack: MeetingAudioTrack = manifest.chunks.contains { $0.track == .mixed }
+      ? .mixed : (manifest.chunks.contains { $0.track == .system } ? .system : .microphone)
     guard
       let mixedURL = try writeTemporaryWAV(
-        track: .mixed,
+        track: canonicalTrack,
         manifest: manifest,
         store: store,
         directory: processingDirectory
@@ -44,9 +47,6 @@ actor MeetingLocalProcessor {
       directory: processingDirectory
     )
     let systemReader = MeetingSystemAudioWindowReader(manifest: manifest, store: store)
-    defer {
-      try? FileManager.default.removeItem(at: processingDirectory)
-    }
 
     let canonical = try await transcription.transcribeMeeting(
       audioURL: mixedURL, language: language)
@@ -85,7 +85,7 @@ actor MeetingLocalProcessor {
     }.filter { !$0.text.isEmpty }
 
     let fallbackDuration = Double(manifest.chunks.map(\.endMs).max() ?? 0) / 1_000
-    let durationMs = Int64(((canonical.duration ?? fallbackDuration) * 1_000).rounded())
+    let durationMs = manifest.chunks.map(\.endMs).max() ?? Int64(fallbackDuration * 1_000)
     return MeetingLocalProcessingResult(
       turns: turns,
       modelVersion: WhisperKitEngine.meetingModelIdentifier,

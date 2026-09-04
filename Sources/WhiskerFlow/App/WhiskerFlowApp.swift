@@ -4,36 +4,44 @@ import WhiskerFlowAppSupport
 @main
 struct WhiskerFlowApp: App {
     @State private var appState: AppState
-    @StateObject private var updaterService = UpdaterService()
+    #if DEBUG
+    // A local 2.0 candidate must not replace itself with the public 0.x feed.
+    @StateObject private var updaterService = UpdaterService(startingUpdater: false)
+    #else
+    @StateObject private var updaterService = UpdaterService(startingUpdater: !UIPreview.isEnabled)
+    #endif
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
 
     init() {
-        Observability.start()
-        DiagnosticsService.start()
-        let appState = AppState()
+        if !UIPreview.isEnabled {
+            Observability.start()
+            DiagnosticsService.start()
+        }
+        let appState = UIPreview.makeAppState()
         _appState = State(initialValue: appState)
         AppDelegate.launchAppState = appState
     }
 
     var body: some Scene {
-        WindowGroup(id: "main") {
+        WindowGroup(UIPreview.isEnabled ? "WhiskerFlow · UI Preview" : "WhiskerFlow", id: "main") {
             ContentView(appState: appState)
-                .frame(minWidth: 820, minHeight: 560)
+                .preferredColorScheme(UIPreview.colorScheme)
+                .frame(minWidth: 980, minHeight: 680)
         }
-        .windowStyle(.titleBar)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1120, height: 760)
         .commands {
+            TranscriptCommands()
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesButton(updaterService: updaterService)
             }
             CommandGroup(after: .newItem) {
-                Button("Copy Selected Transcript") {
-                    if let text = appState.selectedRecord?.text, !text.isEmpty {
-                        appState.copy(text)
-                    }
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("--verify-corrections") {
+                    Button("Verify correction paste in TextEdit") { appState.verifyCorrectionPaste() }
+                        .keyboardShortcut("p", modifiers: [.command, .option, .shift])
                 }
-                .keyboardShortcut("c", modifiers: [.command, .shift])
-                .disabled(appState.selectedRecord?.text.isEmpty ?? true)
-
+                #endif
                 Button("Toggle Meeting Capture") {
                     appState.toggleMeetingCapture()
                 }
@@ -43,6 +51,7 @@ struct WhiskerFlowApp: App {
 
         Settings {
             SettingsView(appState: appState, updaterService: updaterService)
+                .preferredColorScheme(UIPreview.colorScheme)
         }
 
         MenuBarExtra(

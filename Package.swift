@@ -76,6 +76,10 @@ let package = Package(
         .testTarget(
             name: "WhiskerFlowAppSupportTests",
             dependencies: ["WhiskerFlowAppSupport"]
+        ),
+        .testTarget(
+            name: "WhiskerFlowTests",
+            dependencies: ["WhiskerFlow", .product(name: "FluidAudio", package: "FluidAudio")]
         )
     ]
 )

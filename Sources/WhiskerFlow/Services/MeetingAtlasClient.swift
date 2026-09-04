@@ -2,17 +2,6 @@ import CryptoKit
 import Foundation
 import WhiskerFlowAppSupport
 
-struct AtlasCaptureScheduleIntent: Codable, Sendable {
-    let eventID: String
-    let title: String
-    let startMs: Int64
-    let endMs: Int64
-    let meetingURL: String?
-    let location: String?
-    let existingMeetingID: String?
-    let overlapsPrevious: Bool
-}
-
 struct MeetingAtlasRecordingCompletion: Sendable {
     let status: String
     let duplicate: Bool
@@ -259,13 +248,17 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
     }
 
     func completePlayback(artifactID: String) async throws {
-        _ = try await call(
+        let response = try await call(
             tool: "notetaker.completePlayback",
             args: [
                 "externalRef": "complete-playback-\(artifactID)",
                 "artifactId": artifactID,
             ]
         )
+        guard let row = response as? [String: Any],
+              row["completed"] as? Bool == true || row["duplicate"] as? Bool == true else {
+            throw MeetingAtlasClientError.server("Atlas has not accepted every playback chunk yet.")
+        }
     }
 
     func appendSegments(meetingID: String, turns: [MeetingSpeakerTurn]) async throws {
@@ -290,7 +283,7 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
         for (batchIndex, batch) in stride(from: 0, to: segments.count, by: 100)
             .map({ Array(segments[$0..<min($0 + 100, segments.count)]) })
             .enumerated() {
-            _ = try await call(
+            let response = try await call(
                 tool: "notetaker.appendSegments",
                 args: [
                     "externalRef": "segments-\(meetingID)-\(batchIndex)",
@@ -298,11 +291,15 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
                     "segments": batch,
                 ]
             )
+            guard let row = response as? [String: Any],
+                  row["duplicate"] as? Bool == true || row["appended"] as? Int == batch.count else {
+                throw MeetingAtlasClientError.server("Atlas has not accepted the complete transcript yet.")
+            }
         }
     }
 
     func finalize(meetingID: String, artifactID: String, transcriptionState: String, status: String) async throws {
-        _ = try await call(
+        let response = try await call(
             tool: "notetaker.finalize",
             args: [
                 "externalRef": "finalize-\(artifactID)",
@@ -312,6 +309,10 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
                 "transcriptionState": transcriptionState,
             ]
         )
+        // false is the server's idempotent acknowledgement of an earlier finalize.
+        guard let row = response as? [String: Any], row["finalized"] is Bool else {
+            throw MeetingAtlasClientError.invalidResponse
+        }
     }
 
     private func call(tool: String, args: [String: Any]) async throws -> Any {
@@ -333,8 +334,12 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
     }
 
     private func validate(_ response: URLResponse) throws {
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw MeetingAtlasClientError.server("Atlas capture request failed")
+        guard let http = response as? HTTPURLResponse else { throw MeetingAtlasClientError.invalidResponse }
+        switch http.statusCode {
+        case 200..<300: return
+        case 401, 403: throw MeetingAtlasClientError.server("Atlas access expired or was denied. Reconnect Atlas in Meeting setup.")
+        case 429: throw MeetingAtlasClientError.server("Atlas is busy. Delivery will resume shortly.")
+        default: throw MeetingAtlasClientError.server("Atlas could not accept this request (HTTP \(http.statusCode)).")
         }
     }
 }

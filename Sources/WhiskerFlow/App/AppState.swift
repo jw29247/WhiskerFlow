@@ -92,7 +92,10 @@ final class AppState {
     private let atlasAuthSession = AtlasAuthSession()
     private let live: LiveDictationSession
     private let recordingCoordinator = RecordingCoordinator()
-    private let pasteService = PasteService()
+    private var pasteService = PasteService()
+    private var correctionEditBaselines: [UUID: String] = [:]
+    let corrections: CorrectionStore
+    private let correctionMonitor = PasteCorrectionMonitor()
     private let soundService = SoundService()
     let microphonePermission: MicrophonePermissionController
     let sharedVocabulary = SharedVocabularyService()
@@ -126,7 +129,8 @@ final class AppState {
 
     init(
         settings: AppSettings? = nil,
-        store: TranscriptStore = .defaultStore(),
+        store: TranscriptStore? = nil,
+        correctionStore: CorrectionStore? = nil,
         microphonePermission: MicrophonePermissionController? = nil
     ) {
         let resolvedSettings = settings ?? AppSettings()
@@ -135,7 +139,8 @@ final class AppState {
         )
         let transcription = TranscriptionService()
         self.settings = resolvedSettings
-        self.store = store
+        self.store = store ?? .defaultStore()
+        self.corrections = correctionStore ?? (store == nil ? .defaultStore() : CorrectionStore())
         self.microphonePermission = resolvedMicrophonePermission
         self.transcription = transcription
         self.meetingCapture = MeetingCaptureCoordinator(
@@ -144,6 +149,14 @@ final class AppState {
             transcription: transcription
         )
         self.live = LiveDictationSession(transcription: transcription)
+        pasteService.correctionMonitor = correctionMonitor
+        correctionMonitor.isEnabled = { [weak self] in
+            guard let self else { return false }
+            return self.settings.rememberCorrections && !UIPreview.isEnabled
+        }
+        correctionMonitor.onCorrections = { [weak self] changes, sessionID, application in
+            self?.corrections.record(changes, sessionID: sessionID, application: application)
+        }
         live.onLevel = { [weak self] level, peak in
             guard let self else { return }
             audioLevel = level
@@ -223,14 +236,27 @@ final class AppState {
         microphonePermission.detail
     }
 
-  var meetingStatus: MeetingMenuBarStatus { meetingCapture.status }
-  var meetingStatusDetail: String { meetingCapture.statusDetail }
-  var activeMeetingTitle: String? { meetingCapture.activeMeetingTitle }
-  var isMeetingCapturing: Bool { meetingCapture.isCapturing }
-  var upcomingMeetings: [AtlasCaptureScheduleIntent] { meetingCapture.upcomingMeetingIntents }
-  var previousMeetings: [AtlasCaptureScheduleIntent] { meetingCapture.previousMeetingIntents }
+  var meetingStatus: MeetingMenuBarStatus { UIPreview.isEnabled ? (UIPreview.isRecordingMeeting ? .recording : .covered) : meetingCapture.status }
+  var latestAtlasMeetingURL: URL? {
+    guard !UIPreview.isEnabled, let id = meetingCapture.lastAtlasMeetingID,
+          let base = URL(string: settings.atlasBaseURL) else { return nil }
+    return base.appendingPathComponent("meetings").appendingPathComponent(id)
+  }
+
+  func retryMeetingDelivery() {
+    guard !UIPreview.isEnabled else { return }
+    meetingCapture.retryPendingRecordings()
+  }
+
+  var meetingStatusDetail: String { UIPreview.isEnabled ? "Visual preview. No audio is being captured or uploaded." : meetingCapture.statusDetail }
+  var activeMeetingTitle: String? { UIPreview.isEnabled ? (UIPreview.isRecordingMeeting ? "Product review" : nil) : meetingCapture.activeMeetingTitle }
+  var isMeetingCapturing: Bool { UIPreview.isEnabled ? UIPreview.isRecordingMeeting : meetingCapture.isCapturing }
+  var isMeetingCaptureTransitioning: Bool { meetingCapture.isCaptureTransitioning }
+  var upcomingMeetings: [AtlasCaptureScheduleIntent] { UIPreview.isEnabled ? UIPreview.meetings.filter { $0.existingMeetingID == nil } : meetingCapture.upcomingMeetingIntents }
+  var previousMeetings: [AtlasCaptureScheduleIntent] { UIPreview.isEnabled ? UIPreview.meetings.filter { $0.existingMeetingID != nil } : meetingCapture.previousMeetingIntents }
 
     var isAtlasPaired: Bool {
+        if UIPreview.isEnabled { return UIPreview.isPaired }
         guard URL(string: settings.atlasBaseURL)?.scheme == "https" else { return false }
         return !settings.atlasDeviceToken.isEmpty
     }
@@ -248,6 +274,7 @@ final class AppState {
     // MARK: - Lifecycle
 
     func start() {
+        guard !UIPreview.isEnabled else { return }
         guard !hasStarted else { return }
         hasStarted = true
 
@@ -297,6 +324,7 @@ final class AppState {
     }
 
     func stopMonitors() {
+        correctionMonitor.stop()
         hotkeyMonitor?.stop()
         hotkeyMonitor = nil
         audioDeviceMonitor?.stop()
@@ -338,6 +366,7 @@ final class AppState {
     }
 
     func warmUpEngine() {
+        guard !UIPreview.isEnabled else { return }
         warmUpTask?.cancel()
         let engine = settings.engine
         let model = settings.model
@@ -367,10 +396,12 @@ final class AppState {
     }
 
     func reloadHotkey() {
+        guard !UIPreview.isEnabled else { return }
         hotkeyMonitor?.update(combo: settings.activeHotkeyCombo)
     }
 
     func warmUpMeetingEngine() {
+        guard !UIPreview.isEnabled else { return }
         meetingWarmUpTask?.cancel()
         guard settings.meetingModeEnabled, isAtlasPaired else {
             meetingModelState = .unloaded
@@ -401,10 +432,12 @@ final class AppState {
     }
 
     func refreshSharedVocabulary() {
+        guard !UIPreview.isEnabled else { return }
         sharedVocabulary.refresh()
     }
 
     func refreshDevices() {
+        guard !UIPreview.isEnabled else { return }
         deviceRefreshTask?.cancel()
         deviceRefreshTask = Task { @MainActor [weak self] in
             await Task.yield()
@@ -438,10 +471,12 @@ final class AppState {
     // MARK: - Permissions
 
     func refreshAccessibilityPermission() {
+        guard !UIPreview.isEnabled else { return }
         hasAccessibilityPermission = pasteService.hasAccessibilityPermission
     }
 
     func requestAccessibilityPermission() {
+        guard !UIPreview.isEnabled else { return }
         pasteService.requestAccessibilityPermission()
         refreshAccessibilityPermission()
     }
@@ -453,6 +488,7 @@ final class AppState {
     }
 
     func refreshPermissionsAfterActivation() {
+        guard !UIPreview.isEnabled else { return }
         refreshAccessibilityPermission()
         let previous = microphonePermission.authorizationState
         microphonePermission.refreshForApplicationActivation()
@@ -468,32 +504,39 @@ final class AppState {
     }
 
     func refreshScreenRecordingPermission() {
+        guard !UIPreview.isEnabled else { return }
         hasScreenRecordingPermission = CGPreflightScreenCaptureAccess()
     }
 
     func requestScreenRecordingPermission() {
+        guard !UIPreview.isEnabled else { return }
         _ = CGRequestScreenCaptureAccess()
         refreshScreenRecordingPermission()
     }
 
     func toggleMeetingCapture() {
+        guard !UIPreview.isEnabled else { return }
         meetingCapture.toggleManualCapture()
     }
 
   func refreshMeetingConfiguration() {
+        guard !UIPreview.isEnabled else { return }
         warmUpMeetingEngine()
         meetingCapture.refreshConfiguration()
   }
 
   func refreshMeetingSchedule() {
+        guard !UIPreview.isEnabled else { return }
     meetingCapture.refreshSchedule()
   }
 
   func recordScheduledMeeting(_ intent: AtlasCaptureScheduleIntent) {
+        guard !UIPreview.isEnabled else { return }
     meetingCapture.startScheduledCapture(intent)
   }
 
   func signInToAtlas() {
+        guard !UIPreview.isEnabled else { return }
     guard !isSigningInToAtlas else { return }
     isSigningInToAtlas = true
     atlasSignInError = nil
@@ -513,7 +556,8 @@ final class AppState {
   }
 
     func requestSpeechPermission() async -> Bool {
-        await transcription.requestAppleSpeechAuthorization()
+        guard !UIPreview.isEnabled else { return false }
+        return await transcription.requestAppleSpeechAuthorization()
     }
 
     // MARK: - Manual actions
@@ -538,9 +582,41 @@ final class AppState {
             try store.setText(id: record.id, text: text)
             records = store.records
             pendingVocabularySuggestions = suggestions
+            if settings.rememberCorrections {
+                let baseline = correctionEditBaselines[record.id] ?? record.text
+                correctionEditBaselines[record.id] = baseline
+                let changes = VocabularyCorrectionDetector.corrections(original: baseline, edited: text,
+                                                                       maxSuggestions: 20, allowShortCorrections: true)
+                corrections.record(changes, sessionID: record.id, application: "WhiskerFlow")
+            }
         } catch {
             handleStorageError(error, message: "Could not save transcript changes")
         }
+    }
+
+    /// Saves an edit even if retention removed its source while the editor was open.
+    /// Recovered text is a new record; a pruned audio path must never be resurrected.
+    func saveEditedTranscript(_ record: TranscriptRecord, text: String) -> TranscriptRecord? {
+        if records.contains(where: { $0.id == record.id }) {
+            updateText(record, to: text)
+            return records.first { $0.id == record.id && $0.text == text }
+        }
+        let recovered = TranscriptRecord(text: text, audioFilePath: "", status: .transcribed)
+        do {
+            try store.add(recovered)
+            records = store.records
+            return recovered
+        } catch {
+            handleStorageError(error, message: "Could not save the recovered transcript")
+            return nil
+        }
+    }
+
+    /// Editor Copy is literal, including intentional empty text and whitespace.
+    func copyEditorText(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        status = .success("Copied to clipboard")
     }
 
     func acceptVocabularySuggestion(_ suggestion: VocabularyCorrection) {
@@ -568,6 +644,7 @@ final class AppState {
     }
 
     func retry(_ record: TranscriptRecord) {
+        guard !UIPreview.isEnabled else { return }
         guard !activeTranscriptionIDs.contains(record.id) else { return }
         let configuration = makeTranscriptionConfiguration()
         Task {
@@ -693,8 +770,8 @@ final class AppState {
                 "recording.mode": .string(String(describing: settings.recordingMode))
             ])
             activeRecordingConfiguration = configuration
-            // Stream + decode live for the WhisperKit engine; other engines stay
-            // file-based (captured here, transcribed from the WAV on release).
+            // Stream + decode live for WhisperKit; Parakeet decodes the captured
+            // samples on release, with audio persistence following delivery.
             streamingActive = configuration.engine == .whisperKit && settings.liveTranscription
             var inputSelection: AudioInputSelection?
             var lastStartError: Error?
@@ -1108,8 +1185,8 @@ final class AppState {
         }
     }
 
-    /// Write captured samples to a WAV and transcribe via the standard engine
-    /// path (used for non-streaming engines and the streaming-empty fallback).
+    /// Persist captured audio for interrupted-decode recovery, then let Parakeet
+    /// use the existing samples without reading and converting the WAV again.
     private func transcribeCapturedSamples(
         _ samples: [Float],
         conversionFailures: Int,
@@ -1141,8 +1218,11 @@ final class AppState {
             return
         }
         do {
-            let url = try AudioFileWriter.makeRecordingURL()
-            try AudioFileWriter.writeWAV(samples: samples, to: url)
+            let url = try await Task.detached(priority: .userInitiated) {
+                let url = try AudioFileWriter.makeRecordingURL()
+                try AudioFileWriter.writeWAV(samples: samples, to: url)
+                return url
+            }.value
             let record = TranscriptRecord(
                 text: "",
                 audioFilePath: url.path,
@@ -1161,7 +1241,8 @@ final class AppState {
                 record,
                 pasteTarget: pasteTarget,
                 configuration: configuration,
-                sessionID: sessionID
+                sessionID: sessionID,
+                capturedSamples: configuration.engine == .parakeetTDTv3 ? samples : nil
             )
         } catch {
             handleStorageError(error, message: "Recording failed")
@@ -1172,7 +1253,8 @@ final class AppState {
         _ record: TranscriptRecord,
         pasteTarget: NSRunningApplication?,
         configuration: TranscriptionJobConfiguration,
-        sessionID: UUID?
+        sessionID: UUID?,
+        capturedSamples: [Float]? = nil
     ) async {
         guard !activeTranscriptionIDs.contains(record.id) else { return }
         await Observability.tracer.spanBuilder(spanName: "transcription.run").withActiveSpan { span in
@@ -1181,7 +1263,8 @@ final class AppState {
                 pasteTarget: pasteTarget,
                 configuration: configuration,
                 sessionID: sessionID,
-                span: span
+                span: span,
+                capturedSamples: capturedSamples
             )
         }
     }
@@ -1191,7 +1274,8 @@ final class AppState {
         pasteTarget: NSRunningApplication?,
         configuration: TranscriptionJobConfiguration,
         sessionID: UUID?,
-        span: any SpanBase
+        span: any SpanBase,
+        capturedSamples: [Float]?
     ) async {
         let telemetryStartedAt = Date()
         var telemetryOutcome = "error"
@@ -1199,7 +1283,8 @@ final class AppState {
         span.setAttributes([
             "transcription.engine": .string(configuration.engine.rawValue),
             "transcription.model": .string(configuration.model.rawValue),
-            "transcription.retry": .bool(isRetry)
+            "transcription.retry": .bool(isRetry),
+            "transcription.input": .string(capturedSamples == nil ? "file" : "samples")
         ])
         defer {
             let attributes: [String: AttributeValue] = [
@@ -1247,12 +1332,15 @@ final class AppState {
                 language: configuration.language,
                 initialPrompt: nil,
                 cliConfiguration: configuration.cliConfiguration,
-                allowAppleFallback: configuration.allowAppleFallback
+                allowAppleFallback: configuration.allowAppleFallback,
+                capturedSamples: capturedSamples
             )
-            let finalText = TranscriptFormatter.format(
-                configuration.vocabulary.apply(to: outcome.result.text),
-                options: configuration.formatting
-            )
+            let finalText = await Task.detached(priority: .userInitiated) {
+                TranscriptFormatter.format(
+                    configuration.vocabulary.apply(to: outcome.result.text),
+                    options: configuration.formatting
+                )
+            }.value
             try store.markTranscribed(
                 id: record.id,
                 text: finalText,
@@ -1324,6 +1412,21 @@ final class AppState {
             }
         }
     }
+
+    #if DEBUG
+    /// Invoked only by the opt-in verification command; exercises the real paste path.
+    func verifyCorrectionPaste() {
+        guard let target = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.TextEdit" }) else { return }
+        guard let url = target.bundleURL else { return }
+        Task { @MainActor in
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            guard let opened = try? await NSWorkspace.shared.openApplication(at: url, configuration: configuration) else { return }
+            deliver("Please send the report to Mark before Friday.", pasteTarget: opened,
+                    delivery: .pasteAtCursor, mayUpdateStatus: true)
+        }
+    }
+    #endif
 
     private func deliver(
         _ text: String,

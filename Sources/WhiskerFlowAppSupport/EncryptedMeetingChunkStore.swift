@@ -319,26 +319,74 @@ public final class EncryptedMeetingChunkStore: @unchecked Sendable {
                 includingPropertiesForKeys: [.isDirectoryKey],
                 options: [.skipsHiddenFiles]
             )
-            return try directories.compactMap { directory in
+            return directories.compactMap { directory in
                 guard directory.hasDirectoryPath,
                       UUID(uuidString: directory.lastPathComponent) != nil,
                       fileManager.fileExists(atPath: manifestURL(for: directory).path) else {
                     return nil
                 }
-                let sessionID = UUID(uuidString: directory.lastPathComponent)!
-                var manifest = try loadManifestLocked(sessionID: sessionID)
-                let recovered = try scanFinalChunksLocked(sessionID: sessionID)
-                let known = Set(manifest.chunks.map(\.relativePath))
-                let additional = recovered.filter { !known.contains($0.relativePath) }
-                if !additional.isEmpty {
-                    manifest.chunks.append(contentsOf: additional)
-                    manifest.chunks.sort {
-                        ($0.track.rawValue, $0.sequence) < ($1.track.rawValue, $1.sequence)
+                do {
+                    let sessionID = UUID(uuidString: directory.lastPathComponent)!
+                    var manifest = try loadManifestLocked(sessionID: sessionID)
+                    let recovered = try scanFinalChunksLocked(sessionID: sessionID)
+                    let known = Set(manifest.chunks.map(\.relativePath))
+                    let additional = recovered.filter { !known.contains($0.relativePath) }
+                    if !additional.isEmpty {
+                        manifest.chunks.append(contentsOf: additional)
+                        manifest.chunks.sort {
+                            ($0.track.rawValue, $0.sequence) < ($1.track.rawValue, $1.sequence)
+                        }
+                        try writeManifestLocked(manifest)
                     }
-                    try writeManifestLocked(manifest)
+                    return manifest
+                } catch {
+                    // One corrupt or partially written session must not hide
+                    // other valid recordings that can still be uploaded.
+                    return nil
                 }
-                return manifest
             }
+        }
+    }
+
+    /// Transcript checkpoints are encrypted just like source audio and bound to
+    /// the session identity. They survive interrupted uploads without plaintext.
+    public func writeProcessingCheckpoint(sessionID: UUID, data: Data) throws {
+        try withLock {
+            _ = try loadManifestLocked(sessionID: sessionID)
+            guard let key else { throw MeetingChunkStoreError.encryptionFailed }
+            let sealed = try AES.GCM.seal(data, using: key, authenticating: Data(sessionID.uuidString.utf8))
+            guard let bytes = sealed.combined else { throw MeetingChunkStoreError.encryptionFailed }
+            try bytes.write(to: sessionDirectory(sessionID).appendingPathComponent("transcript.v1.enc"), options: .atomic)
+        }
+    }
+
+    public func readProcessingCheckpoint(sessionID: UUID) throws -> Data? {
+        try withLock {
+            let url = sessionDirectory(sessionID).appendingPathComponent("transcript.v1.enc")
+            guard fileManager.fileExists(atPath: url.path) else { return nil }
+            guard let key else { throw MeetingChunkStoreError.encryptionFailed }
+            return try AES.GCM.open(AES.GCM.SealedBox(combined: Data(contentsOf: url)), using: key, authenticating: Data(sessionID.uuidString.utf8))
+        }
+    }
+
+    /// Keep audio acknowledgement durable separately from the transcript. Atlas
+    /// completeRecording must not be replayed after a successful finalization.
+    public func writeDeliveryReceipt(sessionID: UUID, data: Data) throws {
+        try withLock {
+            _ = try loadManifestLocked(sessionID: sessionID)
+            guard let key else { throw MeetingChunkStoreError.encryptionFailed }
+            let sealed = try AES.GCM.seal(data, using: key, authenticating: Data(sessionID.uuidString.utf8))
+            guard let bytes = sealed.combined else { throw MeetingChunkStoreError.encryptionFailed }
+            try bytes.write(to: sessionDirectory(sessionID).appendingPathComponent("delivery.v1.enc"), options: .atomic)
+        }
+    }
+
+    public func readDeliveryReceipt(sessionID: UUID) throws -> Data? {
+        try withLock {
+            let url = sessionDirectory(sessionID).appendingPathComponent("delivery.v1.enc")
+            guard fileManager.fileExists(atPath: url.path) else { return nil }
+            guard let key else { throw MeetingChunkStoreError.encryptionFailed }
+            return try AES.GCM.open(AES.GCM.SealedBox(combined: Data(contentsOf: url)), using: key, authenticating: Data(sessionID.uuidString.utf8))
         }
     }
 

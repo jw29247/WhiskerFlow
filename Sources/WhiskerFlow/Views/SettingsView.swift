@@ -1,27 +1,54 @@
 import SwiftUI
+import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
 struct SettingsView: View {
     @Bindable var appState: AppState
     @ObservedObject var updaterService: UpdaterService
+    @State private var category: SettingsCategory = .dictation
 
     var body: some View {
-        TabView {
-            generalTab
-                .tabItem { Label("General", systemImage: "gearshape") }
-            engineTab
-                .tabItem { Label("Engine", systemImage: "cpu") }
-            vocabularyTab
-                .tabItem { Label("Vocabulary", systemImage: "character.book.closed") }
-            advancedTab
-                .tabItem { Label("Advanced", systemImage: "terminal") }
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Settings").font(.system(size: 21, weight: .semibold, design: .rounded))
+                    .padding(.horizontal, 12).padding(.top, 24).padding(.bottom, 24)
+                ForEach(SettingsCategory.allCases) { item in
+                    Button { category = item } label: {
+                        Label(item.rawValue, systemImage: item.symbol)
+                            .font(.system(size: 13)).frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12).contentShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(category == item ? FlowStyle.accent : FlowStyle.ink)
+                    .background(category == item ? FlowStyle.selection : .clear, in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityAddTraits(category == item ? .isSelected : [])
+                }
+                Spacer()
+            }.padding(.horizontal, 12).frame(width: 155).background(.ultraThinMaterial)
+            Divider()
+            VStack(alignment: .leading, spacing: 0) {
+                Text(category.rawValue).font(.system(size: 25, weight: .semibold, design: .rounded))
+                    .padding(.horizontal, 25).padding(.top, 25).padding(.bottom, 5)
+                Group {
+                    switch category {
+                    case .dictation: dictationTab
+                    case .text: vocabularyTab
+                    case .meetings: Form { MeetingSetupView(appState: appState) }.formStyle(.grouped)
+                    case .app: appTab
+                    case .advanced: engineTab
+                    }
+                }
+                if let error = appState.settings.persistenceError {
+                    Label(error, systemImage: "exclamationmark.triangle").font(.caption)
+                        .foregroundStyle(.orange).padding(20)
+                }
+            }.frame(maxWidth: .infinity).background(FlowStyle.canvas)
         }
-        .frame(width: 600, height: 640)
+        .frame(width: 760, height: 650)
+        .foregroundStyle(FlowStyle.ink).tint(FlowStyle.accent)
     }
 
-    // MARK: - General
-
-    private var generalTab: some View {
+    private var dictationTab: some View {
         Form {
             Section("Recording") {
                 Picker("Hotkey", selection: $appState.settings.hotkey) {
@@ -44,7 +71,7 @@ struct SettingsView: View {
                 }
 
                 Toggle("Live transcription", isOn: $appState.settings.liveTranscription)
-                Text("Transcribe while you speak so the text pastes the instant you release the key. Uses the WhisperKit engine.")
+                Text("Show text while you speak when using WhisperKit. Other engines transcribe after recording.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -62,47 +89,12 @@ struct SettingsView: View {
                     .disabled(appState.microphoneControlsLocked)
             }
 
-            Section("Meeting Mode") {
-                Toggle("Automatically capture scheduled meetings", isOn: $appState.settings.meetingModeEnabled)
-                    .onChange(of: appState.settings.meetingModeEnabled) { _, _ in
-                        appState.refreshMeetingConfiguration()
-                    }
-                Text("Atlas server: atlas.thatworks.agency")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button {
-                    appState.signInToAtlas()
-                } label: {
-                    Label(
-                        appState.isSigningInToAtlas ? "Opening Atlas…" : "Sign in with Atlas",
-                        systemImage: "person.crop.circle.badge.checkmark"
-                    )
+            Section("Language") {
+                Picker("Language", selection: $appState.settings.language) {
+                    ForEach(Self.languages, id: \.code) { Text($0.name).tag($0.code) }
                 }
-                .disabled(appState.isSigningInToAtlas)
-                if let confirmation = appState.atlasSignInConfirmation {
-                    Label(confirmation, systemImage: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                }
-                if let error = appState.atlasSignInError {
-                    Text(error).font(.caption).foregroundStyle(.orange)
-                }
-                HStack {
-                    Label(
-                        appState.meetingStatus.displayName,
-                        systemImage: appState.meetingStatus == .covered ? "checkmark.circle.fill" : "exclamationmark.triangle"
-                    )
-                    .foregroundStyle(appState.meetingStatus == .covered ? .green : .orange)
-                    Spacer()
-                    Button("Re-check") { appState.refreshMeetingConfiguration() }
-                }
-                Text("Capture is local-first: network failures leave encrypted chunks queued on this Mac. Audio is never sent to cloud speech recognition.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                meetingHub
+                .onChange(of: appState.settings.language) { _, _ in appState.warmUpEngine() }
             }
-
             Section("Output") {
                 Picker("When done", selection: $appState.settings.delivery) {
                     ForEach(DeliveryMode.allCases) { Text($0.displayName).tag($0) }
@@ -110,23 +102,11 @@ struct SettingsView: View {
                 Toggle("Play sound cues", isOn: $appState.settings.playSounds)
             }
 
-            Section("Formatting") {
-                Toggle("Spoken line commands", isOn: $appState.settings.formatting.spokenLineCommands)
-                Text("Say \"new line\" or \"new paragraph\" to insert a line break.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        }.formStyle(.grouped)
+    }
 
-                Toggle("Capitalise sentences", isOn: $appState.settings.formatting.capitalizeSentences)
-                Text("Uppercase the first letter of each sentence and line.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Toggle("Remove filler words", isOn: $appState.settings.formatting.removeFillerWords)
-                Text("Drop \"um\", \"uh\", \"erm\" and \"uhm\", then tidy the spacing left behind.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
+    private var appTab: some View {
+        Form {
             Section("App") {
                 Toggle("Show in menu bar", isOn: $appState.settings.showMenuBarExtra)
                 Toggle("Show Dock icon", isOn: $appState.settings.showDockIcon)
@@ -139,94 +119,8 @@ struct SettingsView: View {
                 CheckForUpdatesButton(updaterService: updaterService)
             }
 
-            if let persistenceError = appState.settings.persistenceError {
-                Section {
-                    Label(persistenceError, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                }
-            }
-        }
-        .formStyle(.grouped)
+        }.formStyle(.grouped)
     }
-
-    private var meetingHub: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("Meeting Hub", systemImage: "calendar.badge.clock")
-                    .font(.headline)
-                Spacer()
-                Button("Refresh") { appState.refreshMeetingSchedule() }
-                    .disabled(!appState.isAtlasPaired)
-            }
-
-            Button {
-                appState.toggleMeetingCapture()
-            } label: {
-                Label(
-                    appState.isMeetingCapturing ? "Stop recording" : "Start ad hoc recording",
-                    systemImage: appState.isMeetingCapturing ? "stop.circle.fill" : "record.circle"
-                )
-            }
-            .disabled(!appState.isAtlasPaired && !appState.isMeetingCapturing)
-
-            if appState.upcomingMeetings.isEmpty {
-                Text("No upcoming Atlas meetings in the next 7 days.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Upcoming · next 7 days")
-                    .font(.subheadline.weight(.semibold))
-                ForEach(appState.upcomingMeetings, id: \.eventID) { intent in
-                    meetingRow(intent, isPrevious: false)
-                }
-            }
-
-            if !appState.previousMeetings.isEmpty {
-                Text("Previous · last 7 days")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.top, 4)
-                ForEach(appState.previousMeetings, id: \.eventID) { intent in
-                    meetingRow(intent, isPrevious: true)
-                }
-            }
-        }
-        .padding(.top, 4)
-    }
-
-    private func meetingRow(_ intent: AtlasCaptureScheduleIntent, isPrevious: Bool) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: isPrevious ? "clock.arrow.circlepath" : "calendar")
-                .foregroundStyle(isPrevious ? Color.secondary : Color.accentColor)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(intent.title)
-                    .lineLimit(1)
-                Text(Self.meetingDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(intent.startMs) / 1_000)))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if isPrevious {
-                Text(intent.existingMeetingID == nil ? "Not recorded" : "In Atlas")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if appState.isMeetingCapturing && appState.activeMeetingTitle == intent.title {
-                Text("Recording")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            } else {
-                Button("Record") { appState.recordScheduledMeeting(intent) }
-                    .disabled(appState.isMeetingCapturing || !appState.isAtlasPaired)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-
-    private static let meetingDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-        return formatter
-    }()
 
     // MARK: - Engine
 
@@ -248,15 +142,21 @@ struct SettingsView: View {
                     .onChange(of: appState.settings.model) { _, _ in appState.warmUpEngine() }
                 }
 
-                Picker("Language", selection: $appState.settings.language) {
-                    ForEach(Self.languages, id: \.code) { Text($0.name).tag($0.code) }
-                }
-                .onChange(of: appState.settings.language) { _, _ in appState.warmUpEngine() }
-
                 Toggle("Fall back to Apple Speech if the model is unavailable",
                        isOn: $appState.settings.allowAppleFallback)
+                if appState.settings.allowAppleFallback || appState.settings.engine == .appleSpeech {
+                    Button("Enable Apple Speech access") { Task { _ = await appState.requestSpeechPermission() } }
+                }
             }
 
+            if appState.settings.engine == .whisperCLI {
+                Section("Whisper CLI") {
+                    Text("Use {audio} for the recording and {output} for the output folder.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    TextField("Command", text: $appState.settings.whisperCommand)
+                    TextField("Arguments", text: $appState.settings.whisperArguments)
+                }
+            }
             Section("Model status") {
                 HStack {
                     modelStatusView
@@ -286,6 +186,24 @@ struct SettingsView: View {
 
     private var vocabularyTab: some View {
         Form {
+            Section("Formatting") {
+                Toggle("Spoken line commands", isOn: $appState.settings.formatting.spokenLineCommands)
+                Text("Say \"new line\" or \"new paragraph\" to insert a line break.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Capitalise sentences", isOn: $appState.settings.formatting.capitalizeSentences)
+                Text("Uppercase the first letter of each sentence and line.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Remove filler words", isOn: $appState.settings.formatting.removeFillerWords)
+                Text("Drop \"um\", \"uh\", \"erm\" and \"uhm\", then tidy the spacing left behind.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+
             sharedLibrarySection
 
             Section("Your replacements") {
@@ -374,21 +292,6 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Advanced
-
-    private var advancedTab: some View {
-        Form {
-            Section("Whisper CLI") {
-                Text("Only used when the engine is set to Whisper CLI. Use {audio} for the recording path and {output} for a temporary output folder.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextField("Command", text: $appState.settings.whisperCommand)
-                TextField("Arguments", text: $appState.settings.whisperArguments)
-            }
-        }
-        .formStyle(.grouped)
-    }
-
     static let languages: [(code: String, name: String)] = [
         ("auto", "Auto-detect"),
         ("en", "English"),
@@ -403,4 +306,18 @@ struct SettingsView: View {
         ("ko", "Korean"),
         ("ru", "Russian")
     ]
+}
+
+private enum SettingsCategory: String, CaseIterable, Identifiable {
+    case dictation = "Dictation", text = "Text", meetings = "Meetings", app = "App", advanced = "Advanced"
+    var id: String { rawValue }
+    var symbol: String {
+        switch self {
+        case .dictation: return "mic"
+        case .text: return "textformat"
+        case .meetings: return "calendar"
+        case .app: return "macwindow"
+        case .advanced: return "slider.horizontal.3"
+        }
+    }
 }

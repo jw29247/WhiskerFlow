@@ -43,6 +43,7 @@ final class MeetingCaptureCoordinator {
   private let keychain = MeetingCaptureTokenStore()
   private let transcription: TranscriptionService
   private let store: EncryptedMeetingChunkStore
+  private let clientProvider: (() -> (any MeetingAtlasClient)?)?
   private var scheduleTask: Task<Void, Never>?
   private var recoveryTask: Task<Void, Never>?
   private var uploadTask: Task<Void, Never>?
@@ -54,12 +55,14 @@ final class MeetingCaptureCoordinator {
   private var stopTask: Task<Void, Never>?
   private var activeCaptureStopAtMs: Int64?
   private var activeOverlapDetected = false
+  private var captureTransitionInProgress = false
   private var heartbeatTask: Task<Void, Never>?
   private var lastFailureCode: String?
   private var didStart = false
 
   private(set) var status: MeetingMenuBarStatus = .uncovered
   private(set) var statusDetail = "Pair a healthy Mac with Atlas to cover meetings."
+  private(set) var lastAtlasMeetingID: String?
   private(set) var activeMeetingTitle: String?
   private(set) var scheduleIntents: [AtlasCaptureScheduleIntent] = []
 
@@ -79,24 +82,28 @@ final class MeetingCaptureCoordinator {
 
   init(
     settings: AppSettings, microphonePermission: MicrophonePermissionController,
-    transcription: TranscriptionService
+    transcription: TranscriptionService,
+    store: EncryptedMeetingChunkStore? = nil,
+    clientProvider: (() -> (any MeetingAtlasClient)?)? = nil
   ) {
     self.settings = settings
     self.microphonePermission = microphonePermission
     self.transcription = transcription
+    self.clientProvider = clientProvider
     let root = StorageLocations.applicationSupportRootOrTemporary()
       .appendingPathComponent("MeetingRecordings", isDirectory: true)
-    self.store = EncryptedMeetingChunkStore(
+    self.store = store ?? EncryptedMeetingChunkStore(
       rootURL: root,
       keyProvider: KeychainMeetingChunkKeyProvider()
     )
   }
 
   var isBusy: Bool {
-    activeSessionID != nil || uploadTask != nil || retryTask != nil
+    captureTransitionInProgress || activeSessionID != nil || uploadTask != nil || retryTask != nil || !deliveringSessions.isEmpty
   }
 
   var isCapturing: Bool { activeSessionID != nil }
+  var isCaptureTransitioning: Bool { captureTransitionInProgress }
 
   func start() {
     guard !didStart else { return }
@@ -140,6 +147,7 @@ final class MeetingCaptureCoordinator {
   }
 
   func toggleManualCapture() {
+    guard !captureTransitionInProgress else { return }
     if activeSessionID != nil {
       Task { @MainActor [weak self] in await self?.stopCapture(reason: "manual") }
     } else {
@@ -148,12 +156,17 @@ final class MeetingCaptureCoordinator {
   }
 
   func startScheduledCapture(_ intent: AtlasCaptureScheduleIntent) {
-    guard activeSessionID == nil else { return }
+    guard activeSessionID == nil, !captureTransitionInProgress else { return }
     Task { @MainActor [weak self] in await self?.startCapture(intent: intent) }
   }
 
   func refreshSchedule() {
     Task { @MainActor [weak self] in await self?.pollSchedule() }
+  }
+
+  func retryPendingRecordings() {
+    guard uploadTask == nil, deliveringSessions.isEmpty else { return }
+    recoveryTask = Task { @MainActor [weak self] in await self?.recoverLocalSessions() }
   }
 
   func refreshConfiguration() {
@@ -167,29 +180,33 @@ final class MeetingCaptureCoordinator {
     }
   }
 
-  private func pollSchedule() async {
-    guard settings.meetingModeEnabled else {
-      status = .uncovered
-      statusDetail = "Scheduled Meeting Mode is disabled in Settings."
-      return
-    }
+  func pollSchedule() async {
     let now = Int64(Date().timeIntervalSince1970 * 1_000)
     let intents: [AtlasCaptureScheduleIntent]
+    var scheduleFetchFailed = false
     if let client = atlasClient() {
       do {
+        let window = MeetingScheduleWindow.automaticCapture(
+          nowMs: now,
+          lookaheadMs: Self.scheduleWindowMs
+        )
         let fresh = try await client.schedule(
-          fromMs: now - Self.scheduleWindowMs,
-          toMs: now + Self.scheduleWindowMs
+          fromMs: window.fromMs,
+          toMs: window.toMs
         )
         settings.cacheMeetingSchedule(fresh)
         intents = fresh
       } catch {
+        scheduleFetchFailed = true
+        lastFailureCode = "schedule"
         intents = cachedSchedule(now: now)
-        status = .attention
-        statusDetail =
-          intents.isEmpty
-          ? "Atlas schedule is temporarily unavailable; local capture remains available manually."
-          : "Atlas is offline; using the cached schedule for local capture."
+        if !isBusy {
+          status = .attention
+          statusDetail = intents.isEmpty
+            ? "Atlas schedule is temporarily unavailable; local capture remains available manually."
+            : "Atlas is offline; using the cached schedule for local capture."
+        }
+        DiagnosticsService.capture(error: error, category: "network", code: "meeting_schedule")
       }
     } else {
       intents = cachedSchedule(now: now)
@@ -197,22 +214,36 @@ final class MeetingCaptureCoordinator {
         updateUnpairedStatus()
         return
       }
-      status = .attention
-      statusDetail = "Atlas is offline; scheduled calls will be captured locally and queued."
+      if !isBusy {
+        status = .attention
+        statusDetail = "Atlas is offline; scheduled calls will be captured locally and queued."
+      }
     }
 
     scheduleIntents = intents
 
-    if activeSessionID != nil {
-      extendActiveCaptureIfNeeded(intents)
+    // The calendar is useful in manual mode too. Only auto-start is opt-in.
+    guard settings.meetingModeEnabled else {
+      if !isBusy && !scheduleFetchFailed {
+        status = .covered
+        statusDetail = "Ready to record. Automatic recording is off."
+      }
+      return
+    }
+    let automaticIntents = MeetingCaptureSchedulePolicy.automaticCaptureIntents(from: intents)
+
+    if activeSessionID != nil || captureTransitionInProgress {
+      if activeSessionID != nil {
+        extendActiveCaptureIfNeeded(automaticIntents)
+      }
       return
     }
     guard
-      let next = intents.first(where: {
+      let next = automaticIntents.first(where: {
         $0.startMs - Self.preArmWindowMs <= now && now <= $0.endMs + Self.stopGraceMs
       })
     else {
-      if atlasClient() != nil {
+      if !isBusy && !scheduleFetchFailed && atlasClient() != nil {
         status = .covered
         statusDetail = "Ready for the next scheduled meeting."
       }
@@ -236,7 +267,9 @@ final class MeetingCaptureCoordinator {
   /// as a conflict, but never receives a second independent artifact from the
   /// same Mac audio stream.
   private func extendActiveCaptureIfNeeded(_ intents: [AtlasCaptureScheduleIntent]) {
-    guard let activeIntent, let currentStop = activeCaptureStopAtMs else { return }
+    guard let activeIntent,
+          activeIntent.isEligibleForAutomaticCapture,
+          let currentStop = activeCaptureStopAtMs else { return }
     let captureStart = activeIntent.startMs - Self.preArmWindowMs
     let extensionStop = intents
       .filter {
@@ -260,6 +293,7 @@ final class MeetingCaptureCoordinator {
     stopTask = Task { @MainActor [weak self] in
       try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
       guard !Task.isCancelled else { return }
+      self?.stopTask = nil
       await self?.stopCapture(reason: "scheduled_end")
     }
   }
@@ -270,7 +304,9 @@ final class MeetingCaptureCoordinator {
       statusDetail = "Meeting Mode requires an Apple Silicon Mac."
       return
     }
-    guard activeSessionID == nil else { return }
+    guard activeSessionID == nil, !captureTransitionInProgress else { return }
+    captureTransitionInProgress = true
+    defer { captureTransitionInProgress = false }
     guard localDiskState() == "ready" else {
       status = .uncovered
       statusDetail = "At least 500 MB of local storage is required before recording."
@@ -344,14 +380,16 @@ final class MeetingCaptureCoordinator {
         scheduleUploadRetry()
       }
       status = .uncovered
-      statusDetail =
-        "Meeting Mode could not start; check Microphone and Screen Recording permissions."
+      statusDetail = error.localizedDescription
       DiagnosticsService.capture(error: error, category: "audio", code: "meeting_start")
     }
   }
 
   private func stopCapture(reason: String) async {
-    guard let sessionID = activeSessionID, let capture = audioCapture else { return }
+    guard let sessionID = activeSessionID,
+          let capture = audioCapture,
+          !captureTransitionInProgress else { return }
+    captureTransitionInProgress = true
     stopTask?.cancel()
     stopTask = nil
     activeCaptureStopAtMs = nil
@@ -364,6 +402,10 @@ final class MeetingCaptureCoordinator {
 
     do {
       _ = try await capture.stop()
+      // Release the capture transition only after the stream has stopped. A
+      // schedule poll can now start a genuinely separate meeting while the
+      // finished session is transcribed/uploaded below.
+      captureTransitionInProgress = false
       let manifest = try store.loadManifest(sessionID: sessionID)
       let durationMs = manifest.chunks.map(\.endMs).max() ?? 0
       let sourceGapDetected = capture.sourceGapDetected
@@ -373,23 +415,9 @@ final class MeetingCaptureCoordinator {
         durationMs: durationMs,
         sourceGapDetected: sourceGapDetected
       )
-      let processor = MeetingLocalProcessor(transcription: transcription)
-      localProcessor = processor
-      let result = try await processor.process(
-        manifest: try store.loadManifest(sessionID: sessionID),
-        store: store,
-        language: settings.resolvedLanguage
-      )
-      try store.markState(sessionID: sessionID, state: .completed, durationMs: result.durationMs)
-      await upload(
-        sessionID: sessionID,
-        turns: result.turns,
-        durationMs: result.durationMs,
-        sourceGapDetected: sourceGapDetected,
-        modelVersion: result.modelVersion,
-        reason: reason
-      )
+      await deliver(sessionID: sessionID)
     } catch {
+      captureTransitionInProgress = false
       lastFailureCode = "local_processing"
       if canPublishStatus(for: sessionID) {
         status = .attention
@@ -401,133 +429,51 @@ final class MeetingCaptureCoordinator {
     }
   }
 
-  private func upload(
-    sessionID: UUID,
-    turns: [MeetingSpeakerTurn],
-    durationMs: Int64,
-    sourceGapDetected: Bool,
-    modelVersion: String?,
-    reason: String
-  ) async {
-    _ = reason
+  private var deliveringSessions: Set<UUID> = []
+
+  func deliver(sessionID: UUID) async {
+    guard !deliveringSessions.contains(sessionID) else { return }
+    deliveringSessions.insert(sessionID)
+    defer { deliveringSessions.remove(sessionID) }
     guard let client = atlasClient() else {
-      status = .attention
-      statusDetail = "Recording and transcript are retained locally until Atlas is paired."
+      if canPublishStatus(for: sessionID) {
+        status = .attention
+        statusDetail = "Recording is saved on this Mac. Connect Atlas to send it."
+      }
       scheduleUploadRetry()
       return
     }
     do {
-      try Task.checkCancellation()
-      var manifest = try store.loadManifest(sessionID: sessionID)
-      let sourceManifestHash = try store.sourceManifestChecksum(sessionID: sessionID)
-      if manifest.atlasMeetingID == nil || manifest.atlasArtifactID == nil {
-        let capturedChunkCounts = Dictionary(
-          uniqueKeysWithValues: MeetingAudioTrack.allCases.map { track in
-            (track, manifest.chunks.filter { $0.track == track }.count)
-          }
-        )
-        let preparedChunkCounts = Dictionary(
-          uniqueKeysWithValues: capturedChunkCounts.map { track, count in
-            (track, max(1, count))
-          }
-        )
-        let created = try await client.createMeeting(
-          captureSessionID: sessionID,
-          title: manifest.title ?? "Captured call",
-          occurredAtMs: manifest.occurredAtMs ?? Int64(Date().timeIntervalSince1970 * 1_000),
-          eventID: manifest.calendarEventID
-        )
-        let artifactID = try await client.prepareRecording(
-          meetingID: created.meetingID,
-          captureSessionID: sessionID,
-          trackChunkCounts: preparedChunkCounts,
-          sourceManifestHash: sourceManifestHash,
-          playbackChunkCount: capturedChunkCounts[.mixed] ?? 0
-        )
-        try store.attachAtlasReferences(
-          sessionID: sessionID,
-          meetingID: created.meetingID,
-          artifactID: artifactID
-        )
-        manifest = try store.loadManifest(sessionID: sessionID)
-      }
-      guard let meetingID = manifest.atlasMeetingID, let artifactID = manifest.atlasArtifactID
-      else {
-        throw MeetingAtlasClientError.invalidResponse
-      }
-      for descriptor in manifest.pendingChunks {
-        try Task.checkCancellation()
-        // The authenticated transport receives the exact encrypted bytes
-        // described by the source manifest. Plaintext is used only inside the
-        // local transcription process.
-        let body = try store.readEncryptedChunk(sessionID: sessionID, descriptor: descriptor)
-        try await client.uploadChunk(artifactID: artifactID, descriptor: descriptor, body: body)
-        try store.markUploaded(
-          sessionID: sessionID, track: descriptor.track, sequence: descriptor.sequence)
-      }
-      let uploaded = try store.loadManifest(sessionID: sessionID)
-      let counts = Dictionary(
-        uniqueKeysWithValues: MeetingAudioTrack.allCases.map { track in
-          (track, uploaded.chunks.filter { $0.track == track }.count)
-        })
-      let missing = MeetingAudioTrack.allCases.filter { counts[$0, default: 0] == 0 }
-      var canonicalHasher = SHA256()
-      for descriptor in uploaded.chunks
-        .filter({ $0.track == .mixed })
-        .sorted(by: { $0.sequence < $1.sequence }) {
-        canonicalHasher.update(
-          data: try store.readEncryptedChunk(sessionID: sessionID, descriptor: descriptor))
-      }
-      let canonicalChecksum = canonicalHasher.finalize().map { String(format: "%02x", $0) }.joined()
-      let completion = try await client.completeRecording(
-        artifactID: artifactID,
-        durationMs: durationMs,
-        trackChunkCounts: counts,
-        hasSourceGap: sourceGapDetected,
-        missingTracks: missing,
-        canonicalChecksum: canonicalChecksum,
-        sourceManifestHash: sourceManifestHash,
-        modelVersion: modelVersion
-      )
-      let mixedDescriptors = uploaded.chunks
-        .filter { $0.track == .mixed }
-        .sorted { $0.sequence < $1.sequence }
-      for descriptor in mixedDescriptors {
-        try Task.checkCancellation()
-        let playbackBody = try store.readChunk(sessionID: sessionID, descriptor: descriptor)
-        try await client.uploadPlaybackChunk(
-          artifactID: artifactID,
-          descriptor: descriptor,
-          body: playbackBody
-        )
-      }
-      if !mixedDescriptors.isEmpty {
-        try await client.completePlayback(artifactID: artifactID)
-      }
-      try await client.appendSegments(meetingID: meetingID, turns: turns)
-      try await client.finalize(
-        meetingID: meetingID,
-        artifactID: artifactID,
-        transcriptionState: "completed",
-        status: "done"
-      )
-      if canPublishStatus(for: sessionID) {
-        if completion.status == "recorded_pending_transcription" || completion.status == "covered" {
-          status = .covered
-          statusDetail = "Recording, checksums, and speaker-labelled transcript verified in Atlas."
-        } else {
-          status = .attention
-          statusDetail = "Recording uploaded with a source gap; Atlas marked it partial."
+      let delivery = MeetingDelivery(store: store, client: client)
+      let completion = try await delivery.deliver(sessionID: sessionID) {
+        try self.store.markState(sessionID: sessionID, state: .awaitingTranscription)
+        let processor = MeetingLocalProcessor(transcription: self.transcription)
+        self.localProcessor = processor
+        return try await processor.process(manifest: self.store.loadManifest(sessionID: sessionID), store: self.store, language: self.settings.resolvedLanguage)
+      } progress: { detail in
+        if self.canPublishStatus(for: sessionID) {
+          self.status = .uploading
+          self.statusDetail = detail
         }
+      }
+      if canPublishStatus(for: sessionID) {
+        let covered = completion.status == "recorded_pending_transcription" || completion.status == "covered"
+        status = covered ? .covered : .attention
+        statusDetail = !covered
+          ? "Sent to Atlas. Some audio was missing; the recording is marked partial."
+          : "Recording and transcript saved in Atlas. Meeting notes are being prepared."
         lastFailureCode = nil
       }
-      try? store.removeSession(sessionID: sessionID)
+      lastAtlasMeetingID = try store.loadManifest(sessionID: sessionID).atlasMeetingID
+      try store.removeSession(sessionID: sessionID)
     } catch {
+      try? store.markState(sessionID: sessionID, state: .failed)
       if canPublishStatus(for: sessionID) {
-        lastFailureCode = "upload"
-        status = .uploading
-        statusDetail = "Recording is safe locally; upload will retry when Atlas is reachable."
+        lastFailureCode = "meeting_delivery"
+        status = .attention
+        statusDetail = "Meeting saved locally. \(error.localizedDescription) Will retry automatically."
       }
+      DiagnosticsService.capture(error: error, category: "network", code: "meeting_delivery")
       scheduleUploadRetry()
     }
   }
@@ -540,10 +486,10 @@ final class MeetingCaptureCoordinator {
         try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
         guard !Task.isCancelled, let self else { return }
         do {
-          let pending = try self.store.recoverSessions().filter { $0.state != .recording }
+          let pending = try self.store.recoverSessions().filter { $0.state != .recording && !$0.chunks.isEmpty }
           guard !pending.isEmpty else { return }
           await self.retryPendingSessions(pending)
-          let stillPending = try self.store.recoverSessions().contains { $0.state != .recording }
+          let stillPending = try self.store.recoverSessions().contains { $0.state != .recording && !$0.chunks.isEmpty }
           if !stillPending { return }
         } catch {
           if self.activeSessionID == nil {
@@ -558,8 +504,10 @@ final class MeetingCaptureCoordinator {
   }
 
   private func recoverLocalSessions() async {
+    guard uploadTask == nil else { return }
     do {
-      let sessions = try store.recoverSessions()
+      let sessions = MeetingRecordingSessionManifest.orderedForRecovery(
+        try store.recoverSessions())
       let pending = sessions
       if !pending.isEmpty {
         uploadTask = Task { @MainActor [weak self] in
@@ -577,49 +525,11 @@ final class MeetingCaptureCoordinator {
   private func retryPendingSessions(_ sessions: [MeetingRecordingSessionManifest]) async {
     for session in sessions {
       guard !Task.isCancelled else { return }
-      do {
-        if canPublishStatus(for: session.sessionID) {
-          status = .uploading
-          statusDetail = "Repairing a previous local recording."
-        }
-        let manifest = try store.loadManifest(sessionID: session.sessionID)
-        // A session still marked as recording means the process ended
-        // before it could close the final chunk set. Preserve every
-        // written chunk, but keep the coverage claim honest until a
-        // user or later repair can establish that no source gap exists.
-        let recoveredSourceGap = manifest.sourceGapDetected || manifest.state == .recording
-        let processor = MeetingLocalProcessor(transcription: transcription)
-        localProcessor = processor
-        try store.markState(
-          sessionID: session.sessionID,
-          state: .awaitingTranscription,
-          durationMs: manifest.durationMs,
-          sourceGapDetected: recoveredSourceGap
-        )
-        let result = try await processor.process(
-          manifest: try store.loadManifest(sessionID: session.sessionID),
-          store: store,
-          language: settings.resolvedLanguage
-        )
-        try store.markState(
-          sessionID: session.sessionID, state: .completed, durationMs: result.durationMs)
-        await upload(
-          sessionID: session.sessionID,
-          turns: result.turns,
-          durationMs: result.durationMs,
-          sourceGapDetected: recoveredSourceGap,
-          modelVersion: result.modelVersion,
-          reason: "recovery"
-        )
-      } catch {
-        try? store.markState(sessionID: session.sessionID, state: .failed)
-        if canPublishStatus(for: session.sessionID) {
-          status = .attention
-          statusDetail = "A previous local recording needs repair; encrypted audio was retained."
-        }
-        scheduleUploadRetry()
-        DiagnosticsService.capture(error: error, category: "storage", code: "meeting_recovery")
-      }
+      // Empty abandoned starts contain no recoverable audio. Keep them on disk,
+      // but do not make them block or continually restart the recovery queue.
+      guard !session.chunks.isEmpty else { continue }
+      guard session.sessionID != activeSessionID else { continue }
+      await deliver(sessionID: session.sessionID)
     }
     uploadTask = nil
   }
@@ -629,6 +539,7 @@ final class MeetingCaptureCoordinator {
   }
 
   private func atlasClient() -> MeetingAtlasClient? {
+    if let clientProvider { return clientProvider() }
     guard let baseURL = URL(string: settings.atlasBaseURL),
       baseURL.scheme == "https",
       let token = keychain.read(),
@@ -685,14 +596,10 @@ final class MeetingCaptureCoordinator {
   }
 
   private func updateUnpairedStatus() {
+    guard !isBusy else { return }
     guard Self.isSupportedMac else {
       status = .uncovered
       statusDetail = "Meeting Mode requires an Apple Silicon Mac."
-      return
-    }
-    guard settings.meetingModeEnabled else {
-      status = .uncovered
-      statusDetail = "Scheduled Meeting Mode is disabled in Settings."
       return
     }
     guard atlasClient() != nil else {

@@ -4,6 +4,7 @@ import WhiskerFlowCore
 
 @MainActor
 struct PasteService {
+    var correctionMonitor: PasteCorrectionMonitor?
     var hasAccessibilityPermission: Bool {
         AXIsProcessTrusted()
     }
@@ -25,11 +26,13 @@ struct PasteService {
     /// Paste `text` into `application` at the cursor, preserving the user's clipboard.
     @discardableResult
     func paste(_ text: String, into application: NSRunningApplication?) -> Bool {
+        correctionMonitor?.stop()
         let pasteboard = NSPasteboard.general
         let saved = Self.snapshot(of: pasteboard)
 
         pasteboard.clearContents()
         pasteboard.setString(text.normalizedForDelivery, forType: .string)
+        let deliveryChangeCount = pasteboard.changeCount
 
         guard hasAccessibilityPermission else {
             requestAccessibilityPermission()
@@ -38,10 +41,17 @@ struct PasteService {
 
         Task { @MainActor in
             await Self.activateAndConfirm(application)
-            Self.sendPasteKeyEvent()
+            guard pasteboard.changeCount == deliveryChangeCount else { return }
+            if let application, NSWorkspace.shared.frontmostApplication?.processIdentifier != application.processIdentifier {
+                Self.restore(saved, to: pasteboard, ifUnchangedSince: deliveryChangeCount)
+                return
+            }
+            let target = correctionMonitor?.prepare(pasted: text.normalizedForDelivery)
+            Self.sendPasteKeyEvent(to: application ?? NSWorkspace.shared.frontmostApplication)
+            correctionMonitor?.observe(target)
             // Restore the previous clipboard once the paste has been delivered.
             try? await Task.sleep(nanoseconds: 450_000_000)
-            Self.restore(saved, to: pasteboard)
+            Self.restore(saved, to: pasteboard, ifUnchangedSince: deliveryChangeCount)
         }
 
         return true
@@ -81,8 +91,10 @@ struct PasteService {
         } ?? []
     }
 
-    private static func restore(_ snapshot: [[NSPasteboard.PasteboardType: Data]], to pasteboard: NSPasteboard) {
-        guard !snapshot.isEmpty else { return }
+    static func restore(_ snapshot: [[NSPasteboard.PasteboardType: Data]], to pasteboard: NSPasteboard, ifUnchangedSince changeCount: Int) {
+        // A new Copy action owns the clipboard immediately. An earlier delayed
+        // paste must never replace it, forcing the user to copy a second time.
+        guard pasteboard.changeCount == changeCount, !snapshot.isEmpty else { return }
         pasteboard.clearContents()
         let items = snapshot.map { contents -> NSPasteboardItem in
             let item = NSPasteboardItem()
@@ -96,14 +108,21 @@ struct PasteService {
 }
 
 extension PasteService {
-    fileprivate static func sendPasteKeyEvent() {
+    fileprivate static func sendPasteKeyEvent(to application: NSRunningApplication?) {
         let source = CGEventSource(stateID: .combinedSessionState)
         let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
         let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
 
         keyDown?.flags = .maskCommand
         keyUp?.flags = .maskCommand
-        keyDown?.post(tap: .cghidEventTap)
-        keyUp?.post(tap: .cghidEventTap)
+        // Address the confirmed destination directly. Sending through the global
+        // HID stream can be replayed by event taps and deliver the paste twice.
+        if let application {
+            keyDown?.postToPid(application.processIdentifier)
+            keyUp?.postToPid(application.processIdentifier)
+        } else {
+            keyDown?.post(tap: .cghidEventTap)
+            keyUp?.post(tap: .cghidEventTap)
+        }
     }
 }

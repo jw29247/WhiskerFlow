@@ -10,6 +10,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var appState: AppState?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if MeetingRepairCommand.captureVerificationRequested {
+            Task { await MeetingRepairCommand.captureAndDeliver() }
+            return
+        }
+        if let sessionID = MeetingRepairCommand.sessionID {
+            Task { await MeetingRepairCommand.run(sessionID) }
+            return
+        }
+        #endif
         appState = Self.launchAppState
         // Startup publishes @Observable changes that reach List rows and the
         // activation policy. Running that inside a launch callback can re-enter
@@ -27,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard WindowCloseGuard.confirmTermination() else { return .terminateCancel }
         guard let appState, appState.hasPendingWork else {
             appState?.stopMonitors()
             Observability.shutdown(timeout: 2)

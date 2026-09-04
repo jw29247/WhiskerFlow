@@ -5,19 +5,22 @@ import WhiskerFlowCore
 /// The content shown inside the floating HUD panel.
 struct RecordingHUDView: View {
     @Bindable var appState: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 12) {
-            icon
+            if presentation == .recording {
+                FlowWaveform(level: appState.audioLevel, recording: true, size: 26)
+            } else { icon }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(FlowStyle.ink)
                 if presentation == .recording, !appState.liveText.isEmpty {
                     // Live transcript, most-recent words kept visible.
                     Text(appState.liveText)
                         .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(FlowStyle.ink)
                         .lineLimit(2)
                         .truncationMode(.head)
                         .frame(maxWidth: 320, alignment: .leading)
@@ -25,12 +28,12 @@ struct RecordingHUDView: View {
                     TimelineView(.periodic(from: .now, by: 0.2)) { _ in
                         Text(elapsedString)
                             .font(.system(size: 11, weight: .regular).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.7))
+                            .foregroundStyle(FlowStyle.muted)
                     }
                 } else {
                     Text("WhiskerFlow")
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.7))
+                        .foregroundStyle(FlowStyle.muted)
                 }
                 // Added below the transcript, never in its place: a thinking pause
                 // reads as "too quiet" within a couple of seconds, and hiding the
@@ -44,19 +47,19 @@ struct RecordingHUDView: View {
                 }
             }
             if presentation == .recording {
-                LevelMeter(level: appState.audioLevel, tint: .white)
+                LevelMeter(level: appState.audioLevel, tint: FlowStyle.accent)
             } else if presentation == .transcribing {
                 ProgressView()
                     .controlSize(.small)
-                    .tint(.white)
+                    .tint(FlowStyle.accent)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(
-            Capsule(style: .continuous)
-                .fill(Color.black.opacity(0.82))
-                .overlay(Capsule(style: .continuous).strokeBorder(.white.opacity(0.12)))
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(FlowStyle.surface)
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(FlowStyle.line))
         )
         .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
         .fixedSize()
@@ -66,7 +69,7 @@ struct RecordingHUDView: View {
         Image(systemName: iconName)
             .font(.system(size: 16, weight: .semibold))
             .foregroundStyle(iconTint)
-            .symbolEffect(.variableColor.iterative, isActive: presentation == .transcribing)
+            .symbolEffect(.variableColor.iterative, isActive: presentation == .transcribing && !reduceMotion)
     }
 
     private var presentation: FloatingHUDPresentation {
@@ -84,9 +87,9 @@ struct RecordingHUDView: View {
 
     private var iconTint: Color {
         switch presentation {
-        case .recording: return .red
+        case .recording: return FlowStyle.recording
         case .notification: return .green
-        case .transcribing, .hidden: return .white
+        case .transcribing, .hidden: return FlowStyle.accent
         }
     }
 

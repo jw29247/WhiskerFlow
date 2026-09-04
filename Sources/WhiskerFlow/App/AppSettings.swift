@@ -27,6 +27,7 @@ final class AppSettings {
     /// Stream and transcribe while speaking so the transcript pastes instantly on
     /// release. Applies to the WhisperKit engine; other engines stay file-based.
     var liveTranscription: Bool { didSet { defaults.set(liveTranscription, forKey: Keys.liveTranscription) } }
+    var rememberCorrections: Bool { didSet { defaults.set(rememberCorrections, forKey: "rememberCorrections") } }
     var delivery: DeliveryMode { didSet { defaults.set(delivery.rawValue, forKey: Keys.delivery) } }
     var playSounds: Bool { didSet { defaults.set(playSounds, forKey: Keys.playSounds) } }
     var allowAppleFallback: Bool { didSet { defaults.set(allowAppleFallback, forKey: Keys.allowAppleFallback) } }
@@ -82,13 +83,13 @@ final class AppSettings {
     var launchAtLogin: Bool {
         didSet {
             defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
-            applyLaunchAtLogin(launchAtLogin)
+            if !UIPreview.isEnabled { applyLaunchAtLogin(launchAtLogin) }
         }
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, meetingTokenStore: MeetingCaptureTokenStore = MeetingCaptureTokenStore()) {
         self.defaults = defaults
-        self.meetingTokenStore = MeetingCaptureTokenStore()
+        self.meetingTokenStore = meetingTokenStore
 
         let storedEngine = defaults.string(forKey: Keys.engine).flatMap(TranscriptionEngineKind.init)
         let storedModel = defaults.string(forKey: Keys.model).flatMap(WhisperModel.init)
@@ -113,6 +114,7 @@ final class AppSettings {
         customHotkey = Self.loadCustomHotkey(from: defaults) ?? .default
         recordingMode = defaults.string(forKey: Keys.recordingMode).flatMap(RecordingMode.init) ?? .holdToTalk
         liveTranscription = defaults.object(forKey: Keys.liveTranscription) as? Bool ?? true
+        rememberCorrections = defaults.object(forKey: "rememberCorrections") as? Bool ?? true
         delivery = defaults.string(forKey: Keys.delivery).flatMap(DeliveryMode.init) ?? .pasteAtCursor
         playSounds = defaults.object(forKey: Keys.playSounds) as? Bool ?? true
         allowAppleFallback = defaults.object(forKey: Keys.allowAppleFallback) as? Bool ?? true

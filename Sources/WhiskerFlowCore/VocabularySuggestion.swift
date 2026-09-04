@@ -30,7 +30,8 @@ public enum VocabularyCorrectionDetector {
         original: String,
         edited: String,
         existingRules: Vocabulary = Vocabulary(),
-        maxSuggestions: Int = 3
+        maxSuggestions: Int = 3,
+        allowShortCorrections: Bool = false
     ) -> [VocabularyCorrection] {
         let originalTokens = tokens(in: original)
         let editedTokens = tokens(in: edited)
@@ -44,7 +45,9 @@ public enum VocabularyCorrectionDetector {
             runs.reduce(0) { $0 + $1.replaceWith.count }
         )
         let totalTokens = max(originalTokens.count, editedTokens.count)
-        guard Double(changedTokens) / Double(totalTokens) <= rewriteRatio else { return [] }
+        let shortWordCorrection = allowShortCorrections && totalTokens <= 3 && runs.count == 1
+            && runs[0].find.count == 1 && runs[0].replaceWith.count == 1
+        guard shortWordCorrection || Double(changedTokens) / Double(totalTokens) <= rewriteRatio else { return [] }
 
         var suggestions: [VocabularyCorrection] = []
         var seen: Set<VocabularyCorrection> = []
