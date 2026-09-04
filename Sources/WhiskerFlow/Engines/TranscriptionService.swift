@@ -1,5 +1,7 @@
 import Foundation
 import SpeakerKit
+import OpenTelemetryApi
+import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
 struct TranscriptionOutcome: Sendable {
@@ -46,6 +48,36 @@ actor TranscriptionService {
 
   func requestAppleSpeechAuthorization() async -> Bool {
     await appleSpeech.requestAuthorization()
+  }
+
+  func transcribeDictationSamples(_ samples: [Float], model: WhisperModel, language: String?) async throws -> TranscriptionResult {
+    try await Observability.tracer.spanBuilder(spanName: "transcription.run").withActiveSpan { span in
+      let startedAt = Date()
+      var outcome = "error"
+      span.setAttributes([
+        "transcription.engine": .string(TranscriptionEngineKind.parakeetTDTv3.rawValue),
+        "transcription.model": .string(model.rawValue),
+        "transcription.retry": .bool(false),
+        "transcription.input": .string("samples")
+      ])
+      defer {
+        let attributes: [String: AttributeValue] = [
+          "engine": .string(TranscriptionEngineKind.parakeetTDTv3.rawValue),
+          "outcome": .string(outcome), "retry": .bool(false)
+        ]
+        Observability.transcriptionOperations.add(value: 1, attributes: attributes)
+        Observability.transcriptionDuration.record(value: Date().timeIntervalSince(startedAt), attributes: attributes)
+      }
+      do {
+        let result = try await parakeetTDTv3.transcribe(samples: samples, model: model, language: language)
+        outcome = "success"
+        span.status = .ok
+        return result
+      } catch {
+        span.status = .error(description: "Sample transcription failed")
+        throw error
+      }
+    }
   }
 
   /// Transcribe an in-memory 16 kHz mono float buffer with the warm WhisperKit

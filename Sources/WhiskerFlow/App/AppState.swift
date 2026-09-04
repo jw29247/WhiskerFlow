@@ -1100,8 +1100,8 @@ final class AppState {
         }
     }
 
-    /// Write captured samples to a WAV and transcribe via the standard engine
-    /// path (used for non-streaming engines and the streaming-empty fallback).
+    /// Decode Parakeet samples directly; retain the file path for other engines
+    /// and for recovery if the in-memory decode fails.
     private func transcribeCapturedSamples(
         _ samples: [Float],
         conversionFailures: Int,
@@ -1132,9 +1132,42 @@ final class AppState {
             }
             return
         }
+        defer {
+            if canUpdateLifecycleUI(for: sessionID) {
+                isTranscribing = !activeTranscriptionIDs.isEmpty
+            }
+        }
+        if configuration.engine == .parakeetTDTv3 {
+            isTranscribing = true
+            do {
+                let result = try await transcription.transcribeDictationSamples(
+                    samples, model: configuration.model, language: configuration.language
+                )
+                let finalText = await Task.detached(priority: .userInitiated) {
+                    TranscriptFormatter.format(
+                        configuration.vocabulary.apply(to: result.text),
+                        options: configuration.formatting
+                    )
+                }.value
+                let mayUpdateUI = canUpdateLifecycleUI(for: sessionID)
+                if mayUpdateUI {
+                    if configuration.playSounds { soundService.play(.transcriptionSucceeded) }
+                    deliver(finalText, pasteTarget: pasteTarget, delivery: configuration.delivery, mayUpdateStatus: true)
+                }
+                persistLiveRecording(text: finalText, samples: samples, configuration: configuration, sessionID: sessionID)
+                return
+            } catch {
+                // Preserve the existing durable retry and Apple fallback path.
+                // Never start another decode for an abandoned capture session.
+                guard !abandonedSessionIDs.contains(sessionID), !Task.isCancelled else { return }
+            }
+        }
         do {
-            let url = try AudioFileWriter.makeRecordingURL()
-            try AudioFileWriter.writeWAV(samples: samples, to: url)
+            let url = try await Task.detached(priority: .userInitiated) {
+                let url = try AudioFileWriter.makeRecordingURL()
+                try AudioFileWriter.writeWAV(samples: samples, to: url)
+                return url
+            }.value
             let record = TranscriptRecord(
                 text: "",
                 audioFilePath: url.path,
