@@ -1,5 +1,7 @@
 import Foundation
+@preconcurrency import AVFoundation
 import SpeakerKit
+import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
 struct TranscriptionOutcome: Sendable {
@@ -197,6 +199,10 @@ actor TranscriptionService {
     )
 
     do {
+      if kind == .whisperKit, capturedSamples == nil {
+        return await TranscriptionOutcome(
+          result: try transcribeWhisperFileBounded(request), engine: kind)
+      }
       if kind == .parakeetTDTv3, let capturedSamples {
         do {
           let result = try await parakeetTDTv3.transcribe(samples: capturedSamples, model: model, language: language)
@@ -219,6 +225,44 @@ actor TranscriptionService {
       }
       throw error
     }
+  }
+
+  private func transcribeWhisperFileBounded(_ request: TranscriptionRequest) async throws
+    -> TranscriptionResult {
+    let file = try AVAudioFile(forReading: request.audioURL)
+    let rate = file.processingFormat.sampleRate
+    let windowFrames = AVAudioFrameCount(rate * 30)
+    var assembler = BoundedTranscriptAssembler()
+    let ranges = BoundedDecodeWindowPolicy.frameRanges(totalFrames: file.length, sampleRate: rate)
+    for range in ranges {
+      try Task.checkCancellation()
+      let start = range.lowerBound
+      file.framePosition = start
+      let count = AVAudioFrameCount(range.count)
+      guard let pcm = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: count) else {
+        throw CocoaError(.fileReadUnknown)
+      }
+      try file.read(into: pcm, frameCount: count)
+      guard let channel = pcm.floatChannelData?[0] else { throw CocoaError(.fileReadCorruptFile) }
+      let samples = Array(UnsafeBufferPointer(start: channel, count: Int(pcm.frameLength)))
+      let decoded: TranscriptionResult
+      do {
+        decoded = try await whisperKit.transcribeFileWindow(
+          samples: samples, language: request.language, model: request.model)
+      } catch TranscriptionError.emptyTranscript {
+        guard BoundedDecodeWindowPolicy.containsAudibleActivity(samples) else { continue }
+        throw TranscriptionError.underlying(
+          "Audible recording audio was not transcribed. The recording is saved and will retry.")
+      }
+      if file.length <= AVAudioFramePosition(windowFrames) { return decoded }
+      let offset = Double(start) / rate
+      let lower = start == 0 ? offset : offset + 0.5
+      let isLast = range.upperBound >= file.length
+      let upper = isLast ? Double.infinity : offset + Double(count) / rate - 0.5
+      try assembler.append(decoded, offsetSeconds: offset, ownership: lower..<upper,
+                           requiresTimings: true)
+    }
+    return try assembler.finish(language: request.language, duration: Double(file.length) / rate)
   }
 
   private func primaryTranscribe(

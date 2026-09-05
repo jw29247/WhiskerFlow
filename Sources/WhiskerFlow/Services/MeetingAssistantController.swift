@@ -42,6 +42,9 @@ final class MeetingAssistantController {
         var durationMilliseconds: Int64?
         var meetingReference: String?
         var localSummary: String?
+        /// Capture-time binding: legacy/unpaired sessions stay unowned. Pairing
+        /// later must not silently expose their recap to the new connection.
+        var coachAccountIdentity: String?
     }
 
     private struct Storage: Codable {
@@ -78,6 +81,7 @@ final class MeetingAssistantController {
     var goal = ""
     var agenda = ""
     var bookmarkSync: MeetingBookmarkSync?
+    var accountIdentityProvider: (() -> String?)?
     private(set) var activeTitle: String?
     private(set) var elapsedSeconds: TimeInterval = 0
     private(set) var activity = MeetingCoachMetrics.accumulate(inputs: [])
@@ -89,7 +93,12 @@ final class MeetingAssistantController {
 
     var bookmarks: [LocalMeetingBookmark] { storage.bookmarks }
     var activityInputsCount: Int { activityInputs.count }
-    var localReview: String? { storage.sessions.reversed().compactMap(\.localSummary).first }
+    private var currentAccountIdentity: String? { accountIdentityProvider?() }
+    var localReview: String? {
+        storage.sessions.reversed().first {
+            $0.coachAccountIdentity == currentAccountIdentity && $0.localSummary != nil
+        }?.localSummary
+    }
 
     init(rootURL: URL? = nil, now: @escaping () -> Date = Date.init) {
         let root = rootURL ?? StorageLocations.applicationSupportRootOrTemporary()
@@ -134,7 +143,8 @@ final class MeetingAssistantController {
                 storageFailure = .storageUnavailable
                 return
             }
-            storage.sessions.append(.init(id: sessionID, title: title, startedAt: startedAt))
+            storage.sessions.append(.init(id: sessionID, title: title, startedAt: startedAt,
+                                          coachAccountIdentity: currentAccountIdentity))
         }
         persistOrRecordError()
     }
@@ -210,6 +220,23 @@ final class MeetingAssistantController {
         activity = MeetingCoachMetrics.accumulate(inputs: [])
         livePrompt = nil
         lastPromptElapsedSeconds = nil
+    }
+
+    @discardableResult
+    func deleteLocalReview() -> Bool {
+        guard let index = storage.sessions.lastIndex(where: {
+            $0.coachAccountIdentity == currentAccountIdentity && $0.localSummary != nil
+        }) else { return false }
+        let previous = storage.sessions[index].localSummary
+        storage.sessions[index].localSummary = nil
+        do {
+            try persist()
+            return true
+        } catch {
+            storage.sessions[index].localSummary = previous
+            storageError = "The local recap could not be deleted. Try again when local storage is available."
+            return false
+        }
     }
 
     func finalize(sessionID: UUID, meetingReference: String, durationMilliseconds: Int64, sync: MeetingBookmarkSync? = nil) async {

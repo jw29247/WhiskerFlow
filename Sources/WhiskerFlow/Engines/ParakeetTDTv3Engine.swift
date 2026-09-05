@@ -1,5 +1,7 @@
 import FluidAudio
+@preconcurrency import AVFoundation
 import Foundation
+import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
 /// Fast on-device speech recognition backed by Parakeet TDT v3/Core ML.
@@ -57,12 +59,44 @@ actor ParakeetTDTv3Engine: Sendable {
         }
 
         do {
-            var decoderState = try TdtDecoderState()
-            let result = try await manager.transcribe(
-                request.audioURL,
-                decoderState: &decoderState
-            )
-            return try Self.result(result, language: request.language)
+            let file = try AVAudioFile(forReading: request.audioURL)
+            let rate = file.processingFormat.sampleRate
+            let windowFrames = AVAudioFrameCount(rate * 30)
+            var assembler = BoundedTranscriptAssembler()
+            let ranges = BoundedDecodeWindowPolicy.frameRanges(totalFrames: file.length, sampleRate: rate)
+            for range in ranges {
+                try Task.checkCancellation()
+                let start = range.lowerBound
+                file.framePosition = start
+                let count = AVAudioFrameCount(range.count)
+                guard let pcm = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: count) else {
+                    throw CocoaError(.fileReadUnknown)
+                }
+                try file.read(into: pcm, frameCount: count)
+                guard let channel = pcm.floatChannelData?[0] else { throw CocoaError(.fileReadCorruptFile) }
+                let samples = Array(UnsafeBufferPointer(start: channel, count: Int(pcm.frameLength)))
+                var decoderState = try TdtDecoderState()
+                let decoded: TranscriptionResult
+                do {
+                    decoded = try await Self.result(
+                        manager.transcribe(samples, decoderState: &decoderState),
+                        language: request.language
+                    )
+                } catch TranscriptionError.emptyTranscript {
+                    guard BoundedDecodeWindowPolicy.containsAudibleActivity(samples) else { continue }
+                    throw TranscriptionError.underlying(
+                        "Audible recording audio was not transcribed. The recording is saved and will retry."
+                    )
+                }
+                if file.length <= AVAudioFramePosition(windowFrames) { return decoded }
+                let offset = Double(start) / rate
+                let lower = start == 0 ? offset : offset + 0.5
+                let isLast = range.upperBound >= file.length
+                let upper = isLast ? .infinity : offset + Double(count) / rate - 0.5
+                try assembler.append(decoded, offsetSeconds: offset, ownership: lower..<upper,
+                                     requiresTimings: true)
+            }
+            return try assembler.finish(language: request.language, duration: Double(file.length) / rate)
         } catch let error as TranscriptionError {
             throw error
         } catch is CancellationError {
@@ -96,12 +130,8 @@ actor ParakeetTDTv3Engine: Sendable {
         let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw TranscriptionError.emptyTranscript }
 
-        let segments = result.tokenTimings?.map {
-            TranscriptionSegment(
-                text: $0.token,
-                start: $0.startTime,
-                end: $0.endTime
-            )
+        let segments = result.tokenTimings.map(buildWordTimings)?.map {
+            TranscriptionSegment(text: $0.word, start: $0.startTime, end: $0.endTime)
         } ?? []
         return TranscriptionResult(
             text: text.plainTranscriptText,

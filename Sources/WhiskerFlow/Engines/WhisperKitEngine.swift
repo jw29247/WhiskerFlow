@@ -210,6 +210,36 @@ actor WhisperKitEngine: Sendable {
         )
     }
 
+    /// Decode one bounded file window with timestamps for deterministic overlap
+    /// ownership. This remains separate from the timestamp-free live API above.
+    func transcribeFileWindow(
+        samples: [Float], language: String?, model: WhisperModel
+    ) async throws -> WhiskerFlowCore.TranscriptionResult {
+        try await prepare(model: model, language: language)
+        guard let pipe else { throw TranscriptionError.modelUnavailable(model.displayName) }
+        let results = try await decode(seconds: DecodeTimeoutPolicy.timeout(
+            forAudioSeconds: Double(samples.count) / 16_000
+        )) {
+            try await pipe.transcribe(
+                audioArray: samples,
+                decodeOptions: Self.fileWindowDecodingOptions(language: language)
+            )
+        }
+        let text = results.map(\.text).joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw TranscriptionError.emptyTranscript }
+        return WhiskerFlowCore.TranscriptionResult(
+            text: text.plainTranscriptText,
+            segments: Self.timedWordSegments(from: results.flatMap(\.segments).flatMap {
+                ($0.words ?? []).map {
+                    (text: $0.word, start: Double($0.start), end: Double($0.end))
+                }
+            }),
+            language: results.first?.language ?? language,
+            duration: results.first?.timings.inputAudioSeconds
+        )
+    }
+
     /// Run only one Core ML decode at a time. A deadline may release the caller,
     /// but the underlying prediction is not necessarily cancellable; the gate
     /// remains occupied until that actual operation settles so a retry cannot
@@ -256,6 +286,23 @@ actor WhisperKitEngine: Sendable {
             concurrentWorkerCount: concurrentWorkerCount,
             chunkingStrategy: .vad
         )
+    }
+
+    static func fileWindowDecodingOptions(language: String?) -> DecodingOptions {
+        decodingOptions(
+            language: language,
+            withoutTimestamps: false,
+            wordTimestamps: true,
+            concurrentWorkerCount: 1
+        )
+    }
+
+    static func timedWordSegments(
+        from words: [(text: String, start: Double, end: Double)]
+    ) -> [WhiskerFlowCore.TranscriptionSegment] {
+        words.map {
+            WhiskerFlowCore.TranscriptionSegment(text: $0.text, start: $0.start, end: $0.end)
+        }
     }
 
     static let meetingModelIdentifier = "openai_whisper-large-v3-v20240930_turbo_632MB"

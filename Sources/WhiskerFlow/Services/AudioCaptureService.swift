@@ -215,6 +215,57 @@ private final class ConversionFailureBox: @unchecked Sendable {
     }
 }
 
+private final class CaptureSampleCountBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    func add(_ count: Int) { lock.withLock { storage += count } }
+    func reset() { lock.withLock { storage = 0 } }
+    var value: Int { lock.withLock { storage } }
+}
+
+final class OrdinaryAudioSpool: @unchecked Sendable {
+    let url: URL
+    private let file: AVAudioFile
+    private let buffer: BoundedAudioCaptureBuffer
+
+    init(url: URL) throws {
+        self.url = url
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000.0,
+            AVNumberOfChannelsKey: 1, AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false
+        ]
+        let output = try AVAudioFile(forWriting: url, settings: settings,
+                                     commonFormat: .pcmFormatFloat32, interleaved: false)
+        file = output
+        buffer = BoundedAudioCaptureBuffer(maximumResidentSamples: 16_000 * 30) { chunk in
+            guard let pcm = AVAudioPCMBuffer(pcmFormat: output.processingFormat,
+                                             frameCapacity: AVAudioFrameCount(chunk.count)),
+                  let channel = pcm.floatChannelData?[0] else { throw CocoaError(.fileWriteUnknown) }
+            pcm.frameLength = AVAudioFrameCount(chunk.count)
+            chunk.withUnsafeBufferPointer { source in
+                if let base = source.baseAddress { channel.update(from: base, count: chunk.count) }
+            }
+            try output.write(from: pcm)
+        }
+    }
+
+    func append(_ samples: [Float]) -> Bool { buffer.append(samples) }
+    var totalSampleCount: Int { buffer.totalSampleCount }
+    var failure: Error? { buffer.failure }
+    var residentStartSample: Int { buffer.residentStartSample }
+    func suffix(fromAbsoluteSample index: Int) -> [Float]? {
+        buffer.residentSuffix(fromAbsoluteSample: index)
+    }
+    var residentSamples: [Float] { suffix(fromAbsoluteSample: residentStartSample) ?? [] }
+
+    func discard() throws {
+        try FileManager.default.removeItem(at: url)
+    }
+}
+
 @MainActor
 final class AudioCaptureService {
     private static let targetSampleRate = 16_000.0
@@ -222,6 +273,8 @@ final class AudioCaptureService {
         label: "agency.thatworks.WhiskerFlow.AudioCapture"
     )
     private let samples = LockedAudioBuffer()
+    private let capturedSampleCount = CaptureSampleCountBox()
+    private var spool: OrdinaryAudioSpool?
     private let conversionFailures = ConversionFailureBox()
     private var engine: AVAudioEngine?
     private var tapInstalled = false
@@ -235,10 +288,23 @@ final class AudioCaptureService {
     var onSamples: (([Float]) -> Void)?
     var onConfigurationChange: (() -> Void)?
 
-    func start(selection: AudioInputSelection) throws {
+    func start(
+        selection: AudioInputSelection,
+        spoolTo audioURL: URL? = nil,
+        retainSamples: Bool = true
+    ) throws {
         stopEngine()
         samples.reset()
+        capturedSampleCount.reset()
+        spool = try audioURL.map(OrdinaryAudioSpool.init)
         conversionFailures.reset()
+        var started = false
+        defer {
+            if !started {
+                try? spool?.discard()
+                spool = nil
+            }
+        }
 
         guard let descriptor = CoreAudioDeviceCatalog.resolve(selection) else {
             throw AudioCaptureServiceError.deviceUnavailable
@@ -298,7 +364,10 @@ final class AudioCaptureService {
         }
         let converterBox = AudioConverterBox(converter: converter)
         let store = samples
+        let spool = spool
+        let retainSamples = retainSamples
         let failures = conversionFailures
+        let capturedSampleCount = capturedSampleCount
 
         inputNode.installTap(onBus: 0, bufferSize: 1_600, format: inputFormat) { [weak self] buffer, _ in
             do {
@@ -307,7 +376,12 @@ final class AudioCaptureService {
                     converter: converterBox.converter,
                     targetFormat: targetFormat
                 )
-                store.append(converted)
+                if let spool {
+                    guard spool.append(converted) else { throw spool.failure ?? CocoaError(.fileWriteUnknown) }
+                } else if retainSamples {
+                    store.append(converted)
+                }
+                capturedSampleCount.add(converted.count)
                 Task { @MainActor [weak self] in self?.onSamples?(converted) }
                 let level = Self.level(from: converted)
                 let peak = Self.peak(from: converted)
@@ -337,6 +411,7 @@ final class AudioCaptureService {
         do {
             try engine.start()
             self.engine = engine
+            started = true
             armConfigurationObservation(for: engine)
             logger.info(
                 "Capture started",
@@ -353,27 +428,54 @@ final class AudioCaptureService {
     }
 
     func sampleCount() -> Int {
-        samples.count
+        capturedSampleCount.value
     }
 
     func snapshotTail(from index: Int) -> [Float] {
-        samples.suffix(from: index)
+        spool?.suffix(fromAbsoluteSample: index) ?? samples.suffix(from: index)
+    }
+
+    func hasResidentSamples(from index: Int) -> Bool {
+        guard let spool else { return true }
+        return index >= spool.residentStartSample
     }
 
     func stop(reason: CaptureStopReason) -> CapturedAudio {
         stopEngine()
         onLevel?(0, 0)
+        var completedSpool = spool
+        spool = nil
+        if completedSpool?.failure != nil {
+            try? completedSpool?.discard()
+            return CapturedAudio(
+                samples: [], stopReason: reason,
+                conversionFailureCount: max(1, conversionFailures.value)
+            )
+        }
+        let residentSamples = completedSpool?.residentSamples ?? samples.drain()
+        let audioURL = completedSpool?.url
+        let totalSampleCount = completedSpool?.totalSampleCount
+        let residentStartSample = completedSpool?.residentStartSample ?? 0
+        // AVAudioFile finalizes its container header when released. Do that
+        // before callers reopen the URL for bounded transcription.
+        completedSpool = nil
         return CapturedAudio(
-            samples: samples.drain(),
+            samples: residentSamples,
             stopReason: reason,
-            conversionFailureCount: conversionFailures.value
+            conversionFailureCount: conversionFailures.value,
+            audioURL: audioURL,
+            totalSampleCount: totalSampleCount,
+            residentStartSample: residentStartSample
         )
     }
 
     func cancel() {
         stopEngine()
         samples.reset()
+        try? spool?.discard()
+        spool = nil
         conversionFailures.reset()
+        capturedSampleCount.reset()
         onLevel?(0, 0)
     }
 

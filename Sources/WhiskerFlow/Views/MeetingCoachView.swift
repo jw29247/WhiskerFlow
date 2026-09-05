@@ -7,6 +7,7 @@ struct MeetingCoachView: View {
     let requestReview: @MainActor () async -> Void
     @State private var bookmarkLabel = ""
     @State private var bookmarkFeedback: String?
+    @State private var localRecapMessage: String?
 
     init(
         controller: MeetingAssistantController,
@@ -92,8 +93,14 @@ struct MeetingCoachView: View {
                 }
             }
             if !controller.isActive, let summary = controller.localReview {
-                DisclosureGroup("Local meeting recap") { Text(summary).font(.callout).textSelection(.enabled).padding(.top, 8) }
+                DisclosureGroup("Local meeting recap") {
+                    Text(summary).font(.callout).textSelection(.enabled).padding(.top, 8)
+                    Button("Delete local recap", role: .destructive) {
+                        localRecapMessage = controller.deleteLocalReview() ? "Local recap deleted. Recording and bookmarks are unchanged." : nil
+                    }
+                }
             }
+            if let localRecapMessage { Text(localRecapMessage).font(.caption) }
             if !controller.isActive, controller.latestFinalizedMeetingReference != nil {
                 Button("Review latest meeting") { Task { await requestReview() } }
             }

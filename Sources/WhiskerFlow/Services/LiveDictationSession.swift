@@ -80,7 +80,8 @@ final class LiveDictationSession {
         reportedDecodeFailure = false
         isStreaming = streaming
         do {
-            try audioCapture.start(selection: selection)
+            let audioURL = try AudioFileWriter.makeRecordingURL()
+            try audioCapture.start(selection: selection, spoolTo: audioURL)
             isRunning = true
         } catch {
             isRunning = false
@@ -96,11 +97,13 @@ final class LiveDictationSession {
     /// Stop capture and return the freshest transcript plus the captured samples.
     func finish(
         reason: CaptureStopReason = .userReleased
-    ) async -> (text: String, samples: [Float], conversionFailures: Int, rawText: String) {
+    ) async -> (text: String, samples: [Float], conversionFailures: Int, rawText: String,
+                audioURL: URL?, totalSampleCount: Int) {
         let myGeneration = generation
         isRunning = false
         let loop = decodeLoop
         decodeLoop = nil
+        let completeTailWasResident = audioCapture.hasResidentSamples(from: confirmedSampleCount)
         let captured = audioCapture.stop(reason: reason)
         await loop?.value
         let samples = captured.samples
@@ -110,12 +113,13 @@ final class LiveDictationSession {
             // the cut, so an empty window with audio still after it always needs one
             // more pass — otherwise a release right after the final phrase loses it.
             // The other case is decoding having lagged badly on a long hold.
-            let undecoded = samples.count - lastDecodedSampleCount
-            if windowText.isEmpty || undecoded > Self.staleSampleThreshold {
-                await decodeWindow(
-                    Array(samples[min(confirmedSampleCount, samples.count)...]),
-                    generation: myGeneration
-                )
+            if let finalSamples = Self.finalDecodeSamples(
+                captured: captured,
+                confirmedSampleCount: confirmedSampleCount,
+                lastDecodedSampleCount: lastDecodedSampleCount,
+                windowIsEmpty: windowText.isEmpty
+            ) {
+                await decodeWindow(finalSamples, generation: myGeneration)
             }
         }
 
@@ -123,14 +127,20 @@ final class LiveDictationSession {
         // coordinator without waiting for us) means the state now belongs to a newer
         // session: hand back nothing rather than wiping its transcript.
         guard generation == myGeneration else {
-            return ("", samples, captured.conversionFailureCount, "")
+            return ("", samples, captured.conversionFailureCount, "", captured.audioURL, captured.totalSampleCount)
+        }
+
+        guard completeTailWasResident else {
+            resetTranscript()
+            onLevel?(0, 0)
+            return ("", samples, captured.conversionFailureCount, "", captured.audioURL, captured.totalSampleCount)
         }
 
         let rawText = LiveDecodeWindowPolicy.join(confirmedText, windowText)
         let finalText = emittedText()
         resetTranscript()
         onLevel?(0, 0)
-        return (finalText, samples, captured.conversionFailureCount, rawText)
+        return (finalText, samples, captured.conversionFailureCount, rawText, captured.audioURL, captured.totalSampleCount)
     }
 
     /// Abort without producing a transcript (e.g. permission revoked mid-flight).
@@ -220,6 +230,19 @@ final class LiveDictationSession {
         confirmedSampleCount = 0
         windowText = ""
         lastDecodedSampleCount = 0
+    }
+
+    nonisolated static func finalDecodeSamples(
+        captured: CapturedAudio,
+        confirmedSampleCount: Int,
+        lastDecodedSampleCount: Int,
+        windowIsEmpty: Bool
+    ) -> [Float]? {
+        let undecoded = captured.totalSampleCount - lastDecodedSampleCount
+        guard windowIsEmpty || undecoded > staleSampleThreshold else { return nil }
+        let localStart = max(0, confirmedSampleCount - captured.residentStartSample)
+        guard localStart <= captured.samples.count else { return nil }
+        return Array(captured.samples[localStart...])
     }
 
 }

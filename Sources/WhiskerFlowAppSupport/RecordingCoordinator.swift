@@ -25,6 +25,12 @@ public enum CaptureStopReason: Equatable, Sendable {
 
 public struct CapturedAudio: Equatable, Sendable {
     public let samples: [Float]
+    public let audioURL: URL?
+    public let totalSampleCount: Int
+    /// Absolute sample index represented by `samples[0]`. This is zero for
+    /// ordinary in-memory captures and advances when a disk-backed capture has
+    /// discarded its older resident tail.
+    public let residentStartSample: Int
     public let stopReason: CaptureStopReason
     /// Buffers the capture tap failed to convert. Non-zero with no samples means
     /// the mic delivered audio we could not use — not that the user stayed silent.
@@ -33,15 +39,21 @@ public struct CapturedAudio: Equatable, Sendable {
     public init(
         samples: [Float],
         stopReason: CaptureStopReason,
-        conversionFailureCount: Int = 0
+        conversionFailureCount: Int = 0,
+        audioURL: URL? = nil,
+        totalSampleCount: Int? = nil,
+        residentStartSample: Int = 0
     ) {
         self.samples = samples
         self.stopReason = stopReason
         self.conversionFailureCount = conversionFailureCount
+        self.audioURL = audioURL
+        self.totalSampleCount = totalSampleCount ?? samples.count
+        self.residentStartSample = residentStartSample
     }
 
     public var reportsUnusableInput: Bool {
-        samples.isEmpty && conversionFailureCount > 0
+        totalSampleCount == 0 && conversionFailureCount > 0
     }
 }
 

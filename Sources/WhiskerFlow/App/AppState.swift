@@ -174,6 +174,7 @@ final class AppState {
             guard let token = resolvedSettings?.atlasDeviceToken, !token.isEmpty else { return nil }
             return SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
         }
+        meetingCapture.assistant.accountIdentityProvider = assistant.accountIdentityProvider
         if store == nil && !UIPreview.isEnabled { assistant.synchronizeAccount() }
         assistant.requestTransport = { [weak self] in
             guard let self, !UIPreview.isEnabled, !self.settings.atlasDeviceToken.isEmpty,
@@ -1038,7 +1039,8 @@ final class AppState {
                 persistLiveRecording(
                     text: result.text,
                     rawText: result.rawText,
-                    samples: result.samples,
+                    capturedAudioURL: result.audioURL,
+                    totalSampleCount: result.totalSampleCount,
                     configuration: configuration,
                     sessionID: sessionID
                 )
@@ -1070,7 +1072,8 @@ final class AppState {
             persistLiveRecording(
                 text: result.text,
                 rawText: result.rawText,
-                samples: result.samples,
+                capturedAudioURL: result.audioURL,
+                totalSampleCount: result.totalSampleCount,
                 configuration: configuration,
                 sessionID: sessionID
             )
@@ -1081,6 +1084,8 @@ final class AppState {
             await transcribeCapturedSamples(
                 result.samples,
                 conversionFailures: result.conversionFailures,
+                capturedAudioURL: result.audioURL,
+                totalSampleCount: result.totalSampleCount,
                 pasteTarget: pasteTarget,
                 configuration: configuration,
                 sessionID: sessionID
@@ -1173,20 +1178,18 @@ final class AppState {
     private func persistLiveRecording(
         text: String,
         rawText: String,
-        samples: [Float],
+        capturedAudioURL: URL?,
+        totalSampleCount: Int,
         configuration: TranscriptionJobConfiguration,
         sessionID: UUID
     ) {
         let createdAt = Date()
-        let duration = Double(samples.count) / 16_000
+        let duration = Double(totalSampleCount) / 16_000
         let model = configuration.model.rawValue
         let engine = configuration.engine.rawValue
         let language = configuration.language
-        let url: URL
-        do {
-            url = try AudioFileWriter.makeRecordingURL()
-        } catch {
-            handleStorageError(error, message: "Could not create recording file")
+        guard let url = capturedAudioURL else {
+            handleStorageError(CocoaError(.fileNoSuchFile), message: "Could not save recording")
             return
         }
 
@@ -1211,9 +1214,7 @@ final class AppState {
                         ]
                     )
                 }
-                do {
-                    try AudioFileWriter.writeWAV(samples: samples, to: url)
-                    let saved = await self?.appendRecord(
+                let saved = await self?.appendRecord(
                         text: text,
                         rawText: rawText,
                         audioPath: url.path,
@@ -1223,21 +1224,13 @@ final class AppState {
                         engine: engine,
                         language: language,
                         sessionID: sessionID
-                    ) ?? false
-                    if saved {
-                        telemetryOutcome = "success"
-                        span.status = .ok
-                    } else {
-                        span.setAttribute(key: "error.type", value: "storage")
-                        span.status = .error(description: "Could not save transcript")
-                    }
-                } catch {
-                    span.setAttributes([
-                        "error.type": .string("storage"),
-                        "error.code": .int((error as NSError).code)
-                    ])
-                    span.status = .error(description: "Could not save recording")
-                    await self?.handleStorageError(error, message: "Could not save recording")
+                ) ?? false
+                if saved {
+                    telemetryOutcome = "success"
+                    span.status = .ok
+                } else {
+                    span.setAttribute(key: "error.type", value: "storage")
+                    span.status = .error(description: "Could not save transcript")
                 }
             }
         }
@@ -1284,11 +1277,13 @@ final class AppState {
     private func transcribeCapturedSamples(
         _ samples: [Float],
         conversionFailures: Int,
+        capturedAudioURL: URL?,
+        totalSampleCount: Int,
         pasteTarget: NSRunningApplication?,
         configuration: TranscriptionJobConfiguration,
         sessionID: UUID
     ) async {
-        guard !samples.isEmpty else {
+        guard totalSampleCount > 0 else {
             // Buffers that all failed to convert look identical to silence at this
             // point, so the failure count is the only way to tell the user why.
             if conversionFailures > 0 {
@@ -1312,11 +1307,7 @@ final class AppState {
             return
         }
         do {
-            let url = try await Task.detached(priority: .userInitiated) {
-                let url = try AudioFileWriter.makeRecordingURL()
-                try AudioFileWriter.writeWAV(samples: samples, to: url)
-                return url
-            }.value
+            guard let url = capturedAudioURL else { throw CocoaError(.fileNoSuchFile) }
             let record = TranscriptRecord(
                 text: "",
                 audioFilePath: url.path,
@@ -1336,7 +1327,7 @@ final class AppState {
                 pasteTarget: pasteTarget,
                 configuration: configuration,
                 sessionID: sessionID,
-                capturedSamples: configuration.engine == .parakeetTDTv3 ? samples : nil
+                capturedSamples: nil
             )
         } catch {
             handleStorageError(error, message: "Recording failed")

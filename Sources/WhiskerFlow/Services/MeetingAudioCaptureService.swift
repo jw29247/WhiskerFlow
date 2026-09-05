@@ -157,11 +157,11 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
     /// Confirm that audio is flowing before announcing a recording; use the
     /// built-in input if a disconnected/silent transport never starts.
     private func startWorkingMicrophone(selection: AudioInputSelection) async throws -> AudioInputSelection {
-        try microphone.start(selection: selection)
+        try microphone.start(selection: selection, retainSamples: false)
         if try await microphoneIsFlowing() { return selection }
         if let builtIn = CoreAudioDeviceCatalog.builtInInput(), selection != .device(uid: builtIn.uid) {
             let fallback = AudioInputSelection.device(uid: builtIn.uid)
-            try microphone.start(selection: fallback)
+            try microphone.start(selection: fallback, retainSamples: false)
             if try await microphoneIsFlowing() { return fallback }
         }
         throw MeetingAudioCaptureError.microphoneUnavailable

@@ -18,6 +18,19 @@ struct AssistantDraft: Codable, Identifiable, Equatable {
     var title: String { editedTitle ?? String(text.split(separator: "\n", omittingEmptySubsequences: true).first.map(String.init)?.prefix(160) ?? "Voice note".prefix(160)) }
 }
 
+/// A received result remains a recoverable preview until the owner explicitly saves it.
+/// A deletion tombstone retains only routing metadata, never coaching content.
+struct SavedAssistantCoaching: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var accountIdentity: String?
+    var createdAt = Date()
+    var meetingReference: String?
+    var jobReference: String?
+    var result: AssistantCoachResult?
+    var isSaved = false
+    var deletionRequestID: UUID?
+}
+
 @MainActor @Observable
 final class AssistantController {
     struct SavedState: Codable {
@@ -32,6 +45,7 @@ final class AssistantController {
         var selectedClient: String?
         var drafts: [AssistantDraft] = []
         var pendingJob: PendingJob?
+        var coachRecords: [SavedAssistantCoaching]? // Optional for pre-coaching storage migration.
     }
     struct PendingJob: Codable {
         var accountIdentity: String?
@@ -45,7 +59,19 @@ final class AssistantController {
     private var pauseRequested = false
     var rewriteInput = ""
     var rewritePreview = ""
-    var coachResult: AssistantCoachResult?
+    private var currentCoachID: UUID?
+    private var currentAccountIdentity: String? {
+        if let accountIdentityProvider { return accountIdentityProvider() }
+        return saved.accountIdentity
+    }
+    var visibleCoachRecords: [SavedAssistantCoaching] {
+        (saved.coachRecords ?? []).filter { $0.accountIdentity == currentAccountIdentity }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+    var currentCoachRecord: SavedAssistantCoaching? {
+        visibleCoachRecords.first { $0.id == currentCoachID && $0.deletionRequestID == nil }
+    }
+    var coachResult: AssistantCoachResult? { currentCoachRecord?.result }
     var selection: TextFieldSnapshot?
     private var pendingSelection: TextFieldSnapshot?
     var capturePurpose: CapturePurpose = .dictation
@@ -97,7 +123,7 @@ final class AssistantController {
             state.clientCustomVocabulary = [:]; state.clientUpdatedAt = [:]
             state.pendingJob = nil; state.cloudEnabled = false
         }
-        selection = nil; pendingSelection = nil; rewriteInput = ""; rewritePreview = ""; coachResult = nil
+        selection = nil; pendingSelection = nil; rewriteInput = ""; rewritePreview = ""; currentCoachID = nil
         return persisted
     }
     func setCloudEnabled(_ value: Bool) { update { $0.cloudEnabled = value } }
@@ -244,19 +270,20 @@ final class AssistantController {
         if phase == "premeeting", !saved.cloudEnabled {
             let outcome = goal.trimmingCharacters(in: .whitespacesAndNewlines)
             let agendaText = agenda.trimmingCharacters(in: .whitespacesAndNewlines)
-            coachResult = .init(kind: "coach", phase: phase, title: "Your meeting plan", suggestions: [
+            let result = AssistantCoachResult(kind: "coach", phase: phase, title: "Your meeting plan", suggestions: [
                 .init(text: outcome.isEmpty ? "Agree the outcome you want before discussing options." : "Open by agreeing the outcome: \(outcome)", evidence: []),
                 .init(text: agendaText.isEmpty ? "Choose the two or three questions that need an answer today." : "Use your agenda to keep the discussion focused: \(agendaText)", evidence: []),
                 .init(text: "Leave time to confirm decisions, owners and the next check-in.", evidence: [])
             ], incomplete: false)
-            message = "Prepared on this Mac from your goal and agenda."
+            guard retainCoach(result, accountIdentity: saved.accountIdentity, meetingReference: meetingReference, jobReference: nil) else { return }
+            message = "Prepared on this Mac from your goal and agenda. Save it to keep in your saved coaching."
             return
         }
         var args: [String: Any] = ["requestId": UUID().uuidString, "phase": phase, "goal": goal]
         if !agenda.isEmpty { args["agenda"] = agenda }
         if let meetingReference { args["meetingReference"] = meetingReference }
         if let reference = saved.selectedClient { args["clientReference"] = reference }
-        coachResult = nil
+        currentCoachID = nil
         await beginJob("requestCoach", args)
     }
     private func beginJob(_ operation: String, _ args: [String: Any]) async {
@@ -302,11 +329,16 @@ final class AssistantController {
                     } else {
                         let result = try JSONDecoder().decode(AssistantCoachResult.self, from: JSONSerialization.data(withJSONObject: result))
                         guard result.kind == "coach", result.suggestions.count <= 5 else { throw AssistantError.message("Atlas returned an invalid review.") }
-                        coachResult = result
+                        let source = try JSONSerialization.jsonObject(with: job.arguments) as? [String: Any]
+                        guard retainCoach(result, accountIdentity: job.accountIdentity,
+                                          meetingReference: source?["meetingReference"] as? String,
+                                          jobReference: job.reference) else { return }
                     }
-                    update { $0.pendingJob = nil }; message = "Ready to review."; return
+                    guard update({ $0.pendingJob = nil }) else { return }
+                    message = "Ready to review."; return
                 case "failed", "expired":
-                    update { $0.pendingJob = nil }; throw AssistantError.message("Atlas could not finish this request. You can try a new request.")
+                    let explanation = Self.failureMessage(for: row["error"] as? String)
+                    update { $0.pendingJob = nil }; throw AssistantError.message(explanation)
                 case "queued", "processing": break
                 default: throw AssistantError.message("Atlas returned an unknown job status.")
                 }
@@ -315,6 +347,114 @@ final class AssistantController {
             message = "Atlas is still working. Resume this request later."
         } catch { message = error is CancellationError ? "Request paused. Resume when ready." : error.localizedDescription }
     }
+
+    @discardableResult
+    private func retainCoach(_ result: AssistantCoachResult, accountIdentity: String?,
+                             meetingReference: String?, jobReference: String?) -> Bool {
+        // Resuming after a crash between durable result storage and pending-job
+        // cleanup must reopen the same record, not duplicate it.
+        if let jobReference, let existing = (saved.coachRecords ?? []).first(where: {
+            $0.jobReference == jobReference && $0.accountIdentity == accountIdentity
+        }) {
+            currentCoachID = existing.deletionRequestID == nil ? existing.id : nil
+            return true
+        }
+        guard (saved.coachRecords ?? []).count < 100 else {
+            message = "Coaching storage is full. Delete an old review before keeping another result."
+            return false
+        }
+        let record = SavedAssistantCoaching(accountIdentity: accountIdentity,
+                                            meetingReference: meetingReference,
+                                            jobReference: jobReference, result: result)
+        guard update({ $0.coachRecords = ($0.coachRecords ?? []) + [record] }) else { return false }
+        currentCoachID = record.id
+        return true
+    }
+
+    func dismissCoach() { currentCoachID = nil }
+
+    func saveCurrentCoach() {
+        guard synchronizeAccount(), let record = currentCoachRecord, record.result != nil else { return }
+        guard update({ state in
+            if let index = state.coachRecords?.firstIndex(where: { $0.id == record.id }) {
+                state.coachRecords?[index].isSaved = true
+            }
+        }) else { return }
+        message = "Coaching saved on this Mac."
+    }
+
+    func openCoach(_ id: UUID) {
+        guard synchronizeAccount(), let record = visibleCoachRecords.first(where: { $0.id == id }),
+              record.deletionRequestID == nil, record.result != nil else { return }
+        currentCoachID = id
+        message = record.isSaved ? "Opened saved coaching from this Mac." : "Reopened a coaching preview."
+    }
+
+    @discardableResult
+    func forgetPendingCoachDeletion(_ id: UUID) -> Bool {
+        guard !busy, synchronizeAccount(),
+              let record = visibleCoachRecords.first(where: { $0.id == id }),
+              record.deletionRequestID != nil else { return false }
+        guard update({ $0.coachRecords?.removeAll { $0.id == id } }) else { return false }
+        message = "Local deletion request forgotten. Deletion from Atlas is not confirmed; the remote copy may still exist."
+        return true
+    }
+
+    func deleteCoach(_ id: UUID) async {
+        guard !busy, synchronizeAccount(),
+              let record = visibleCoachRecords.first(where: { $0.id == id }) else { return }
+        guard let jobReference = record.jobReference else {
+            guard update({ $0.coachRecords?.removeAll { $0.id == id } }) else { return }
+            if currentCoachID == id { currentCoachID = nil }
+            message = "Coaching deleted from this Mac."
+            return
+        }
+        // Persist a stable request before sending. A lost acknowledgement can
+        // safely replay Atlas's idempotent receipt after a restart.
+        let requestID = record.deletionRequestID ?? UUID()
+        guard update({ state in
+            if let index = state.coachRecords?.firstIndex(where: { $0.id == id }) {
+                state.coachRecords?[index].deletionRequestID = requestID
+                state.coachRecords?[index].result = nil
+                state.coachRecords?[index].isSaved = false
+            }
+        }) else { return }
+        if currentCoachID == id { currentCoachID = nil }
+        busy = true
+        defer { busy = false }
+        do {
+            let receipt = try await call("deleteCoach", ["requestId": requestID.uuidString,
+                                                          "jobReference": jobReference])
+            guard receipt["deleted"] as? Bool == true,
+                  receipt["jobReference"] as? String == jobReference else {
+                throw AssistantError.message("Deletion was not acknowledged")
+            }
+            guard update({ $0.coachRecords?.removeAll { $0.id == id } }) else { return }
+            message = "Coaching deleted from Atlas and this Mac."
+        } catch {
+            message = "Coaching was removed from this Mac. Deletion from Atlas is pending; reconnect the original Atlas connection and retry."
+        }
+    }
+
+    private static func failureMessage(for code: String?) -> String {
+        // Interpret only the contract's constant failure categories. Never show
+        // raw provider errors or arbitrary remote text in the user's document UI.
+        switch code {
+        case "assistant_budget_exceeded":
+            return "Atlas's daily AI budget has been reached. Try again after it resets."
+        case "assistant_provider_unavailable":
+            return "Atlas's AI provider is unavailable. Try again later."
+        case "assistant_invalid_output":
+            return "Atlas could not produce a valid result. Your original text is unchanged."
+        case "assistant_context_unavailable":
+            return "Atlas could not verify access to the source. Refresh your connection or choose a different source."
+        case "assistant_generation_timeout":
+            return "Atlas timed out. You can try a new request."
+        default:
+            return "Atlas could not finish this request. You can try a new request."
+        }
+    }
+
     func call(_ operation: String, _ args: [String: Any]) async throws -> [String: Any] {
         guard synchronizeAccount() else { throw AssistantError.message("Atlas connection state could not be saved. No request was sent.") }
         guard let requestTransport else { throw AssistantError.message("Connect Atlas in Meeting setup first.") }

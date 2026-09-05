@@ -3,6 +3,44 @@ import XCTest
 @testable import WhiskerFlowCore
 
 final class AssistantCoreTests: XCTestCase {
+    func testBoundedTranscriptAssemblerRejectsSpokenWindowWithoutTimings() {
+        var assembler = BoundedTranscriptAssembler()
+        XCTAssertThrowsError(try assembler.append(
+            TranscriptionResult(text: "spoken words", segments: []),
+            offsetSeconds: 29, ownership: 29.5..<58.5, requiresTimings: true
+        )) { XCTAssertEqual($0 as? BoundedTranscriptAssemblyError, .missingTimings) }
+    }
+
+    func testBoundedTranscriptAssemblerOwnsOverlapAndKeepsLateTail() throws {
+        var assembler = BoundedTranscriptAssembler()
+        try assembler.append(
+            TranscriptionResult(text: "first boundary", segments: [
+                .init(text: "first", start: 27, end: 28),
+                .init(text: "boundary", start: 29.1, end: 29.7)
+            ]), offsetSeconds: 0, ownership: 0..<29.5, requiresTimings: true)
+        try assembler.append(
+            TranscriptionResult(text: "boundary final tail", segments: [
+                .init(text: "boundary", start: 0.1, end: 0.7),
+                .init(text: "final", start: 28, end: 28.4),
+                .init(text: "tail", start: 30.8, end: 31)
+            ]), offsetSeconds: 29, ownership: 29.5..<Double.infinity, requiresTimings: true)
+        let result = try assembler.finish(language: "en", duration: 60)
+        XCTAssertEqual(result.text, "first boundary final tail")
+        XCTAssertEqual(result.segments.last?.end, 60)
+    }
+    func testBoundedTranscriptAssemblerKeepsSpeechAfterSilentMiddleWindow() throws {
+        var assembler = BoundedTranscriptAssembler()
+        try assembler.append(
+            TranscriptionResult(text: "before", segments: [.init(text: "before", start: 1, end: 2)]),
+            offsetSeconds: 0, ownership: 0..<29.5, requiresTimings: true)
+        try assembler.append(
+            TranscriptionResult(text: "", segments: []),
+            offsetSeconds: 29, ownership: 29.5..<58.5, requiresTimings: true)
+        try assembler.append(
+            TranscriptionResult(text: "after", segments: [.init(text: "after", start: 2, end: 3)]),
+            offsetSeconds: 58, ownership: 58.5..<Double.infinity, requiresTimings: true)
+        XCTAssertEqual(try assembler.finish(language: "en", duration: 90).text, "before after")
+    }
     func testSpokenCorrectionReplacesOnlyExplicitDelimitedRepair() {
         XCTAssertEqual(SpokenSelfCorrection.resolve("Meet on Thursday, sorry, Friday."), "Meet on Friday.")
         XCTAssertEqual(SpokenSelfCorrection.resolve("I am sorry about Friday."), "I am sorry about Friday.")
