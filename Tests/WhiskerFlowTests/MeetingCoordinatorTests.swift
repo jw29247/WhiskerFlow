@@ -295,6 +295,39 @@ final class MeetingCoordinatorTests: XCTestCase {
         XCTAssertEqual(result.turns.map(\.startMs), [50_000, 60_000])
     }
 
+    func testOverlapReconcilerMergesRegroupedPhraseWithTimestampJitter() {
+        var segments = [TranscriptionSegment(text: "We should ship", start: 55, end: 60.1)]
+        MeetingSegmentReconciler.insert(
+            TranscriptionSegment(text: "We should ship tomorrow", start: 55.2, end: 63),
+            ownershipBoundary: 60,
+            into: &segments
+        )
+        XCTAssertEqual(segments.count, 1)
+        XCTAssertEqual(segments[0].text, "We should ship tomorrow")
+        XCTAssertEqual(segments[0].start, 55)
+        XCTAssertEqual(segments[0].end, 63)
+    }
+
+    func testOverlapReconcilerAlignsPartialSegmentsWithoutDroppingWords() {
+        var segments = [TranscriptionSegment(text: "We should", start: 55, end: 59)]
+        MeetingSegmentReconciler.insert(
+            TranscriptionSegment(text: "should ship tomorrow", start: 58.8, end: 63),
+            ownershipBoundary: 60,
+            into: &segments
+        )
+        XCTAssertEqual(segments.map(\.text), ["We should ship tomorrow"])
+    }
+
+    func testOverlapReconcilerPreservesLegitimateRepeatedSpeechOwnedByNewWindow() {
+        var segments = [TranscriptionSegment(text: "yes", start: 58, end: 59)]
+        MeetingSegmentReconciler.insert(
+            TranscriptionSegment(text: "yes", start: 60.2, end: 61),
+            ownershipBoundary: 60,
+            into: &segments
+        )
+        XCTAssertEqual(segments.count, 2)
+    }
+
     private func chunk(sequence: Int, startMs: Int64, endMs: Int64) -> MeetingRecordingChunkDescriptor {
         MeetingRecordingChunkDescriptor(
             track: .mixed,
@@ -329,6 +362,37 @@ final class MeetingCoordinatorTests: XCTestCase {
         await coordinator.pollSchedule()
         XCTAssertEqual(coordinator.scheduleIntents.count, 1, "Manual recording must not hide the Atlas calendar")
         XCTAssertFalse(coordinator.isCapturing)
+    }
+
+    @MainActor
+    func testFreshCapturePriorityPreservesSleepingRetryScheduler() {
+        let name = "MeetingRetryTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = AppSettings(
+            defaults: defaults,
+            meetingTokenStore: MeetingCaptureTokenStore(service: name)
+        )
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let coordinator = MeetingCaptureCoordinator(
+            settings: settings,
+            microphonePermission: MicrophonePermissionController(
+                provider: AVCaptureMicrophoneAuthorizationProvider()
+            ),
+            transcription: TranscriptionService(),
+            store: EncryptedMeetingChunkStore(
+                rootURL: root,
+                keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))
+            )
+        )
+        coordinator.scheduleUploadRetry()
+        XCTAssertTrue(coordinator.hasScheduledUploadRetry)
+
+        coordinator.prioritizeFreshCaptureOverRecovery()
+
+        XCTAssertTrue(coordinator.hasScheduledUploadRetry)
+        coordinator.stopMonitoring()
     }
 }
 

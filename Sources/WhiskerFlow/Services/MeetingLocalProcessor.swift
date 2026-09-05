@@ -126,7 +126,6 @@ actor MeetingLocalProcessor {
       .filter { $0.track == track }
       .sorted { $0.sequence < $1.sequence }
     guard !descriptors.isEmpty else { return nil }
-    var textParts: [String] = []
     var segments: [TranscriptionSegment] = []
     var resolvedLanguage: String?
     var duration: Double = 0
@@ -149,26 +148,27 @@ actor MeetingLocalProcessor {
         continue
       }
       let offset = Double(first.startMs) / 1_000
+      let ownershipBoundary = index > 0 && window.count > 1
+        ? Double(window[1].startMs) / 1_000
+        : nil
       for segment in result.segments {
         let rebased = TranscriptionSegment(
           text: segment.text,
           start: segment.start + offset,
           end: segment.end + offset
         )
-        let normalized = normalize(rebased.text)
-        let duplicate = segments.contains { existing in
-          normalize(existing.text) == normalized
-            && max(existing.start, rebased.start) < min(existing.end, rebased.end)
-        }
-        if !normalized.isEmpty, !duplicate {
-          segments.append(rebased)
-          textParts.append(rebased.text.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
+        MeetingSegmentReconciler.insert(
+          rebased,
+          ownershipBoundary: ownershipBoundary,
+          into: &segments
+        )
       }
       resolvedLanguage = resolvedLanguage ?? result.language
       duration = max(duration, Double(last.endMs) / 1_000)
     }
-    let text = textParts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    segments.sort { ($0.start, $0.end) < ($1.start, $1.end) }
+    let text = segments.map(\.text).joined(separator: " ")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { throw TranscriptionError.emptyTranscript }
     return TranscriptionResult(
       text: text.plainTranscriptText,
@@ -286,6 +286,62 @@ actor MeetingLocalProcessor {
     value.lowercased()
       .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
       .joined(separator: " ")
+  }
+}
+
+enum MeetingSegmentReconciler {
+  static func insert(
+    _ incoming: TranscriptionSegment,
+    ownershipBoundary: Double?,
+    into segments: inout [TranscriptionSegment]
+  ) {
+    let incomingText = incoming.text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !incomingText.isEmpty else { return }
+    guard let boundary = ownershipBoundary, incoming.start < boundary else {
+      segments.append(incoming)
+      return
+    }
+
+    // Only the repeated acoustic context may be reconciled. Speech whose
+    // timestamp begins in the new window is always retained, including a
+    // deliberate repetition of the same words.
+    for index in segments.indices.reversed() {
+      let existing = segments[index]
+      guard existing.end > incoming.start, existing.start < boundary else { continue }
+      let existingTokens = tokens(existing.text)
+      let incomingTokens = tokens(incomingText)
+      guard !existingTokens.normalized.isEmpty, !incomingTokens.normalized.isEmpty else { continue }
+      let overlap = tokenOverlap(existingTokens.normalized, incomingTokens.normalized)
+      guard overlap > 0 else { continue }
+
+      if overlap == incomingTokens.normalized.count {
+        return
+      }
+      let mergedTokens = existingTokens.original + incomingTokens.original.dropFirst(overlap)
+      segments[index] = TranscriptionSegment(
+        text: mergedTokens.joined(separator: " "),
+        start: min(existing.start, incoming.start),
+        end: max(existing.end, incoming.end)
+      )
+      return
+    }
+    segments.append(incoming)
+  }
+
+  private static func tokens(_ text: String) -> (original: [String], normalized: [String]) {
+    let original = text.split(whereSeparator: \.isWhitespace).map(String.init)
+    let normalized = original.map {
+      $0.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "'" }
+    }
+    return (original, normalized)
+  }
+
+  private static func tokenOverlap(_ left: [String], _ right: [String]) -> Int {
+    let limit = min(left.count, right.count)
+    for count in stride(from: limit, through: 1, by: -1) {
+      if Array(left.suffix(count)) == Array(right.prefix(count)) { return count }
+    }
+    return 0
   }
 }
 

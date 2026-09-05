@@ -108,6 +108,7 @@ final class MeetingCaptureCoordinator {
 
   var isCapturing: Bool { activeSessionID != nil }
   var isCaptureTransitioning: Bool { captureTransitionInProgress }
+  var hasScheduledUploadRetry: Bool { retryTask != nil }
 
   func start() {
     guard !didStart else { return }
@@ -331,10 +332,7 @@ final class MeetingCaptureCoordinator {
     // A fresh capture takes priority over background recovery. Local processing
     // checks cancellation between bounded transcription windows, while every
     // encrypted source chunk and upload receipt remains durable for retry.
-    uploadTask?.cancel()
-    uploadTask = nil
-    retryTask?.cancel()
-    retryTask = nil
+    prioritizeFreshCaptureOverRecovery()
 
     let sessionID = UUID()
     do {
@@ -508,7 +506,14 @@ final class MeetingCaptureCoordinator {
     }
   }
 
-  private func scheduleUploadRetry() {
+  func prioritizeFreshCaptureOverRecovery() {
+    uploadTask?.cancel()
+    uploadTask = nil
+    // Keep the sleeping retry scheduler alive. Its active-capture guard pauses
+    // delivery without losing the durable retry trigger after this meeting.
+  }
+
+  func scheduleUploadRetry() {
     guard retryTask == nil else { return }
     retryTask = Task { @MainActor [weak self] in
       defer { self?.retryTask = nil }
