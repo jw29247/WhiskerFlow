@@ -26,7 +26,54 @@ final class AssistantCoreTests: XCTestCase {
         XCTAssertEqual(SpokenSelfCorrection.resolve("Thursday, sorry, Friday."), "Friday.")
         XCTAssertEqual(SpokenSelfCorrection.resolve("Thursday, I mean, Friday."), "Friday.")
         let multiple = "Keep this sentence. Send the old version, scratch that, send the new version."
-        XCTAssertEqual(SpokenSelfCorrection.resolve(multiple), multiple)
+        XCTAssertEqual(SpokenSelfCorrection.resolve(multiple), "Keep this sentence. Send the new version.")
+    }
+
+    func testSpokenCorrectionInRecognizedAcceptanceParagraph() {
+        let input = "This is a synthetic acceptance test. On Tuesday, sorry, Thursday. Do not publish it. The budget is £15 no £50. Please send the report to Mark."
+        let expected = "This is a synthetic acceptance test. On Thursday. Do not publish it. The budget is £15 no £50. Please send the report to Mark."
+        XCTAssertEqual(SpokenSelfCorrection.resolve(input), expected)
+    }
+
+    func testSentenceRepairsPreserveOtherNegationAndWhitespace() {
+        XCTAssertEqual(
+            SpokenSelfCorrection.resolve("  Do not publish it.  On Tuesday, sorry, Thursday.\nNever delete backups.\tMeet Monday, I mean Friday.  "),
+            "  Do not publish it.  On Thursday.\nNever delete backups.\tMeet Friday.  "
+        )
+    }
+
+    func testIndependentRepairsRespectQuestionAndExclamationBoundaries() {
+        XCTAssertEqual(
+            SpokenSelfCorrection.resolve("Ready? On Tuesday, sorry, Thursday! Meet Monday, I mean Friday. Keep this sentence."),
+            "Ready? On Thursday! Meet Friday. Keep this sentence."
+        )
+    }
+
+    func testSentenceRepairsPreserveDecimalsAndAbbreviations() {
+        XCTAssertEqual(
+            SpokenSelfCorrection.resolve("The budget is £15.50 no £50. Meet Dr. Smith on Tuesday, sorry, Thursday. Keep 3.14 unchanged."),
+            "The budget is £15.50 no £50. Meet Dr. Smith on Thursday. Keep 3.14 unchanged."
+        )
+        for input in [
+            "Do not use Dr. Tuesday, sorry, Thursday.",
+            "Never book at 9 a.m. Tuesday, sorry, Thursday.",
+            "Do not use J. Tuesday, sorry, Thursday."
+        ] {
+            XCTAssertEqual(SpokenSelfCorrection.resolve(input), input)
+        }
+    }
+
+    func testSentenceRepairsPreserveQuotesAndAmbiguousClauses() {
+        for input in [
+            "She said \"Tuesday, sorry, Thursday.\" Do not change that.",
+            "She said “Tuesday, sorry, Thursday.” Keep this sentence.",
+            "Use Tuesday, sorry, Thursday, and Mark, sorry, John.",
+            "Keep the backup, meet Tuesday, sorry, Thursday.",
+            "The budget is £15 no £50. I am sorry about Friday.",
+            "Keep this sentence. No, sorry, yes."
+        ] {
+            XCTAssertEqual(SpokenSelfCorrection.resolve(input), input)
+        }
     }
 
     func testWritingAndRecordModelsRoundTripThroughCodable() throws {
