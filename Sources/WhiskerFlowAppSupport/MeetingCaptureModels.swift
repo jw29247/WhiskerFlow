@@ -1,5 +1,32 @@
 import Foundation
 
+/// A bounded calendar query for automatic capture.
+///
+/// Atlas bounds schedule reads and returns events in chronological order. A
+/// dense calendar can otherwise fill the result with stale events from the
+/// beginning of a wide look-back window before the current meeting is read.
+public struct MeetingScheduleWindow: Equatable, Sendable {
+    public let fromMs: Int64
+    public let toMs: Int64
+
+    public init(fromMs: Int64, toMs: Int64) {
+        self.fromMs = fromMs
+        self.toMs = toMs
+    }
+
+    public static func automaticCapture(
+        nowMs: Int64,
+        lookaheadMs: Int64,
+        // Keep a bounded late-poll recovery window. A short poll or a local
+        // app rebuild can otherwise miss a live meeting that has already
+        // started, while an unbounded look-back lets dense task blocks crowd
+        // real calls out of Atlas's bounded schedule response.
+        lookbackMs: Int64 = 30 * 60 * 1_000
+    ) -> Self {
+        Self(fromMs: nowMs - lookbackMs, toMs: nowMs + lookaheadMs)
+    }
+}
+
 public enum MeetingAudioTrack: String, Codable, CaseIterable, Hashable, Sendable {
     case microphone
     case system
@@ -136,6 +163,62 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
 
     public var pendingChunks: [MeetingRecordingChunkDescriptor] {
         chunks.filter { $0.uploadState == .pending }
+    }
+
+    public var isCompleteLocally: Bool {
+        expectedChunkCounts.allSatisfy { track, expected in
+            chunks.filter { $0.track == track }.count == expected
+        }
+    }
+
+    /// Whether the persisted chunks contain an observable gap in a source.
+    ///
+    /// A process can stop after the final complete chunks have been written but
+    /// before it advances the manifest out of `.recording`. That lifecycle state
+    /// alone is not evidence that audio is missing. Missing tracks remain the
+    /// caller's responsibility to report separately to Atlas.
+    public var hasStructuralSourceGap: Bool {
+        guard !sourceGapDetected else { return true }
+
+        for track in MeetingAudioTrack.allCases {
+            let descriptors = chunks
+                .filter { $0.track == track }
+                .sorted { $0.sequence < $1.sequence }
+            guard let first = descriptors.first else { continue }
+            guard first.sequence == 0, first.startMs == 0 else { return true }
+
+            for pair in zip(descriptors, descriptors.dropFirst()) {
+                let previous = pair.0
+                let current = pair.1
+                guard current.sequence == previous.sequence + 1,
+                      current.startMs <= previous.endMs else {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /// Put the newest interrupted recording at the front of recovery work.
+    ///
+    /// A previous process can leave more than one encrypted session behind.
+    /// Recovering an old, long recording first can delay the meeting that just
+    /// finished indefinitely, even though every session is independently
+    /// recoverable.
+    public static func orderedForRecovery(_ sessions: [Self]) -> [Self] {
+        sessions.sorted { lhs, rhs in
+            let lhsTimestamp = lhs.occurredAtMs
+                ?? Int64((lhs.createdAt.timeIntervalSince1970 * 1_000).rounded())
+            let rhsTimestamp = rhs.occurredAtMs
+                ?? Int64((rhs.createdAt.timeIntervalSince1970 * 1_000).rounded())
+            if lhsTimestamp != rhsTimestamp {
+                return lhsTimestamp > rhsTimestamp
+            }
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt > rhs.createdAt
+            }
+            return lhs.sessionID.uuidString > rhs.sessionID.uuidString
+        }
     }
 
     public mutating func attachAtlasReferences(meetingID: String, artifactID: String) {

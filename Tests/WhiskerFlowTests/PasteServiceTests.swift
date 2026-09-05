@@ -4,6 +4,15 @@ import XCTest
 
 final class PasteServiceTests: XCTestCase {
     @MainActor
+    func testAnOriginallyEmptyClipboardIsRestoredToEmpty() {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        board.setString("Temporary delivery", forType: .string)
+        PasteService.restore([], to: board, ifUnchangedSince: board.changeCount)
+        XCTAssertNil(board.string(forType: .string))
+    }
+
+    @MainActor
     func testDelayedRestoreDoesNotOverwriteNewCopy() {
         let board = NSPasteboard.withUniqueName()
         defer { board.releaseGlobally() }

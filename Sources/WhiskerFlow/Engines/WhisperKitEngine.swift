@@ -11,6 +11,7 @@ actor WhisperKitEngine: Sendable {
     /// Keyed by identifier, not by `WhisperModel`, so switching between the
     /// English-only and multilingual variants of one size reloads the pipe.
     private var loadedIdentifier: String?
+    private var meetingPreparation: Task<Void, Error>?
 
     func prepare(model: WhisperModel, language: String?) async throws {
         let identifier = model.whisperKitIdentifier(
@@ -22,10 +23,26 @@ actor WhisperKitEngine: Sendable {
     /// Meeting Mode uses a pinned high-accuracy model without changing the
     /// user's lightweight push-to-talk model preference.
     func prepareMeeting(language: String?) async throws {
-        try await prepare(
-            identifier: Self.meetingModelIdentifier,
-            displayName: "WhisperKit meeting model"
-        )
+        if pipe != nil, loadedIdentifier == Self.meetingModelIdentifier { return }
+        // Startup warm-up and recovery can arrive together. Join one model load
+        // instead of compiling the same large CoreML model concurrently.
+        let preparation: Task<Void, Error>
+        if let pending = meetingPreparation {
+            preparation = pending
+        } else {
+            preparation = Task {
+                defer { meetingPreparation = nil }
+                try await prepare(identifier: Self.meetingModelIdentifier, displayName: "WhisperKit meeting model")
+            }
+            meetingPreparation = preparation
+        }
+        do {
+            try await withAbandoningDeadline(seconds: 180) { try await preparation.value }
+        } catch AsyncTimeoutError.timedOut {
+            // CoreML compilation is not cancellable. Let that single load finish
+            // in the background; subsequent attempts join it instead of restarting.
+            throw TranscriptionError.underlying("The meeting model is still preparing. The recording is saved; transcription will retry.")
+        }
     }
 
     func transcribeMeeting(
@@ -73,11 +90,17 @@ actor WhisperKitEngine: Sendable {
             let localAssets = try ModelStoragePaths.prepareLocalAssets(
                 modelIdentifier: identifier
             )
+            // The pinned meeting model can spend minutes compiling for ANE on
+            // first use. GPU execution uses the same weights without that stall.
+            let compute: ModelComputeOptions? = identifier == Self.meetingModelIdentifier
+                ? ModelComputeOptions(audioEncoderCompute: .cpuAndGPU, textDecoderCompute: .cpuAndGPU)
+                : nil
             let kit: WhisperKit
             if let localAssets {
                 kit = try await WhisperKit(
                     modelFolder: localAssets.modelFolder.path,
                     tokenizerFolder: localAssets.tokenizerDownloadBase,
+                    computeOptions: compute,
                     verbose: false,
                     prewarm: true,
                     load: true,
@@ -88,6 +111,7 @@ actor WhisperKitEngine: Sendable {
                     model: identifier,
                     downloadBase: downloadBase,
                     tokenizerFolder: downloadBase,
+                    computeOptions: compute,
                     verbose: false,
                     prewarm: true,
                     load: true,

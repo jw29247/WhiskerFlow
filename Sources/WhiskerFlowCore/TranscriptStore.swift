@@ -22,6 +22,7 @@ public enum TranscriptStatus: Codable, Equatable, Hashable, Sendable {
 public struct TranscriptRecord: Codable, Equatable, Hashable, Identifiable, Sendable {
     public let id: UUID
     public var text: String
+    public var rawRecognition: String?
     public var audioFilePath: String
     public var createdAt: Date
     public var status: TranscriptStatus
@@ -43,10 +44,12 @@ public struct TranscriptRecord: Codable, Equatable, Hashable, Identifiable, Send
         model: String? = nil,
         engine: String? = nil,
         language: String? = nil,
-        updatedAt: Date? = nil
+        updatedAt: Date? = nil,
+        rawRecognition: String? = nil
     ) {
         self.id = id
         self.text = text
+        self.rawRecognition = rawRecognition
         self.audioFilePath = audioFilePath
         self.createdAt = createdAt
         self.status = status
@@ -185,11 +188,13 @@ public final class TranscriptStore {
         durationSeconds: Double? = nil,
         model: String? = nil,
         engine: String? = nil,
-        language: String? = nil
+        language: String? = nil,
+        rawRecognition: String? = nil
     ) throws {
         guard let index = records.firstIndex(where: { $0.id == id }) else { return }
 
         records[index].text = text
+        if let rawRecognition { records[index].rawRecognition = rawRecognition }
         records[index].status = .transcribed
         records[index].updatedAt = now()
         if let durationSeconds { records[index].durationSeconds = durationSeconds }

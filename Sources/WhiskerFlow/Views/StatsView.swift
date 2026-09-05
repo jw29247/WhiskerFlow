@@ -8,14 +8,14 @@ struct StatsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Text("Dictation Stats")
+                Text("Your dictation activity")
                     .font(.title2.bold())
                 Spacer()
                 Button("Done") { dismiss() }
             }
 
             VStack(spacing: 10) {
-                StatRow(title: "All time", stats: appState.analytics.allTime)
+                StatRow(title: "Saved history", stats: appState.analytics.allTime)
                 Divider()
                 StatRow(title: "This week", stats: appState.analytics.thisWeek)
                 Divider()
@@ -29,10 +29,13 @@ struct StatsView: View {
             MiniBarChart(data: appState.dailyWordCounts)
                 .frame(height: 140)
 
+            Text("Based on saved transcripts. Older recordings may have been removed by retention settings.")
+                .font(.caption).foregroundStyle(FlowStyle.muted)
             Spacer(minLength: 0)
         }
         .padding(24)
-        .frame(width: 480, height: 460)
+        .frame(width: 520, height: 490)
+        .background(FlowStyle.canvas).foregroundStyle(FlowStyle.ink).tint(FlowStyle.accent)
     }
 }
 
@@ -70,13 +73,15 @@ private struct MiniBarChart: View {
                 ForEach(data) { point in
                     VStack(spacing: 4) {
                         RoundedRectangle(cornerRadius: 3)
-                            .fill(point.words > 0 ? Color.accentColor : Color.secondary.opacity(0.2))
+                            .fill(point.words > 0 ? FlowStyle.accent : Color.secondary.opacity(0.2))
                             .frame(height: barHeight(point.words, max: maxValue, available: geo.size.height - 18))
                         Text(point.day, format: .dateTime.day())
                             .font(.system(size: 8))
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(point.day.formatted(date: .abbreviated, time: .omitted)), \(point.words) words")
                 }
             }
         }

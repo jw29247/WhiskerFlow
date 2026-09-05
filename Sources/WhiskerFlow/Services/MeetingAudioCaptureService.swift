@@ -1,17 +1,26 @@
 @preconcurrency import AVFoundation
+import AppKit
 import CoreMedia
 import Foundation
+import Logging
 import ScreenCaptureKit
 import WhiskerFlowAppSupport
+import WhiskerFlowCore
 
 enum MeetingAudioCaptureError: LocalizedError {
+    case microphoneUnavailable
     case displayUnavailable
     case streamStartFailed(String)
+    case streamRestartFailed(String)
+    case sampleConversionFailed
 
     var errorDescription: String? {
         switch self {
+        case .microphoneUnavailable: return "The microphone is unavailable."
         case .displayUnavailable: return "No Mac display is available for system-audio capture."
         case .streamStartFailed(let message): return "Mac audio capture could not start: \(message)"
+        case .streamRestartFailed(let message): return "Mac audio capture could not resume: \(message)"
+        case .sampleConversionFailed: return "Mac audio could not be normalized for recording."
         }
     }
 }
@@ -23,15 +32,32 @@ enum MeetingAudioCaptureError: LocalizedError {
 final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelegate {
     private let microphone: AudioCaptureService
     private let writer: MeetingPCMChunkWriter
+    private let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.MeetingAudioCapture")
     private let microphonePending = LockedAudioBuffer()
     private let systemPending = LockedAudioBuffer()
   private var stream: SCStream?
   private var isRunning = false
   private var acceptingSamples = false
+    private var microphoneSelection: AudioInputSelection?
+    private var microphoneRecoveryTask: Task<Void, Never>?
+    private var microphoneRecoveryFailed = false
+    private var systemStreamRecoveryTask: Task<Void, Never>?
+    private var systemStreamRecoveryFailed = false
+    private var systemStreamNeedsRestart = false
+    private var activityTask: Task<Void, Never>?
+    private var activityStartedAt: TimeInterval?
+    private var microphoneActivity = false
+    private var systemActivity = false
+    private var sawMicrophoneSamples = false
+    private var sawSystemSamples = false
+    private var sleepActivity: NSObjectProtocol?
+    private var sleepObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
   private var microphoneSampleCount = 0
     private var systemSampleCount = 0
 
     var onFailure: ((Error) -> Void)?
+    var onActivity: ((MeetingActivityInput) -> Void)?
 
     init(
         microphone: AudioCaptureService? = nil,
@@ -41,13 +67,47 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         self.microphone = microphone ?? AudioCaptureService()
         self.writer = MeetingPCMChunkWriter(store: store, sessionID: sessionID)
         super.init()
+        self.microphone.onConfigurationChange = { [weak self] in
+            self?.handleMicrophoneConfigurationChange()
+        }
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        sleepObserver = workspaceCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleSystemSleep()
+            }
+        }
+        wakeObserver = workspaceCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.handleSystemWake()
+            }
+        }
+    }
+
+    static func availableMicrophoneSelection(_ preferred: AudioInputSelection, availableUIDs: Set<String>) -> AudioInputSelection {
+        if case .device(let uid) = preferred, !availableUIDs.contains(uid) { return .systemDefault }
+        return preferred
     }
 
     func start(selection: AudioInputSelection) async throws {
         guard !isRunning else { return }
+        let selection = Self.availableMicrophoneSelection(selection, availableUIDs: Set(CoreAudioDeviceCatalog.availableInputs().map(\.uid)))
+        microphoneSelection = selection
+        microphoneRecoveryFailed = false
+        systemStreamRecoveryFailed = false
+        systemStreamNeedsRestart = false
         microphone.onSamples = { [weak self] samples in
           guard let self else { return }
           guard self.acceptingSamples else { return }
+          self.sawMicrophoneSamples = true
+          self.microphoneActivity = self.microphoneActivity || Self.hasAudibleActivity(samples)
           do {
                 _ = try writer.append(
                     samples,
@@ -62,24 +122,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
             }
         }
         do {
-            let content = try await SCShareableContent.current
-            guard let display = content.displays.first else { throw MeetingAudioCaptureError.displayUnavailable }
-            let filter = SCContentFilter(display: display, excludingWindows: [])
-            let configuration = SCStreamConfiguration()
-            configuration.capturesAudio = true
-            configuration.excludesCurrentProcessAudio = true
-            configuration.sampleRate = MeetingPCMChunkWriter.sampleRate
-            configuration.channelCount = 1
-            configuration.width = 2
-            configuration.height = 2
-            configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
-            configuration.queueDepth = 2
-            let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
-            try stream.addStreamOutput(
-                self,
-                type: .audio,
-                sampleHandlerQueue: DispatchQueue(label: "agency.thatworks.WhiskerFlow.meeting-audio")
-            )
+            let stream = try await makeSystemStream()
             // Resolve ScreenCaptureKit's shareable content before opening the
             // microphone, then arm both callbacks only after the system stream
             // is running. Samples observed during either startup phase are
@@ -88,15 +131,21 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
             systemSampleCount = 0
             self.stream = stream
             try await stream.startCapture()
-            try microphone.start(selection: selection)
+            microphoneSelection = try await startWorkingMicrophone(selection: selection)
+            sleepActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .idleDisplaySleepDisabled],
+                reason: "WhiskerFlow Meeting Mode capture"
+            )
             acceptingSamples = true
             isRunning = true
+            startActivityUpdates()
           } catch {
             acceptingSamples = false
             if let activeStream = self.stream {
               try? await activeStream.stopCapture()
             }
             self.stream = nil
+            endSleepActivity()
             microphone.cancel()
             microphone.onSamples = nil
             if let error = error as? MeetingAudioCaptureError { throw error }
@@ -104,30 +153,244 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         }
   }
 
-    func stop() async throws -> [MeetingRecordingChunkDescriptor] {
+    /// Bluetooth inputs can start an engine without producing any buffers.
+    /// Confirm that audio is flowing before announcing a recording; use the
+    /// built-in input if a disconnected/silent transport never starts.
+    private func startWorkingMicrophone(selection: AudioInputSelection) async throws -> AudioInputSelection {
+        try microphone.start(selection: selection)
+        if try await microphoneIsFlowing() { return selection }
+        if let builtIn = CoreAudioDeviceCatalog.builtInInput(), selection != .device(uid: builtIn.uid) {
+            let fallback = AudioInputSelection.device(uid: builtIn.uid)
+            try microphone.start(selection: fallback)
+            if try await microphoneIsFlowing() { return fallback }
+        }
+        throw MeetingAudioCaptureError.microphoneUnavailable
+    }
+
+    private func microphoneIsFlowing() async throws -> Bool {
+        for _ in 0..<20 {
+            if microphone.sampleCount() > 0 { return true }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return microphone.sampleCount() > 0
+    }
+
+  func stop() async throws -> [MeetingRecordingChunkDescriptor] {
     acceptingSamples = false
+    isRunning = false
+    stopActivityUpdates()
+    microphoneRecoveryTask?.cancel()
+    microphoneRecoveryTask = nil
+    systemStreamRecoveryTask?.cancel()
+    systemStreamRecoveryTask = nil
     if let stream {
       try? await stream.stopCapture()
     }
         self.stream = nil
-        isRunning = false
+        systemStreamNeedsRestart = false
+        removeWorkspaceObservers()
+        endSleepActivity()
         _ = microphone.stop(reason: .userReleased)
         microphone.onSamples = nil
+        microphoneSelection = nil
         try mixAvailable(flushRemainder: true)
         return try writer.finish()
     }
 
     func cancel() async {
         acceptingSamples = false
+        isRunning = false
+        stopActivityUpdates()
+        microphoneRecoveryTask?.cancel()
+        microphoneRecoveryTask = nil
+        systemStreamRecoveryTask?.cancel()
+        systemStreamRecoveryTask = nil
         if let stream { try? await stream.stopCapture() }
         self.stream = nil
-        isRunning = false
+        systemStreamNeedsRestart = false
+        removeWorkspaceObservers()
+        endSleepActivity()
         microphone.cancel()
         microphone.onSamples = nil
+        microphoneSelection = nil
     }
 
     var sourceGapDetected: Bool {
-        writer.sourceGapDetected || abs(microphonePending.count - systemPending.count) > MeetingPCMChunkWriter.sampleRate / 2
+        writer.sourceGapDetected
+            || microphoneRecoveryFailed
+            || systemStreamRecoveryFailed
+            || abs(microphonePending.count - systemPending.count) > MeetingPCMChunkWriter.sampleRate / 2
+    }
+
+    private func handleSystemSleep() {
+        guard isRunning else { return }
+        systemStreamNeedsRestart = true
+        logger.info("Display sleep will interrupt Meeting Mode system capture")
+    }
+
+    private func handleSystemWake() {
+        guard isRunning, systemStreamNeedsRestart else { return }
+        logger.warning("Display woke; restarting Meeting Mode system capture")
+        scheduleSystemStreamRecovery()
+    }
+
+    private func scheduleSystemStreamRecovery() {
+        guard isRunning, systemStreamRecoveryTask == nil else { return }
+
+        systemStreamRecoveryTask = Task { @MainActor [weak self] in
+            defer { self?.systemStreamRecoveryTask = nil }
+            var lastError: Error?
+            for attempt in 0..<6 {
+                guard let self, self.isRunning else { return }
+                do {
+                    if attempt > 0 {
+                        try await Task.sleep(nanoseconds: 1_000_000_000)
+                    }
+                    try await self.restartSystemStream()
+                    return
+                } catch is CancellationError {
+                    return
+                } catch {
+                    lastError = error
+                    self.logger.warning(
+                        "System stream re-arm attempt failed",
+                        metadata: [
+                            "attempt": "\(attempt + 1)",
+                            "error": "\(error.localizedDescription)",
+                        ]
+                    )
+                }
+            }
+
+            guard let self, self.isRunning else { return }
+            self.systemStreamRecoveryFailed = true
+            self.systemStreamNeedsRestart = false
+            self.logger.error(
+                "System stream re-arm failed",
+                metadata: ["error": "\(lastError?.localizedDescription ?? "unknown")"]
+            )
+            self.onFailure?(
+                MeetingAudioCaptureError.streamRestartFailed(
+                    lastError?.localizedDescription ?? "unknown"
+                )
+            )
+        }
+    }
+
+    private func restartSystemStream() async throws {
+        guard isRunning else { return }
+        let previousStream = stream
+        stream = nil
+        try? await previousStream?.stopCapture()
+
+        guard isRunning else { return }
+        let replacement = try await makeSystemStream()
+        try await replacement.startCapture()
+        guard isRunning else {
+            try? await replacement.stopCapture()
+            return
+        }
+
+        microphonePending.reset()
+        systemPending.reset()
+        stream = replacement
+        systemStreamNeedsRestart = false
+        logger.info("System stream re-armed for Meeting Mode")
+    }
+
+    private func makeSystemStream() async throws -> SCStream {
+        let content = try await SCShareableContent.current
+        guard let display = content.displays.first else {
+            throw MeetingAudioCaptureError.displayUnavailable
+        }
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let configuration = SCStreamConfiguration()
+        configuration.capturesAudio = true
+        configuration.excludesCurrentProcessAudio = true
+        configuration.sampleRate = MeetingPCMChunkWriter.sampleRate
+        configuration.channelCount = 1
+        configuration.width = 2
+        configuration.height = 2
+        configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+        configuration.queueDepth = 2
+        let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
+        // A display-filtered SCStream still produces video frames even when
+        // Meeting Mode only needs audio. Register a no-op screen sink so
+        // ScreenCaptureKit has a consumer for that output.
+        try stream.addStreamOutput(
+            self,
+            type: .screen,
+            sampleHandlerQueue: DispatchQueue(
+                label: "agency.thatworks.WhiskerFlow.meeting-screen",
+                qos: .utility
+            )
+        )
+        try stream.addStreamOutput(
+            self,
+            type: .audio,
+            sampleHandlerQueue: DispatchQueue(label: "agency.thatworks.WhiskerFlow.meeting-audio")
+        )
+        return stream
+    }
+
+    private func endSleepActivity() {
+        if let sleepActivity {
+            ProcessInfo.processInfo.endActivity(sleepActivity)
+            self.sleepActivity = nil
+        }
+    }
+
+    private func removeWorkspaceObservers() {
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        if let sleepObserver {
+            workspaceCenter.removeObserver(sleepObserver)
+            self.sleepObserver = nil
+        }
+        if let wakeObserver {
+            workspaceCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
+    }
+
+    private func handleMicrophoneConfigurationChange() {
+        guard acceptingSamples,
+              isRunning,
+              let selection = microphoneSelection,
+              microphoneRecoveryTask == nil else { return }
+
+        // Do not combine pre-reconfiguration system samples with post-
+        // reconfiguration microphone samples. The independent source tracks
+        // remain durable; only the in-flight canonical mix is resynchronised.
+        acceptingSamples = false
+        microphonePending.reset()
+        systemPending.reset()
+        logger.warning("Microphone input changed; rearming Meeting Mode capture")
+
+        microphoneRecoveryTask = Task { @MainActor [weak self] in
+            defer { self?.microphoneRecoveryTask = nil }
+            do {
+                // CoreAudio needs a short settling window after Meet changes
+                // the default aggregate input device.
+                try await Task.sleep(nanoseconds: 300_000_000)
+                guard let self, self.isRunning else { return }
+                self.microphoneSelection = try await self.startWorkingMicrophone(selection: selection)
+                self.acceptingSamples = true
+                self.logger.info("Microphone input re-armed for Meeting Mode")
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self else { return }
+                self.microphoneRecoveryFailed = true
+                // Keep system-audio capture alive so the session can still be
+                // retained and uploaded with an honest source-gap status.
+                self.acceptingSamples = true
+                self.logger.error(
+                    "Microphone re-arm failed",
+                    metadata: ["error": "\(error.localizedDescription)"]
+                )
+                self.onFailure?(error)
+            }
+        }
     }
 
     nonisolated func stream(
@@ -139,6 +402,8 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard acceptingSamples else { return }
+            sawSystemSamples = true
+            systemActivity = systemActivity || Self.hasAudibleActivity(samples)
             do {
                 _ = try writer.append(samples, track: .system, sourceStartMs: Int64(systemSampleCount / 16))
                 systemSampleCount += samples.count
@@ -150,11 +415,57 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         }
     }
 
+    private func startActivityUpdates() {
+        activityTask?.cancel()
+        activityStartedAt = ProcessInfo.processInfo.systemUptime
+        microphoneActivity = false
+        systemActivity = false
+        sawMicrophoneSamples = false
+        sawSystemSamples = false
+        activityTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled, let self, let startedAt = self.activityStartedAt else { return }
+                let elapsed = max(0, ProcessInfo.processInfo.systemUptime - startedAt)
+                self.onActivity?(.init(
+                    elapsedSeconds: max(0, elapsed - 1), durationSeconds: min(1, elapsed),
+                    ownMicActivity: self.sawMicrophoneSamples ? self.microphoneActivity : nil,
+                    systemActivity: self.sawSystemSamples ? self.systemActivity : nil
+                ))
+                self.microphoneActivity = false
+                self.systemActivity = false
+                self.sawMicrophoneSamples = false
+                self.sawSystemSamples = false
+            }
+        }
+    }
+
+    private func stopActivityUpdates() {
+        activityTask?.cancel()
+        activityTask = nil
+        activityStartedAt = nil
+        microphoneActivity = false
+        systemActivity = false
+        sawMicrophoneSamples = false
+        sawSystemSamples = false
+    }
+
+    nonisolated static func hasAudibleActivity(_ samples: [Float]) -> Bool {
+        guard !samples.isEmpty else { return false }
+        let meanSquare = samples.reduce(0.0) { $0 + Double($1 * $1) } / Double(samples.count)
+        return meanSquare.squareRoot() >= 0.015
+    }
+
     nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            isRunning = false
-            onFailure?(error)
+            guard isRunning else { return }
+            systemStreamNeedsRestart = true
+            logger.warning(
+                "System stream stopped; scheduling re-arm",
+                metadata: ["error": "\(error.localizedDescription)"]
+            )
+            scheduleSystemStreamRecovery()
         }
     }
 

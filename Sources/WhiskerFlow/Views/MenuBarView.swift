@@ -7,111 +7,59 @@ struct MenuBarView: View {
     @ObservedObject var updaterService: UpdaterService
     @Environment(\.openWindow) private var openWindow
 
-    private var recents: [TranscriptRecord] {
-        Array(appState.records.lazy.filter { $0.status == .transcribed }.prefix(3))
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 19) {
             HStack(spacing: 10) {
-                Image(systemName: appState.isRecording ? "waveform.circle.fill" : "waveform.circle")
-                    .font(.title2)
-                    .foregroundStyle(appState.isRecording ? .red : .primary)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("WhiskerFlow").font(.headline)
-                    Text(appState.statusMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                FlowWaveform(level: appState.audioLevel, recording: appState.isRecording, size: 26)
+                Text("WhiskerFlow").font(.system(size: 17, weight: .semibold, design: .rounded))
                 Spacer()
-                if appState.isRecording {
-                    LevelMeter(level: appState.audioLevel)
-                } else if appState.isTranscribing {
-                    ProgressView().controlSize(.small)
-                }
+                FlowStatus(title: DictationPresentation(appState: appState).statusTitle,
+                           color: DictationPresentation(appState: appState).statusColor)
             }
-
-            if !recents.isEmpty {
-                Divider()
-                Text("Recent")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ForEach(recents) { record in
-                    Button {
-                        appState.copy(record.text)
-                    } label: {
-                        Text(record.text)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Copy to clipboard")
-                }
-            }
-
+            HStack(spacing: 9) {
+                Text(DictationPresentation(appState: appState).gesture)
+                FlowKeycap(title: appState.settings.hotkeyDisplayName, compact: true)
+                Text("to dictate")
+                Spacer()
+            }.font(.system(size: 13)).foregroundStyle(FlowStyle.muted)
             Divider()
-            VStack(alignment: .leading, spacing: 6) {
-                let meetingIsRecording = appState.isMeetingCapturing
+            if let record = appState.latestTranscript {
                 HStack {
-                    Label(
-                        "Meeting Mode: \(appState.meetingStatus.displayName)",
-                        systemImage: meetingIsRecording ? "record.circle.fill" : "person.2.wave.2"
-                    )
-                    .foregroundStyle(meetingIsRecording ? .red : .primary)
+                    Text("Latest dictation").font(.system(size: 11, weight: .medium)).foregroundStyle(FlowStyle.muted)
                     Spacer()
-                    if let title = appState.activeMeetingTitle {
-                        Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    }
+                    FlowCopyButton(text: record.text, compact: true, copy: appState.copy).buttonStyle(.plain)
                 }
-                Text(appState.meetingStatusDetail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button {
-                    appState.toggleMeetingCapture()
-                } label: {
-                    Label(
-                        meetingIsRecording ? "Stop Meeting Capture" : "Start Ad Hoc Meeting",
-                        systemImage: meetingIsRecording ? "stop.fill" : "record.circle"
-                    )
-                }
-                .buttonStyle(.plain)
-                .disabled(appState.meetingStatus == .uploading)
+                Text(record.text).font(.system(size: 13)).lineLimit(2)
+            } else {
+                Text("Your latest words will appear here.").font(.callout).foregroundStyle(FlowStyle.muted)
             }
-
-            if appState.retryQueue.count > 0 {
-                Divider()
-                Button {
-                    appState.retryAllFailed()
-                } label: {
-                    Label("Retry \(appState.retryQueue.count) failed", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.plain)
-            }
-
             Divider()
-            Button("Open WhiskerFlow") {
-                NSApp.activate(ignoringOtherApps: true)
-                openWindow(id: "main")
+            HStack {
+                Label(appState.isMeetingCapturing ? "Meeting is recording" : "Meeting recording", systemImage: "person.2.wave.2")
+                    .font(.system(size: 12))
+                Spacer()
+                Button(appState.isMeetingCapturing ? "Stop" : "Record") { appState.toggleMeetingCapture() }
+                    .disabled(appState.isMeetingCaptureTransitioning || (!appState.isAtlasPaired && !appState.isMeetingCapturing))
+                    .tint(appState.isMeetingCapturing ? FlowStyle.recording : FlowStyle.accent)
             }
-            .buttonStyle(.plain)
-
-            SettingsLink {
-                Text("Settings…")
+            if !appState.retryQueue.isEmpty {
+                Button("Retry \(appState.retryQueue.count) failed recordings") { appState.retryAllFailed() }
+                    .font(.caption)
             }
-            .buttonStyle(.plain)
-
-            CheckForUpdatesButton(updaterService: updaterService)
-                .buttonStyle(.plain)
-
-            Button("Quit WhiskerFlow") {
-                NSApplication.shared.terminate(nil)
+            HStack {
+                Button("Open WhiskerFlow") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    openWindow(id: "main")
+                }.buttonStyle(FlowPrimaryButtonStyle())
+                Spacer()
+                SettingsLink { Image(systemName: "gearshape") }.help("Settings")
+                Menu {
+                    CheckForUpdatesButton(updaterService: updaterService)
+                    Button("Quit WhiskerFlow") { NSApplication.shared.terminate(nil) }.keyboardShortcut("q")
+                } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize()
             }
-            .buttonStyle(.plain)
-            .keyboardShortcut("q")
         }
-        .padding(12)
-        .frame(width: 290)
+        .padding(21).frame(width: 350)
+        .background(FlowStyle.canvas).foregroundStyle(FlowStyle.ink).tint(FlowStyle.accent)
     }
 }

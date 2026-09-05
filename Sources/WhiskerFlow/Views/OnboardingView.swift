@@ -1,187 +1,106 @@
 import AppKit
-import CoreGraphics
 import SwiftUI
 
 struct OnboardingView: View {
     @Bindable var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @State private var step = 0
+    private var permissionsReady: Bool { appState.hasMicrophonePermission && appState.hasAccessibilityPermission }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Welcome to WhiskerFlow")
-                    .font(.largeTitle.bold())
-                Text("Hold \(appState.settings.hotkeyDisplayName) anywhere to dictate. Release to transcribe and paste at your cursor. Grant a couple of permissions to get going.")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(spacing: 26) {
+            HStack {
+                HStack(spacing: 6) {
+                    ForEach(0..<3) { index in Capsule().fill(index <= step ? FlowStyle.accent : FlowStyle.line).frame(width: 23, height: 4) }
+                }.accessibilityLabel("Setup step \(step + 1) of 3")
+                Spacer()
+                Button("Set up later") { dismiss() }.buttonStyle(.plain).foregroundStyle(FlowStyle.muted)
             }
+            Spacer(minLength: 0)
+            FlowWaveform(size: 52)
+            Text(heading).font(.system(size: 30, weight: .semibold, design: .rounded)).tracking(-0.6)
+            Text(detail).font(.system(size: 14)).foregroundStyle(FlowStyle.muted)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 420)
 
-            PermissionRow(
-                title: "Microphone",
-                detail: appState.microphonePermissionDetail,
-                systemImage: "mic.fill",
-                granted: appState.hasMicrophonePermission
-            ) {
-                switch appState.microphonePermission.recoveryAction {
-                case .request:
-                    Button("Request") {
-                        Task { await appState.requestMicrophonePermission() }
+            if step == 0 {
+                HStack(spacing: 12) {
+                    Text(DictationPresentation(appState: appState).gesture)
+                    FlowKeycap(title: appState.settings.hotkeyDisplayName)
+                    Text("to dictate")
+                }.font(.system(size: 19))
+            } else if step == 1 {
+                VStack(spacing: 12) {
+                    permissionRow("Microphone", detail: "So WhiskerFlow can hear you.", symbol: "mic", granted: appState.hasMicrophonePermission) {
+                        switch appState.microphonePermission.recoveryAction {
+                        case .request: Task { await appState.requestMicrophonePermission() }
+                        case .openSettings: Self.openSettings("Privacy_Microphone")
+                        case nil: break
+                        }
                     }
-                case .openSettings:
-                    Button("Open Microphone Settings") {
-                        Self.openSettings("Privacy_Microphone")
-                    }
-                case nil:
-                    EmptyView()
-                }
-            }
-
-            PermissionRow(
-                title: "Accessibility",
-                detail: "Lets WhiskerFlow paste transcripts at your cursor.",
-                systemImage: "keyboard.badge.eye",
-                granted: appState.hasAccessibilityPermission
-            ) {
-                HStack {
-                    Button("Open Settings") {
+                    permissionRow("Accessibility", detail: "For your shortcut and pasting at the cursor.", symbol: "keyboard", granted: appState.hasAccessibilityPermission) {
                         appState.requestAccessibilityPermission()
                         Self.openSettings("Privacy_Accessibility")
                     }
-                    Button("Re-check") { appState.refreshAccessibilityPermission() }
+                    Button("Check again") {
+                        appState.refreshMicrophonePermission()
+                        appState.refreshAccessibilityPermission()
+                    }.buttonStyle(.plain).foregroundStyle(FlowStyle.accent).font(.caption).padding(.top, 4)
                 }
+            } else {
+                FlowStatus(title: DictationPresentation(appState: appState).statusTitle,
+                           color: DictationPresentation(appState: appState).statusColor)
+                Text(DictationPresentation(appState: appState).deliveryDescription)
+                    .font(.callout).foregroundStyle(FlowStyle.muted).multilineTextAlignment(.center)
             }
-
-            PermissionRow(
-                title: "Screen Recording",
-                detail: "Required to capture Mac system output. WhiskerFlow retains audio only, never screen frames.",
-                systemImage: "rectangle.inset.filled.and.person.filled",
-                granted: appState.hasScreenRecordingPermission
-            ) {
-                HStack {
-                    Button("Open Settings") {
-                        appState.requestScreenRecordingPermission()
-                        Self.openSettings("Privacy_ScreenCapture")
-                    }
-                    Button("Re-check") { appState.refreshScreenRecordingPermission() }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                Label("Atlas Meeting Capture", systemImage: "person.2.wave.2")
-                    .font(.headline)
-                Text("Sign in with Atlas so scheduled calls can be recorded locally and uploaded as encrypted chunks. The connection token is stored securely in Keychain.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Connects to atlas.thatworks.agency")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button {
-                    appState.signInToAtlas()
-                } label: {
-                    Label(
-                        appState.isSigningInToAtlas ? "Opening Atlas…" : "Sign in with Atlas",
-                        systemImage: "person.crop.circle.badge.checkmark"
-                    )
-                }
-                .disabled(appState.isSigningInToAtlas)
-                if let confirmation = appState.atlasSignInConfirmation {
-                    Label(confirmation, systemImage: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                }
-                if let error = appState.atlasSignInError {
-                    Text(error).font(.caption).foregroundStyle(.orange)
-                }
-                HStack {
-                    Image(systemName: appState.isAtlasPaired ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(appState.isAtlasPaired ? .green : .orange)
-                    Text(appState.isAtlasPaired ? "Connected to Atlas" : "Pairing required")
-                        .font(.caption)
-                    Spacer()
-                    Button("Re-check") { appState.refreshMeetingConfiguration() }
-                }
-            }
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 10).fill(.quaternary.opacity(0.5)))
-
-            HStack(spacing: 14) {
-                Label(
-                    appState.isMeetingStorageAvailable ? "Local storage ready" : "At least 500 MB local storage is required",
-                    systemImage: appState.isMeetingStorageAvailable ? "internaldrive.fill" : "externaldrive.badge.xmark"
-                )
-                .font(.caption)
-                .foregroundStyle(appState.isMeetingStorageAvailable ? .green : .orange)
-                Spacer()
-                Label(
-                    appState.meetingModelState == .ready
-                        ? "Meeting transcription and diarization ready"
-                        : "WhisperKit + SpeakerKit meeting model preparing",
-                    systemImage: appState.meetingModelState == .ready
-                        ? "checkmark.circle"
-                        : "arrow.down.circle"
-                )
-                .font(.caption)
-                .foregroundStyle(appState.meetingModelState == .ready ? .green : .secondary)
-            }
-
-            PermissionRow(
-                title: "Speech Recognition",
-                detail: "Used by the built-in Apple Speech fallback (optional).",
-                systemImage: "waveform.badge.mic",
-                granted: nil
-            ) {
-                Button("Allow") { Task { _ = await appState.requestSpeechPermission() } }
-            }
-
             Spacer(minLength: 0)
-
             HStack {
-                Text("Meeting Mode downloads a larger local WhisperKit model and SpeakerKit assets; processing stays on this Mac.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if step > 0 { Button("Back") { step -= 1 }.buttonStyle(.plain).foregroundStyle(FlowStyle.muted) }
                 Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                Button(step == 2 ? "Start using WhiskerFlow" : "Continue") {
+                    if step == 2 {
+                        dismiss()
+                    } else {
+                        step += 1
+                    }
+                }.buttonStyle(FlowPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+                    .disabled(step == 1 && !permissionsReady)
             }
         }
-        .padding(28)
-        .frame(width: 560, height: 700)
+        .padding(32).frame(width: 550, height: 560)
+        .background(FlowStyle.canvas).foregroundStyle(FlowStyle.ink).tint(FlowStyle.accent)
+    }
+
+    private var heading: String {
+        switch step {
+        case 0: return "A little less typing."
+        case 1: return "Two small permissions."
+        default: return appState.modelState == .ready ? "Your words can go anywhere." : "Almost ready for your voice."
+        }
+    }
+    private var detail: String {
+        switch step {
+        case 0: return "Speak naturally in any app. WhiskerFlow turns your voice into text, right where you’re working."
+        case 1: return "Enable access below, then come back here. You can set up meeting recording separately."
+        default: return appState.modelState == .ready ? "Open an app, place your cursor, and try your shortcut." : "You can use the app while transcription finishes preparing. Check Dictate for its status."
+        }
+    }
+
+    private func permissionRow(_ title: String, detail: String, symbol: String, granted: Bool, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: symbol).font(.system(size: 21)).frame(width: 28).foregroundStyle(FlowStyle.accent)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.system(size: 14, weight: .medium))
+                Text(detail).font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
+            }
+            Spacer()
+            if granted { Label("Enabled", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green) }
+            else { Button("Enable", action: action) }
+        }.padding(17).background(FlowStyle.surface, in: RoundedRectangle(cornerRadius: 10))
     }
 
     static func openSettings(_ anchor: String) {
-        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)")
-        if let url { NSWorkspace.shared.open(url) }
-    }
-}
-
-private struct PermissionRow<Actions: View>: View {
-    let title: String
-    let detail: String
-    let systemImage: String
-    let granted: Bool?
-    @ViewBuilder var actions: () -> Actions
-
-    var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: systemImage)
-                .font(.title2)
-                .frame(width: 32)
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.headline)
-                Text(detail).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            if let granted, granted {
-                Label("Granted", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .labelStyle(.iconOnly)
-                    .font(.title2)
-            } else {
-                actions()
-            }
-        }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 10).fill(.quaternary.opacity(0.5)))
+        guard !UIPreview.isEnabled else { return }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") { NSWorkspace.shared.open(url) }
     }
 }
