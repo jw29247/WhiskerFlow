@@ -48,6 +48,7 @@ final class MeetingCaptureCoordinator {
   private var scheduleTask: Task<Void, Never>?
   private var recoveryTask: Task<Void, Never>?
   private var uploadTask: Task<Void, Never>?
+  private var uploadTaskID: UUID?
   private var retryTask: Task<Void, Never>?
   private var activeIntent: AtlasCaptureScheduleIntent?
   private var activeSessionID: UUID?
@@ -109,6 +110,7 @@ final class MeetingCaptureCoordinator {
   var isCapturing: Bool { activeSessionID != nil }
   var isCaptureTransitioning: Bool { captureTransitionInProgress }
   var hasScheduledUploadRetry: Bool { retryTask != nil }
+  var hasActiveRecoveryBatch: Bool { uploadTask != nil }
 
   func start() {
     guard !didStart else { return }
@@ -508,6 +510,7 @@ final class MeetingCaptureCoordinator {
 
   func prioritizeFreshCaptureOverRecovery() {
     MeetingRecoveryPriority.cancelActiveBatch(&uploadTask)
+    uploadTaskID = nil
     // Keep the sleeping retry scheduler alive. Its active-capture guard pauses
     // delivery without losing the durable retry trigger after this meeting.
   }
@@ -523,13 +526,8 @@ final class MeetingCaptureCoordinator {
         do {
           let pending = try self.store.recoverSessions().filter { $0.state != .recording && !$0.chunks.isEmpty }
           guard !pending.isEmpty else { return }
-          let batch = Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.retryPendingSessions(pending)
-          }
-          self.uploadTask = batch
+          guard let batch = self.startRecoveryBatch(pending) else { continue }
           await batch.value
-          self.uploadTask = nil
           let stillPending = try self.store.recoverSessions().contains { $0.state != .recording && !$0.chunks.isEmpty }
           if !stillPending { return }
         } catch {
@@ -551,9 +549,7 @@ final class MeetingCaptureCoordinator {
         try store.recoverSessions())
       let pending = sessions
       if !pending.isEmpty {
-        uploadTask = Task { @MainActor [weak self] in
-          await self?.retryPendingSessions(pending)
-        }
+        _ = startRecoveryBatch(pending)
       }
     } catch {
       if activeSessionID == nil {
@@ -572,6 +568,40 @@ final class MeetingCaptureCoordinator {
       guard session.sessionID != activeSessionID else { continue }
       await deliver(sessionID: session.sessionID)
     }
+  }
+
+  @discardableResult
+  func startRecoveryBatch(
+    _ sessions: [MeetingRecordingSessionManifest]
+  ) -> Task<Void, Never>? {
+    startRecoveryOperation { [weak self] in
+      guard let self else { return }
+      await self.retryPendingSessions(sessions)
+    }
+  }
+
+  func startRecoveryOperation(
+    _ operation: @escaping @MainActor @Sendable () async -> Void
+  ) -> Task<Void, Never>? {
+    guard uploadTask == nil else { return nil }
+    let batchID = UUID()
+    uploadTaskID = batchID
+    let batch = Task { @MainActor [weak self] in
+      guard let self else { return }
+      await operation()
+      self.finishRecoveryBatch(batchID)
+    }
+    uploadTask = batch
+    return batch
+  }
+
+  func finishRecoveryBatch(_ batchID: UUID) {
+    guard MeetingRecoveryBatchOwnership.shouldClear(
+      completing: batchID,
+      current: uploadTaskID
+    ) else { return }
+    uploadTask = nil
+    uploadTaskID = nil
   }
 
   private func atlasClient() -> MeetingAtlasClient? {
@@ -694,6 +724,12 @@ enum MeetingRecoveryPriority {
   static func cancelActiveBatch(_ batch: inout Task<Void, Never>?) {
     batch?.cancel()
     batch = nil
+  }
+}
+
+enum MeetingRecoveryBatchOwnership {
+  static func shouldClear(completing: UUID, current: UUID?) -> Bool {
+    completing == current
   }
 }
 

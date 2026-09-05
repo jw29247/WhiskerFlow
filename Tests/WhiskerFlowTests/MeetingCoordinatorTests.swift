@@ -456,6 +456,78 @@ final class MeetingCoordinatorTests: XCTestCase {
         XCTAssertNil(batch)
         await fulfillment(of: [cancelled], timeout: 1)
     }
+
+    func testOnlyCurrentRecoveryBatchMayClearCoordinatorOwnership() {
+        let old = UUID()
+        let current = UUID()
+        XCTAssertFalse(
+            MeetingRecoveryBatchOwnership.shouldClear(completing: old, current: current)
+        )
+        XCTAssertTrue(
+            MeetingRecoveryBatchOwnership.shouldClear(completing: current, current: current)
+        )
+        XCTAssertFalse(
+            MeetingRecoveryBatchOwnership.shouldClear(completing: current, current: nil)
+        )
+    }
+
+    @MainActor
+    func testCompletedRecoveryBatchReturnsCoordinatorToIdle() async {
+        let coordinator = makeCoordinatorForRetryTest()
+        let batch = coordinator.startRecoveryBatch([])
+        await batch?.value
+        XCTAssertFalse(coordinator.hasActiveRecoveryBatch)
+    }
+
+    @MainActor
+    func testCanceledOldRecoveryCannotClearNewBatchOwnership() async {
+        let coordinator = makeCoordinatorForRetryTest()
+        let oldStarted = expectation(description: "old started")
+        let oldRelease = AsyncMeetingTestLatch()
+        let old = coordinator.startRecoveryOperation {
+            oldStarted.fulfill()
+            await oldRelease.wait()
+        }
+        await fulfillment(of: [oldStarted], timeout: 1)
+        coordinator.prioritizeFreshCaptureOverRecovery()
+
+        let newStarted = expectation(description: "new started")
+        let newRelease = AsyncMeetingTestLatch()
+        let new = coordinator.startRecoveryOperation {
+            newStarted.fulfill()
+            await newRelease.wait()
+        }
+        await fulfillment(of: [newStarted], timeout: 1)
+        await oldRelease.open()
+        await old?.value
+        XCTAssertTrue(coordinator.hasActiveRecoveryBatch)
+
+        await newRelease.open()
+        await new?.value
+        XCTAssertFalse(coordinator.hasActiveRecoveryBatch)
+    }
+
+    @MainActor
+    private func makeCoordinatorForRetryTest() -> MeetingCaptureCoordinator {
+        let name = "MeetingRetryState.\(UUID())"
+        let defaults = UserDefaults(suiteName: name)!
+        let settings = AppSettings(
+            defaults: defaults,
+            meetingTokenStore: MeetingCaptureTokenStore(service: name)
+        )
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        return MeetingCaptureCoordinator(
+            settings: settings,
+            microphonePermission: MicrophonePermissionController(
+                provider: AVCaptureMicrophoneAuthorizationProvider()
+            ),
+            transcription: TranscriptionService(),
+            store: EncryptedMeetingChunkStore(
+                rootURL: root,
+                keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))
+            )
+        )
+    }
 }
 
 private actor AsyncMeetingTestLatch {
