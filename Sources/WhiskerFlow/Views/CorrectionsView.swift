@@ -58,7 +58,7 @@ struct CorrectionsView: View {
         .padding(32)
         .alert("Clear saved corrections?", isPresented: $confirmClear) {
             Button("Clear corrections", role: .destructive) { appState.corrections.clear() }
-            Button("Cancel", role: .cancel) { }
+            Button("Cancel", role: .cancel) {}
         } message: { Text("This removes the correction history from this Mac. Your vocabulary stays as it is.") }
     }
 

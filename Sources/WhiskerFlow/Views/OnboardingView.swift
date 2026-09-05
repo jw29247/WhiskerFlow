@@ -58,7 +58,11 @@ struct OnboardingView: View {
                 if step > 0 { Button("Back") { step -= 1 }.buttonStyle(.plain).foregroundStyle(FlowStyle.muted) }
                 Spacer()
                 Button(step == 2 ? "Start using WhiskerFlow" : "Continue") {
-                    if step == 2 { dismiss() } else { step += 1 }
+                    if step == 2 {
+                        dismiss()
+                    } else {
+                        step += 1
+                    }
                 }.buttonStyle(FlowPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
                     .disabled(step == 1 && !permissionsReady)
             }

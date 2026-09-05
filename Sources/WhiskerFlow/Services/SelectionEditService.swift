@@ -72,5 +72,5 @@ struct PasteDeliveryReceipt {
     let state: State
     let text: String
     let message: String
-    var retrySelection: TextFieldSnapshot? = nil
+    var retrySelection: TextFieldSnapshot?
 }

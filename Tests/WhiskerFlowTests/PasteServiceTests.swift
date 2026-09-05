@@ -20,7 +20,7 @@ final class PasteServiceTests: XCTestCase {
         let deliveryChangeCount = board.changeCount
         board.clearContents()
         board.setString("New copy", forType: .string)
-        PasteService.restore([ [.string: Data("Previous clipboard".utf8)] ], to: board, ifUnchangedSince: deliveryChangeCount)
+        PasteService.restore([[.string: Data("Previous clipboard".utf8)]], to: board, ifUnchangedSince: deliveryChangeCount)
         XCTAssertEqual(board.string(forType: .string), "New copy")
     }
 

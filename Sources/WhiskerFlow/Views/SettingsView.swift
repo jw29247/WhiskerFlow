@@ -203,7 +203,6 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-
             sharedLibrarySection
 
             Section("Your replacements") {

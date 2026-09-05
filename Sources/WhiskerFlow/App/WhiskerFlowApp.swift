@@ -5,7 +5,7 @@ import WhiskerFlowAppSupport
 struct WhiskerFlowApp: App {
     @State private var appState: AppState
     #if DEBUG
-    // A local 2.0 candidate must not replace itself with the public 0.x feed.
+    /// A local 2.0 candidate must not replace itself with the public 0.x feed.
     @StateObject private var updaterService = UpdaterService(startingUpdater: false)
     #else
     @StateObject private var updaterService = UpdaterService(startingUpdater: !UIPreview.isEnabled)

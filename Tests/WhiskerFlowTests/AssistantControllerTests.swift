@@ -94,7 +94,7 @@ final class AssistantControllerTests: XCTestCase {
         XCTAssertNil(controller.saved.drafts.first?.atlasReference)
     }
 
-    @MainActor func testPendingRewriteNeverResumesWithDifferentConnection() async throws {
+    @MainActor func testPendingRewriteNeverResumesWithDifferentConnection() async {
         let controller = AssistantController()
         var account = "first-account"
         controller.accountIdentityProvider = { account }

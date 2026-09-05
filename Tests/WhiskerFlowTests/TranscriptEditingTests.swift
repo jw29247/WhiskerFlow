@@ -5,7 +5,7 @@ import WhiskerFlowAppSupport
 
 final class TranscriptEditingTests: XCTestCase {
     @MainActor
-    func testSavingPrunedTranscriptRecoversTextWithoutResurrectingAudio() async throws {
+    func testSavingPrunedTranscriptRecoversTextWithoutResurrectingAudio() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = TranscriptStore(fileURL: root.appendingPathComponent("history.json"), retentionLimit: 1, removeAudioFile: { _ in })
@@ -21,7 +21,7 @@ final class TranscriptEditingTests: XCTestCase {
     }
 
     @MainActor
-    func testSaveFailureDoesNotPretendRecoverySucceeded() async throws {
+    func testSaveFailureDoesNotPretendRecoverySucceeded() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -34,7 +34,7 @@ final class TranscriptEditingTests: XCTestCase {
     }
 
     @MainActor
-    func testHistoryCorrectionsPersistOnceAndRespectUndoAndDisable() async throws {
+    func testHistoryCorrectionsPersistOnceAndRespectUndoAndDisable() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = TranscriptStore(fileURL: root.appendingPathComponent("history.json"))
