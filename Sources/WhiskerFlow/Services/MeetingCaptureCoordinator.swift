@@ -371,7 +371,8 @@ final class MeetingCaptureCoordinator {
       self.activeIntent = intent
       self.activeOverlapDetected = intent?.overlapsPrevious ?? false
       self.activeMeetingTitle = intent?.title ?? "Ad hoc meeting"
-      assistant.begin(sessionID: sessionID, title: self.activeMeetingTitle ?? "Ad hoc meeting")
+      assistant.begin(sessionID: sessionID, title: self.activeMeetingTitle ?? "Ad hoc meeting",
+                      scheduledEndAt: intent.map { Date(timeIntervalSince1970: Double($0.endMs) / 1_000) })
       lastFailureCode = nil
       if activeOverlapDetected {
         status = .attention

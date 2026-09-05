@@ -61,13 +61,20 @@ final class MeetingAssistantController {
     private var activeStartedAt: Date?
     private var activityInputs: [MeetingActivityInput] = []
     private var lastPromptElapsedSeconds: TimeInterval?
+    private var plannedEndElapsedSeconds: TimeInterval?
+    private var didPromptWrap = false
+    private var lastBreakElapsedSeconds: TimeInterval = 0
+    private var lastActivityElapsedSeconds: TimeInterval?
     private var syncingSessions: Set<UUID> = []
     private var storageFailure: MeetingAssistantError?
 
     private(set) var isActive = false
-    var isCoachEnabled = false
-    var isCoachPaused = false
-    var isCoachVisible = true
+    var isCoachEnabled = false { didSet { clearSuppressedCoaching() } }
+    var isCoachPaused = false { didSet { clearSuppressedCoaching() } }
+    var isCoachVisible = true { didSet { clearSuppressedCoaching() } }
+    /// An ad hoc wrap reminder is only enabled by an explicit duration selection.
+    var plannedDurationMinutes: Int?
+    private(set) var plannedEndAt: Date?
     var goal = ""
     var agenda = ""
     var bookmarkSync: MeetingBookmarkSync?
@@ -77,6 +84,8 @@ final class MeetingAssistantController {
     private(set) var livePrompt: String?
     private(set) var latestFinalizedMeetingReference: String?
     private(set) var storageError: String?
+
+    var shouldShowHUD: Bool { isActive && isCoachEnabled && isCoachVisible }
 
     var bookmarks: [LocalMeetingBookmark] { storage.bookmarks }
     var activityInputsCount: Int { activityInputs.count }
@@ -93,17 +102,25 @@ final class MeetingAssistantController {
         self.storage = loaded.storage
         self.storageError = loaded.error
         self.storageFailure = loaded.error == nil ? nil : .corruptStore
-        self.latestFinalizedMeetingReference = loaded.storage.sessions.reversed().compactMap(\.meetingReference).first
+        self.latestFinalizedMeetingReference = Self.latestReference(in: loaded.storage.sessions)
         Self.secureDirectory(root)
     }
 
-    func begin(sessionID: UUID, title: String) {
+    func begin(sessionID: UUID, title: String, scheduledEndAt: Date? = nil) {
         let startedAt = now()
         activeSessionID = sessionID
         activeStartedAt = startedAt
         activeTitle = title
         isActive = true
         elapsedSeconds = 0
+        isCoachPaused = false
+        isCoachVisible = true
+        let explicitDuration = plannedDurationMinutes.flatMap { $0 > 0 && $0 <= 480 ? TimeInterval($0 * 60) : nil }
+        plannedEndAt = scheduledEndAt ?? explicitDuration.map { startedAt.addingTimeInterval($0) }
+        plannedEndElapsedSeconds = plannedEndAt.map { $0.timeIntervalSince(startedAt) }
+        didPromptWrap = false
+        lastBreakElapsedSeconds = 0
+        lastActivityElapsedSeconds = nil
         activityInputs.removeAll(keepingCapacity: true)
         activity = MeetingCoachMetrics.accumulate(inputs: [])
         livePrompt = nil
@@ -154,7 +171,11 @@ final class MeetingAssistantController {
     }
 
     func recordActivity(_ input: MeetingActivityInput) {
-        guard isActive else { return }
+        guard isActive, input.elapsedSeconds.isFinite, input.elapsedSeconds >= 0,
+              input.durationSeconds.isFinite, input.durationSeconds > 0 else { return }
+        // Capture supplies one-second windows. Ignore repeated or faster samples.
+        if let lastActivityElapsedSeconds, input.elapsedSeconds - lastActivityElapsedSeconds < 1 { return }
+        lastActivityElapsedSeconds = input.elapsedSeconds
         elapsedSeconds = max(elapsedSeconds, input.elapsedSeconds + max(0, input.durationSeconds))
         guard isCoachEnabled, !isCoachPaused, isCoachVisible else { return }
         activityInputs.append(input)
@@ -182,6 +203,8 @@ final class MeetingAssistantController {
         activeSessionID = nil
         activeStartedAt = nil
         activeTitle = nil
+        plannedEndAt = nil
+        plannedEndElapsedSeconds = nil
         isActive = false
         activityInputs.removeAll(keepingCapacity: false)
         activity = MeetingCoachMetrics.accumulate(inputs: [])
@@ -196,7 +219,7 @@ final class MeetingAssistantController {
         let previousLatestReference = latestFinalizedMeetingReference
         storage.sessions[index].meetingReference = meetingReference
         storage.sessions[index].durationMilliseconds = durationMilliseconds
-        latestFinalizedMeetingReference = meetingReference
+        latestFinalizedMeetingReference = Self.latestReference(in: storage.sessions)
         do { try persist() } catch {
             storage.sessions[index] = previousSession
             latestFinalizedMeetingReference = previousLatestReference
@@ -252,11 +275,37 @@ final class MeetingAssistantController {
         }
     }
 
+    private static func latestReference(in sessions: [SessionRecord]) -> String? {
+        // Stable array order breaks equal-start-time ties, including after a restart.
+        sessions.enumerated().filter { $0.element.meetingReference != nil }.max {
+            if $0.element.startedAt == $1.element.startedAt { return $0.offset < $1.offset }
+            return $0.element.startedAt < $1.element.startedAt
+        }?.element.meetingReference
+    }
+
+    private func clearSuppressedCoaching() {
+        guard !isCoachEnabled || isCoachPaused || !isCoachVisible else { return }
+        activityInputs.removeAll(keepingCapacity: false)
+        activity = MeetingCoachMetrics.accumulate(inputs: [])
+        livePrompt = nil
+    }
+
     private func updatePrompt() {
-        guard MeetingCoachMetrics.canPrompt(elapsedSeconds: elapsedSeconds, lastPromptElapsedSeconds: lastPromptElapsedSeconds),
-              activity.windowDurationSeconds >= 30, activity.ownMicActiveSeconds >= 45 else { return }
-        let uncertainty = activity.certainty == .reliable ? "" : " Audio overlap or a missing track makes this estimate uncertain."
-        livePrompt = "You’ve been speaking for much of the last minute. A pause may make room for the next turn.\(uncertainty)"
+        guard MeetingCoachMetrics.canPrompt(elapsedSeconds: elapsedSeconds, lastPromptElapsedSeconds: lastPromptElapsedSeconds) else { return }
+        if !didPromptWrap, let end = plannedEndElapsedSeconds, end > 0,
+           elapsedSeconds >= max(0, end - 300) {
+            let timing = elapsedSeconds >= end ? "The planned end has passed." : "The planned end is approaching."
+            livePrompt = "\(timing) Check your objective, decisions and next steps."
+            didPromptWrap = true
+        } else if elapsedSeconds - lastBreakElapsedSeconds >= 1_800 {
+            livePrompt = "You’ve been in this meeting for a while. Consider a short break when there’s a suitable pause."
+            lastBreakElapsedSeconds = elapsedSeconds
+        } else if activity.windowDurationSeconds >= 30, activity.ownMicActiveSeconds >= 45 {
+            let uncertainty = activity.certainty == .reliable ? "" : " Audio overlap or a missing track makes this estimate uncertain."
+            livePrompt = "You’ve been speaking for much of the last minute. A pause may make room for the next turn.\(uncertainty)"
+        } else {
+            return
+        }
         lastPromptElapsedSeconds = elapsedSeconds
     }
 

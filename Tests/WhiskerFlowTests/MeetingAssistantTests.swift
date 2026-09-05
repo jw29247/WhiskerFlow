@@ -161,6 +161,138 @@ struct MeetingAssistantTests {
         #expect(!MeetingAudioCaptureService.hasAudibleActivity([]))
     }
 
+    @Test func oldMeetingFinalizingLateNeverReplacesLatestIncludingRestart() async throws {
+        let root = try temporaryRoot()
+        var now = Date(timeIntervalSince1970: 100)
+        var controller = MeetingAssistantController(rootURL: root, now: { now })
+        let old = UUID(), latest = UUID()
+        controller.begin(sessionID: old, title: "Old")
+        controller.end(sessionID: old)
+        now = now.addingTimeInterval(100)
+        controller.begin(sessionID: latest, title: "Latest")
+        controller.end(sessionID: latest)
+        await controller.finalize(sessionID: latest, meetingReference: "latest", durationMilliseconds: 1_000)
+        await controller.finalize(sessionID: old, meetingReference: "old", durationMilliseconds: 1_000)
+        #expect(controller.latestFinalizedMeetingReference == "latest")
+        controller = MeetingAssistantController(rootURL: root, now: { now })
+        #expect(controller.latestFinalizedMeetingReference == "latest")
+        await controller.finalize(sessionID: old, meetingReference: "old-retry", durationMilliseconds: 1_000)
+        #expect(controller.latestFinalizedMeetingReference == "latest")
+    }
+
+    @Test func scheduledWrapUsesEndTimeOnceAndAdHocRequiresExplicitDuration() throws {
+        let root = try temporaryRoot()
+        let start = Date(timeIntervalSince1970: 100)
+        let controller = MeetingAssistantController(rootURL: root, now: { start })
+        controller.isCoachEnabled = true
+        controller.plannedDurationMinutes = 120
+        controller.begin(sessionID: UUID(), title: "Scheduled", scheduledEndAt: start.addingTimeInterval(600))
+        sample(controller, at: 298)
+        #expect(controller.livePrompt == nil)
+        sample(controller, at: 299)
+        #expect(controller.livePrompt?.contains("planned end") == true)
+        controller.dismissPrompt()
+        sample(controller, at: 599)
+        #expect(controller.livePrompt == nil)
+        controller.plannedDurationMinutes = nil
+        controller.begin(sessionID: UUID(), title: "Ad hoc")
+        sample(controller, at: 599)
+        #expect(controller.plannedEndAt == nil)
+        #expect(controller.livePrompt == nil)
+        controller.plannedDurationMinutes = 15
+        controller.begin(sessionID: UUID(), title: "Explicit duration")
+        sample(controller, at: 599)
+        #expect(controller.livePrompt?.contains("planned end") == true)
+    }
+
+    @Test func invalidAdHocDurationAndPastScheduledEndDoNotInventWrapTimes() throws {
+        let start = Date(timeIntervalSince1970: 100)
+        let controller = MeetingAssistantController(rootURL: try temporaryRoot(), now: { start })
+        controller.isCoachEnabled = true
+        for minutes in [-1, 0, 481, Int.max] {
+            controller.plannedDurationMinutes = minutes
+            controller.begin(sessionID: UUID(), title: "Ad hoc")
+            sample(controller, at: 599)
+            #expect(controller.plannedEndAt == nil)
+            #expect(controller.livePrompt == nil)
+        }
+        controller.plannedDurationMinutes = 30
+        controller.begin(sessionID: UUID(), title: "Already ended", scheduledEndAt: start.addingTimeInterval(-10))
+        sample(controller, at: 599)
+        #expect(controller.livePrompt == nil)
+        #expect(controller.plannedEndAt == start.addingTimeInterval(-10))
+    }
+
+    @Test func breakReminderSharesCooldownAndRepeatsOnlyAfterThirtyMinutes() throws {
+        let controller = MeetingAssistantController(rootURL: try temporaryRoot())
+        controller.isCoachEnabled = true
+        controller.begin(sessionID: UUID(), title: "Long meeting")
+        for second in 1_710..<1_755 { sample(controller, at: Double(second), ownMic: true) }
+        #expect(controller.livePrompt?.contains("speaking") == true)
+        controller.dismissPrompt()
+        sample(controller, at: 1_799)
+        #expect(controller.livePrompt == nil) // Break is due, but speaking cooldown still applies.
+        sample(controller, at: 1_814)
+        #expect(controller.livePrompt?.contains("short break") == true)
+        controller.dismissPrompt()
+        sample(controller, at: 1_874)
+        #expect(controller.livePrompt == nil)
+        sample(controller, at: 3_614)
+        #expect(controller.livePrompt?.contains("short break") == true)
+    }
+
+    @Test func pauseHideAndOffClearAnalysisAndSuppressAllReminders() throws {
+        let controller = MeetingAssistantController(rootURL: try temporaryRoot())
+        controller.isCoachEnabled = true
+        let session = UUID()
+        controller.begin(sessionID: session, title: "Call")
+        for second in 0..<60 { sample(controller, at: Double(second), ownMic: true) }
+        #expect(controller.livePrompt != nil)
+        #expect(controller.shouldShowHUD)
+        controller.isCoachPaused = true
+        #expect(controller.activityInputsCount == 0)
+        #expect(controller.livePrompt == nil)
+        sample(controller, at: 1_799)
+        #expect(controller.activityInputsCount == 0)
+        #expect(controller.livePrompt == nil)
+        controller.isCoachPaused = false
+        sample(controller, at: 1_800)
+        #expect(controller.livePrompt?.contains("short break") == true)
+        controller.isCoachVisible = false
+        #expect(!controller.shouldShowHUD)
+        #expect(controller.livePrompt == nil)
+        #expect(controller.activityInputsCount == 0)
+        sample(controller, at: 3_600)
+        #expect(controller.livePrompt == nil)
+        controller.isCoachVisible = true
+        controller.isCoachEnabled = false
+        sample(controller, at: 5_400)
+        #expect(controller.activityInputsCount == 0)
+        #expect(!controller.shouldShowHUD)
+        controller.end(sessionID: session)
+        #expect(controller.plannedEndAt == nil)
+        #expect(!controller.shouldShowHUD)
+    }
+
+    @Test func activityRejectsSubsecondDuplicateAndInvalidSamples() throws {
+        let controller = MeetingAssistantController(rootURL: try temporaryRoot())
+        controller.isCoachEnabled = true
+        controller.begin(sessionID: UUID(), title: "Bounded")
+        for tick in 0..<10_000 { sample(controller, at: Double(tick) / 10) }
+        #expect(controller.activityInputsCount <= 60)
+        #expect(controller.activity.windowDurationSeconds <= 60)
+        let elapsed = controller.elapsedSeconds
+        sample(controller, at: .nan)
+        sample(controller, at: .infinity)
+        sample(controller, at: -1)
+        #expect(controller.elapsedSeconds == elapsed)
+        #expect(controller.activityInputsCount <= 60)
+    }
+
+    private func sample(_ controller: MeetingAssistantController, at second: TimeInterval, ownMic: Bool = false) {
+        controller.recordActivity(.init(elapsedSeconds: second, durationSeconds: 1, ownMicActivity: ownMic, systemActivity: false))
+    }
+
     private func temporaryRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("MeetingAssistantTests-\(UUID().uuidString)", isDirectory: true)

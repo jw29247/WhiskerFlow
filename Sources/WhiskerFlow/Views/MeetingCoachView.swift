@@ -33,6 +33,16 @@ struct MeetingCoachView: View {
                 .textFieldStyle(.roundedBorder)
             TextField("Agenda or checklist", text: $controller.agenda, axis: .vertical)
                 .textFieldStyle(.roundedBorder).lineLimit(2...5)
+            if !controller.isActive {
+                Picker("Ad hoc planned duration", selection: $controller.plannedDurationMinutes) {
+                    Text("No wrap reminder").tag(nil as Int?)
+                    ForEach([15, 30, 45, 60, 90, 120], id: \.self) { minutes in
+                        Text("\(minutes) minutes").tag(Optional(minutes))
+                    }
+                }
+                Text("Scheduled meetings use their calendar end time. Ad hoc meetings use only the duration you choose.")
+                    .font(.caption).foregroundStyle(FlowStyle.muted)
+            }
             Button("Prepare") { Task { await requestPreparation() } }
                 .disabled(controller.isActive)
 
@@ -47,7 +57,7 @@ struct MeetingCoachView: View {
                     if controller.isCoachVisible {
                         Text("Own-microphone activity estimate: \(Int(controller.activity.ownMicActiveSeconds))s of the last \(Int(controller.activity.windowDurationSeconds))s")
                             .font(.callout)
-                        Text(certaintyLabel).font(.caption).foregroundStyle(FlowStyle.muted)
+                        Text(Self.certaintyLabel(controller.activity.certainty)).font(.caption).foregroundStyle(FlowStyle.muted)
                         if let prompt = controller.livePrompt {
                             HStack(alignment: .top) {
                                 Text(prompt).font(.callout)
@@ -113,8 +123,8 @@ struct MeetingCoachView: View {
         .background(FlowStyle.surface, in: RoundedRectangle(cornerRadius: 12))
     }
 
-    private var certaintyLabel: String {
-        switch controller.activity.certainty {
+    static func certaintyLabel(_ certainty: MeetingActivityCertainty) -> String {
+        switch certainty {
         case .reliable: return "Estimated from both audio tracks."
         case .missingOwnMicTrack: return "Estimate uncertain: microphone activity is missing."
         case .missingSystemTrack: return "Estimate uncertain: Mac-audio activity is missing."
@@ -123,7 +133,7 @@ struct MeetingCoachView: View {
         }
     }
 
-    private static func duration(_ seconds: TimeInterval) -> String {
+    static func duration(_ seconds: TimeInterval) -> String {
         let value = max(0, Int(seconds))
         return String(format: "%02d:%02d", value / 60, value % 60)
     }

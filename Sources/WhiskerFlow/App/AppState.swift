@@ -116,6 +116,7 @@ final class AppState {
     static let selectionShortcut = KeyCombo(keyCode: 14, modifiers: [.command, .option, .shift])
     static let quickCaptureShortcut = KeyCombo(keyCode: 45, modifiers: [.command, .option, .shift])
     static let bookmarkShortcut = KeyCombo(keyCode: 11, modifiers: [.command, .option, .shift])
+    private var meetingCoachHUD: MeetingCoachHUDController?
     private var hudController: RecordingHUDController?
     private var audioDeviceMonitor: AudioDeviceChangeMonitor?
     private var deviceRefreshTask: Task<Void, Never>?
@@ -166,6 +167,9 @@ final class AppState {
             transcription: transcription
         )
         self.live = LiveDictationSession(transcription: transcription)
+        if store == nil && !UIPreview.isEnabled {
+            meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant)
+        }
         assistant.accountIdentityProvider = { [weak resolvedSettings] in
             guard let token = resolvedSettings?.atlasDeviceToken, !token.isEmpty else { return nil }
             return SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
