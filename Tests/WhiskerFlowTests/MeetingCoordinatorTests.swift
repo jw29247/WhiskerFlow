@@ -328,6 +328,52 @@ final class MeetingCoordinatorTests: XCTestCase {
         XCTAssertEqual(segments.count, 2)
     }
 
+    func testOverlapReconcilerHandlesManyPriorSegmentsRegroupedAsOne() {
+        var segments = [
+            TranscriptionSegment(text: "We should", start: 50, end: 55),
+            TranscriptionSegment(text: "ship tomorrow", start: 55, end: 60),
+        ]
+        MeetingSegmentReconciler.insert(
+            TranscriptionSegment(text: "We should ship tomorrow", start: 50.1, end: 60.1),
+            ownershipBoundary: 60,
+            into: &segments
+        )
+        XCTAssertEqual(segments.map(\.text), ["We should", "ship tomorrow"])
+    }
+
+    func testOverlapReconcilerHandlesOnePriorSegmentSplitAcrossNewSegments() {
+        var segments = [TranscriptionSegment(text: "We should ship tomorrow", start: 50, end: 60)]
+        MeetingSegmentReconciler.insert(
+            TranscriptionSegment(text: "We should", start: 50.1, end: 55.1),
+            ownershipBoundary: 60,
+            into: &segments
+        )
+        MeetingSegmentReconciler.insert(
+            TranscriptionSegment(text: "ship tomorrow", start: 55.1, end: 60.1),
+            ownershipBoundary: 60,
+            into: &segments
+        )
+        XCTAssertEqual(segments.map(\.text), ["We should ship tomorrow"])
+    }
+
+    func testOverlapReconcilerDoesNotEquateDifferentCurrencyNegationOrAmounts() {
+        var segments = [
+            TranscriptionSegment(text: "Approve £1.50", start: 50, end: 55),
+            TranscriptionSegment(text: "do not ship", start: 55, end: 59),
+        ]
+        MeetingSegmentReconciler.insert(
+            TranscriptionSegment(text: "Approve $150", start: 50.1, end: 55.1),
+            ownershipBoundary: 60,
+            into: &segments
+        )
+        MeetingSegmentReconciler.insert(
+            TranscriptionSegment(text: "do ship", start: 55.1, end: 59.1),
+            ownershipBoundary: 60,
+            into: &segments
+        )
+        XCTAssertEqual(segments.count, 4)
+    }
+
     private func chunk(sequence: Int, startMs: Int64, endMs: Int64) -> MeetingRecordingChunkDescriptor {
         MeetingRecordingChunkDescriptor(
             track: .mixed,
@@ -393,6 +439,22 @@ final class MeetingCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(coordinator.hasScheduledUploadRetry)
         coordinator.stopMonitoring()
+    }
+
+    func testFreshCapturePriorityCancelsOnlyActiveRecoveryBatch() async {
+        let started = expectation(description: "batch started")
+        let cancelled = expectation(description: "batch cancelled")
+        var batch: Task<Void, Never>? = Task {
+            started.fulfill()
+            while !Task.isCancelled { await Task.yield() }
+            cancelled.fulfill()
+        }
+        await fulfillment(of: [started], timeout: 1)
+
+        MeetingRecoveryPriority.cancelActiveBatch(&batch)
+
+        XCTAssertNil(batch)
+        await fulfillment(of: [cancelled], timeout: 1)
     }
 }
 

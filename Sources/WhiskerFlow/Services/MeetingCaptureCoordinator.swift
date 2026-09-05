@@ -507,8 +507,7 @@ final class MeetingCaptureCoordinator {
   }
 
   func prioritizeFreshCaptureOverRecovery() {
-    uploadTask?.cancel()
-    uploadTask = nil
+    MeetingRecoveryPriority.cancelActiveBatch(&uploadTask)
     // Keep the sleeping retry scheduler alive. Its active-capture guard pauses
     // delivery without losing the durable retry trigger after this meeting.
   }
@@ -524,7 +523,13 @@ final class MeetingCaptureCoordinator {
         do {
           let pending = try self.store.recoverSessions().filter { $0.state != .recording && !$0.chunks.isEmpty }
           guard !pending.isEmpty else { return }
-          await self.retryPendingSessions(pending)
+          let batch = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.retryPendingSessions(pending)
+          }
+          self.uploadTask = batch
+          await batch.value
+          self.uploadTask = nil
           let stillPending = try self.store.recoverSessions().contains { $0.state != .recording && !$0.chunks.isEmpty }
           if !stillPending { return }
         } catch {
@@ -567,7 +572,6 @@ final class MeetingCaptureCoordinator {
       guard session.sessionID != activeSessionID else { continue }
       await deliver(sessionID: session.sessionID)
     }
-    uploadTask = nil
   }
 
   private func atlasClient() -> MeetingAtlasClient? {
@@ -683,6 +687,13 @@ final class MeetingCaptureCoordinator {
         gate.resolve(false)
       }
     }
+  }
+}
+
+enum MeetingRecoveryPriority {
+  static func cancelActiveBatch(_ batch: inout Task<Void, Never>?) {
+    batch?.cancel()
+    batch = nil
   }
 }
 

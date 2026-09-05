@@ -305,33 +305,42 @@ enum MeetingSegmentReconciler {
     // Only the repeated acoustic context may be reconciled. Speech whose
     // timestamp begins in the new window is always retained, including a
     // deliberate repetition of the same words.
-    for index in segments.indices.reversed() {
-      let existing = segments[index]
-      guard existing.end > incoming.start, existing.start < boundary else { continue }
-      let existingTokens = tokens(existing.text)
-      let incomingTokens = tokens(incomingText)
-      guard !existingTokens.normalized.isEmpty, !incomingTokens.normalized.isEmpty else { continue }
-      let overlap = tokenOverlap(existingTokens.normalized, incomingTokens.normalized)
-      guard overlap > 0 else { continue }
-
-      if overlap == incomingTokens.normalized.count {
-        return
-      }
-      let mergedTokens = existingTokens.original + incomingTokens.original.dropFirst(overlap)
-      segments[index] = TranscriptionSegment(
-        text: mergedTokens.joined(separator: " "),
-        start: min(existing.start, incoming.start),
-        end: max(existing.end, incoming.end)
-      )
+    let candidateIndices = segments.indices.filter {
+      segments[$0].end > incoming.start && segments[$0].start < boundary
+    }
+    let existingOriginal = candidateIndices.flatMap { tokens(segments[$0].text).original }
+    let existingNormalized = candidateIndices.flatMap { tokens(segments[$0].text).normalized }
+    let incomingTokens = tokens(incomingText)
+    guard !existingNormalized.isEmpty, !incomingTokens.normalized.isEmpty else {
+      segments.append(incoming)
       return
     }
-    segments.append(incoming)
+
+    // A later decode may group several earlier segments into one, or split one
+    // earlier segment into several. If its words are already a contiguous part
+    // of the owned overlap, retain the earlier timing and segment boundaries.
+    if contains(existingNormalized, incomingTokens.normalized) { return }
+
+    let overlap = tokenOverlap(existingNormalized, incomingTokens.normalized)
+    guard overlap > 0 else {
+      segments.append(incoming)
+      return
+    }
+    let mergedTokens = existingOriginal + incomingTokens.original.dropFirst(overlap)
+    let merged = TranscriptionSegment(
+      text: mergedTokens.joined(separator: " "),
+      start: min(candidateIndices.map { segments[$0].start }.min() ?? incoming.start, incoming.start),
+      end: max(candidateIndices.map { segments[$0].end }.max() ?? incoming.end, incoming.end)
+    )
+    for index in candidateIndices.reversed() { segments.remove(at: index) }
+    segments.append(merged)
   }
 
   private static func tokens(_ text: String) -> (original: [String], normalized: [String]) {
     let original = text.split(whereSeparator: \.isWhitespace).map(String.init)
+    let benignEdgePunctuation = CharacterSet(charactersIn: ".,!?;:()[]{}\"")
     let normalized = original.map {
-      $0.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "'" }
+      $0.lowercased().trimmingCharacters(in: benignEdgePunctuation)
     }
     return (original, normalized)
   }
@@ -342,6 +351,13 @@ enum MeetingSegmentReconciler {
       if Array(left.suffix(count)) == Array(right.prefix(count)) { return count }
     }
     return 0
+  }
+
+  private static func contains(_ haystack: [String], _ needle: [String]) -> Bool {
+    guard !needle.isEmpty, needle.count <= haystack.count else { return false }
+    return (0...(haystack.count - needle.count)).contains {
+      Array(haystack[$0..<($0 + needle.count)]) == needle
+    }
   }
 }
 
