@@ -22,6 +22,13 @@ final class AssistantCoreTests: XCTestCase {
         XCTAssertEqual(SpokenSelfCorrection.resolve("Do not send the old version, scratch that, send the new version."), "Do not send the old version, scratch that, send the new version.")
     }
 
+    func testBareRepairsAndSentenceBoundaries() {
+        XCTAssertEqual(SpokenSelfCorrection.resolve("Thursday, sorry, Friday."), "Friday.")
+        XCTAssertEqual(SpokenSelfCorrection.resolve("Thursday, I mean, Friday."), "Friday.")
+        let multiple = "Keep this sentence. Send the old version, scratch that, send the new version."
+        XCTAssertEqual(SpokenSelfCorrection.resolve(multiple), multiple)
+    }
+
     func testWritingAndRecordModelsRoundTripThroughCodable() throws {
         let now = Date(timeIntervalSince1970: 1_725_552_000)
         let draft = PendingQuickCaptureDraft(id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!, rawText: "Call Acme tomorrow", kind: .taskDraft, createdAt: now, updatedAt: now, syncState: .pending)

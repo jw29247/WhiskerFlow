@@ -70,6 +70,12 @@ struct TranscriptDetailView: View {
                 Spacer()
             }
 
+            if let raw = record.rawRecognition, raw != record.text {
+                DisclosureGroup("Original recognition") {
+                    ScrollView { Text(raw).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 150)
+                    Button("Copy original") { appState.copy(raw) }
+                }.font(.caption).padding(.top, 12)
+            }
             DisclosureGroup {
                 VStack(alignment: .leading, spacing: 7) {
                     if let duration = record.durationSeconds {

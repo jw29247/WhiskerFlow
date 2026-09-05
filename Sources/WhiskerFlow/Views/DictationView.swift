@@ -65,6 +65,30 @@ struct DictationView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, max(35, min(80, geometry.size.height * 0.09)))
 
+                    if let client = appState.assistant.saved.clients.first(where: { $0.reference == appState.assistant.saved.selectedClient }) {
+                        Text("Client vocabulary: \(client.name)").font(.caption).foregroundStyle(FlowStyle.muted).padding(.bottom, 14)
+                    }
+                    if let receipt = appState.lastPasteReceipt {
+                        HStack(spacing: 14) {
+                            Image(systemName: receipt.state == .verified ? "checkmark.circle" : "doc.on.clipboard")
+                            Text(receipt.message).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+                            if receipt.retrySelection != nil, receipt.state == .failed {
+                                Button("Retry paste") { Task { await appState.retryFailedPaste() } }
+                                    .disabled(appState.isRecording || appState.isTranscribing || appState.assistant.busy)
+                            }
+                            Button("Copy text") { appState.copy(receipt.text) }
+                            Button { appState.lastPasteReceipt = nil } label: { Image(systemName: "xmark") }
+                                .buttonStyle(.plain).accessibilityLabel("Dismiss paste result")
+                        }.padding(16).background(FlowStyle.line.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+                            .padding(.bottom, 20)
+                    }
+                    if appState.assistant.capturePurpose != .dictation {
+                        HStack {
+                            Text("Next recording: \(appState.assistant.capturePurpose.rawValue)").font(.callout)
+                            Spacer()
+                            Button("Return to dictation") { appState.assistant.capturePurpose = .dictation }
+                        }.padding(.bottom, 16)
+                    }
                     recentSection
                     Spacer(minLength: 24)
                 }

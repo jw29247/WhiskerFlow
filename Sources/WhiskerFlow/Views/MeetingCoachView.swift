@@ -66,7 +66,7 @@ struct MeetingCoachView: View {
                     }
                 }
                 HStack {
-                    TextField("Optional bookmark label", text: $bookmarkLabel).textFieldStyle(.roundedBorder)
+                    TextField("Optional bookmark label · ⌥⇧⌘B bookmarks immediately", text: $bookmarkLabel).textFieldStyle(.roundedBorder)
                     Button("Bookmark") {
                         do {
                             let bookmark = try controller.addBookmark(label: bookmarkLabel)
@@ -80,11 +80,33 @@ struct MeetingCoachView: View {
                 if let bookmarkFeedback {
                     Text(bookmarkFeedback).font(.caption).foregroundStyle(FlowStyle.muted)
                 }
-            } else if !controller.bookmarks.isEmpty {
-                Divider()
-                Text("\(controller.bookmarks.filter { $0.syncState != .synced }.count) bookmark(s) waiting to sync or retry.")
-                    .font(.callout).foregroundStyle(FlowStyle.muted)
-                Button("Review meeting") { Task { await requestReview() } }
+            }
+            if !controller.isActive, let summary = controller.localReview {
+                DisclosureGroup("Local meeting recap") { Text(summary).font(.callout).textSelection(.enabled).padding(.top, 8) }
+            }
+            if !controller.isActive, controller.latestFinalizedMeetingReference != nil {
+                Button("Review latest meeting") { Task { await requestReview() } }
+            }
+            if let error = controller.storageError { Text(error).font(.callout).foregroundStyle(.orange) }
+            if !controller.bookmarks.isEmpty {
+                DisclosureGroup("Saved bookmarks (\(controller.bookmarks.count))") {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(controller.bookmarks.reversed()) { bookmark in
+                                HStack {
+                                    Text(Self.duration(Double(bookmark.elapsedMilliseconds) / 1000)).monospacedDigit()
+                                    Text(bookmark.label ?? "Bookmarked moment").lineLimit(2)
+                                    Spacer()
+                                    Text(bookmark.syncState == .synced ? "In Atlas" : "On this Mac")
+                                        .font(.caption).foregroundStyle(FlowStyle.muted)
+                                    if bookmark.syncState != .synced {
+                                        Button("Retry") { Task { await controller.retryPendingBookmarks(sessionID: bookmark.sessionID) } }
+                                    }
+                                }.font(.callout)
+                            }
+                        }.padding(.vertical, 10)
+                    }.frame(maxHeight: 220)
+                }
             }
         }
         .padding(18)

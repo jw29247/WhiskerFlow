@@ -36,6 +36,7 @@ struct MeetingsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
+                    MeetingAssistantSection(appState: appState)
                     if appState.isMeetingCapturing {
                         HStack(spacing: 18) {
                             Image(systemName: "record.circle.fill").font(.system(size: 28)).foregroundStyle(FlowStyle.recording)

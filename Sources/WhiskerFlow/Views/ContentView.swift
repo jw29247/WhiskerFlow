@@ -31,6 +31,8 @@ struct ContentView: View {
                             select(record ?? appState.records.first)
                         }
                     }
+                case .assistant:
+                    AssistantView(appState: appState)
                 case .meetings:
                     MeetingsView(appState: appState)
                 case .corrections:
@@ -180,15 +182,15 @@ struct ContentView: View {
 }
 
 private enum FlowDestination: String, CaseIterable, Identifiable {
-    case dictate = "Dictate", meetings = "Meetings", history = "History", corrections = "Corrections"
+    case dictate = "Dictate", meetings = "Meetings", history = "History", corrections = "Corrections", assistant = "Assistant"
     var id: String { rawValue }
     var symbol: String {
-        switch self { case .dictate: return "mic"; case .meetings: return "calendar"; case .history: return "clock.arrow.circlepath"; case .corrections: return "text.badge.checkmark" }
+        switch self { case .assistant: return "wand.and.stars"; case .dictate: return "mic"; case .meetings: return "calendar"; case .history: return "clock.arrow.circlepath"; case .corrections: return "text.badge.checkmark" }
     }
     var shortcut: KeyEquivalent {
-        switch self { case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .corrections: return "4" }
+        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .corrections: return "4" }
     }
     var shortcutLabel: String {
-        switch self { case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .corrections: return "4" }
+        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .corrections: return "4" }
     }
 }

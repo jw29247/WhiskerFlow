@@ -23,38 +23,60 @@ struct PasteService {
         pasteboard.setString(text.normalizedForDelivery, forType: .string)
     }
 
-    /// Paste `text` into `application` at the cursor, preserving the user's clipboard.
-    @discardableResult
-    func paste(_ text: String, into application: NSRunningApplication?) -> Bool {
+    /// Returns observed delivery, rather than treating a queued key event as success.
+    func paste(_ text: String, into application: NSRunningApplication?, replacing selection: TextFieldSnapshot? = nil) async -> PasteDeliveryReceipt {
         correctionMonitor?.stop()
+        let normalized = text.normalizedForDelivery
+        func receipt(_ state: PasteDeliveryReceipt.State, _ message: String, retry: TextFieldSnapshot? = nil) -> PasteDeliveryReceipt {
+            PasteDeliveryReceipt(state: state, text: normalized, message: message, retrySelection: retry)
+        }
+        guard hasAccessibilityPermission else {
+            copy(normalized)
+            requestAccessibilityPermission()
+            return receipt(.copied, "Copied — allow Accessibility to paste automatically")
+        }
+        guard let destination = selection?.application ?? application ?? NSWorkspace.shared.frontmostApplication,
+              !destination.isTerminated,
+              destination.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            return receipt(.failed, "Destination unavailable. Your text is ready to copy.")
+        }
+        await Self.activateAndConfirm(destination)
+        guard !Task.isCancelled,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == destination.processIdentifier else {
+            return receipt(.failed, "Could not reach the destination. Your text is ready to copy.")
+        }
+        if let selection, !selection.restoreSelection() {
+            return receipt(.failed, "The original selection changed. Copy the preview instead.")
+        }
+        let context = selection ?? TextFieldSnapshot.capture()
+        let scope = context?.scope(for: normalized)
+        let correctionTarget = correctionMonitor?.prepare(pasted: normalized)
         let pasteboard = NSPasteboard.general
         let saved = Self.snapshot(of: pasteboard)
-
         pasteboard.clearContents()
-        pasteboard.setString(text.normalizedForDelivery, forType: .string)
+        guard pasteboard.setString(normalized, forType: .string) else {
+            Self.restore(saved, to: pasteboard, ifUnchangedSince: pasteboard.changeCount)
+            return receipt(.failed, "Could not prepare the clipboard. Try Copy or retry the unchanged selection.", retry: context)
+        }
         let deliveryChangeCount = pasteboard.changeCount
-
-        guard hasAccessibilityPermission else {
-            requestAccessibilityPermission()
-            return false
+        defer { Self.restore(saved, to: pasteboard, ifUnchangedSince: deliveryChangeCount) }
+        guard Self.sendPasteKeyEvent(to: destination) else {
+            return receipt(.failed, "The paste key could not be sent. Retry or copy your text.", retry: context)
         }
-
-        Task { @MainActor in
-            await Self.activateAndConfirm(application)
-            guard pasteboard.changeCount == deliveryChangeCount else { return }
-            if let application, NSWorkspace.shared.frontmostApplication?.processIdentifier != application.processIdentifier {
-                Self.restore(saved, to: pasteboard, ifUnchangedSince: deliveryChangeCount)
-                return
+        var confirmed = false
+        // Give the destination time to consume the clipboard even if AX cannot verify it.
+        for tick in 0..<12 {
+            try? await Task.sleep(for: .milliseconds(75))
+            if let context, context.isFocused, let value = context.readValue(), scope?.confirmsInsertion(value) == true {
+                confirmed = true
             }
-            let target = correctionMonitor?.prepare(pasted: text.normalizedForDelivery)
-            Self.sendPasteKeyEvent(to: application ?? NSWorkspace.shared.frontmostApplication)
-            correctionMonitor?.observe(target)
-            // Restore the previous clipboard once the paste has been delivered.
-            try? await Task.sleep(nanoseconds: 450_000_000)
-            Self.restore(saved, to: pasteboard, ifUnchangedSince: deliveryChangeCount)
+            if tick >= 5 && (confirmed || Task.isCancelled) { break }
         }
-
-        return true
+        if confirmed {
+            correctionMonitor?.observe(correctionTarget)
+            return receipt(.verified, "Pasted into \(destination.localizedName ?? "the destination")")
+        }
+        return receipt(.unverified, "Sent to \(destination.localizedName ?? "the destination"); insertion could not be verified. Check before pasting again.")
     }
 
     // MARK: - Activation
@@ -94,7 +116,7 @@ struct PasteService {
     static func restore(_ snapshot: [[NSPasteboard.PasteboardType: Data]], to pasteboard: NSPasteboard, ifUnchangedSince changeCount: Int) {
         // A new Copy action owns the clipboard immediately. An earlier delayed
         // paste must never replace it, forcing the user to copy a second time.
-        guard pasteboard.changeCount == changeCount, !snapshot.isEmpty else { return }
+        guard pasteboard.changeCount == changeCount else { return }
         pasteboard.clearContents()
         let items = snapshot.map { contents -> NSPasteboardItem in
             let item = NSPasteboardItem()
@@ -108,21 +130,16 @@ struct PasteService {
 }
 
 extension PasteService {
-    fileprivate static func sendPasteKeyEvent(to application: NSRunningApplication?) {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
-
-        keyDown?.flags = .maskCommand
-        keyUp?.flags = .maskCommand
-        // Address the confirmed destination directly. Sending through the global
-        // HID stream can be replayed by event taps and deliver the paste twice.
-        if let application {
-            keyDown?.postToPid(application.processIdentifier)
-            keyUp?.postToPid(application.processIdentifier)
-        } else {
-            keyDown?.post(tap: .cghidEventTap)
-            keyUp?.post(tap: .cghidEventTap)
-        }
+    fileprivate static func sendPasteKeyEvent(to application: NSRunningApplication?) -> Bool {
+        guard let application, !application.isTerminated,
+              let source = CGEventSource(stateID: .combinedSessionState),
+              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false) else { return false }
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+        // A confirmed process target prevents global event-tap replay duplicates.
+        keyDown.postToPid(application.processIdentifier)
+        keyUp.postToPid(application.processIdentifier)
+        return true
     }
 }

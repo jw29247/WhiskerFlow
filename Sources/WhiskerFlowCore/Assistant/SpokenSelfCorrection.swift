@@ -36,11 +36,11 @@ public enum SpokenSelfCorrection {
     }
 
     private static let repair = try! NSRegularExpression(
-        pattern: #"^(.+?\b)(?:[\p{L}\p{N}'-]+),\s*(?:sorry,\s*|I mean\s+)([\p{L}\p{N}'-]+)([.!?])$"#,
+        pattern: #"^(.*?\b)(?:[\p{L}\p{N}'-]+),\s*(?:sorry,\s*|I mean,?\s+)([\p{L}\p{N}'-]+)([.!?])$"#,
         options: [.caseInsensitive]
     )
     private static let scratchThat = try! NSRegularExpression(
-        pattern: #"^(.{1,200}?),\s*scratch that,\s*([\p{L}\p{N}'-]+(?:\s+[\p{L}\p{N}'-]+){1,7}[.!?])$"#,
+        pattern: #"^([^.!?\r\n,]{1,200}),\s*scratch that,\s*([\p{L}\p{N}'-]+(?:\s+[\p{L}\p{N}'-]+){1,7}[.!?])$"#,
         options: [.caseInsensitive]
     )
 }

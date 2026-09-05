@@ -38,10 +38,14 @@ struct WhiskerFlowApp: App {
             CommandGroup(after: .newItem) {
                 #if DEBUG
                 if ProcessInfo.processInfo.arguments.contains("--verify-corrections") {
+                    Button("Verify selection preview in TextEdit") { appState.verifySelectionPreview() }
                     Button("Verify correction paste in TextEdit") { appState.verifyCorrectionPaste() }
                         .keyboardShortcut("p", modifiers: [.command, .option, .shift])
                 }
                 #endif
+                Button("Voice edit selection · hold ⌥⇧⌘E") { appState.assistant.capturePurpose = .selectionInstruction }
+                Button("Quick voice capture · hold ⌥⇧⌘N") { appState.assistant.capturePurpose = .quickCapture }
+                Button("Bookmark meeting · ⌥⇧⌘B") { appState.bookmarkMeeting() }.disabled(!appState.isMeetingCapturing)
                 Button("Toggle Meeting Capture") {
                     appState.toggleMeetingCapture()
                 }

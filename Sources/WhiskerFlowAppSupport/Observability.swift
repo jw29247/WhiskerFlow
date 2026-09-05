@@ -27,6 +27,8 @@ public enum Observability {
         state.tracer
     }
 
+    public static var assistantOperations: LongCounterSdk { state.assistantOperations }
+
     public static var dictationSessions: LongCounterSdk {
         state.dictationSessions
     }
@@ -125,6 +127,7 @@ public enum Observability {
         let meterProvider: MeterProviderSdk
         let tracer: any Tracer
         let appLifecycle: LongCounterSdk
+        let assistantOperations: LongCounterSdk
         let dictationSessions: LongCounterSdk
         let transcriptionOperations: LongCounterSdk
         let transcriptionDuration: DoubleHistogramMeterSdk
@@ -221,6 +224,7 @@ public enum Observability {
                 .setDescription("Application lifecycle transitions")
                 .setUnit("1")
                 .build()
+            assistantOperations = meter.counterBuilder(name: "assistant.operations").setDescription("Assistant request outcomes without content").setUnit("1").build()
             dictationSessions = meter.counterBuilder(name: "dictation.sessions")
                 .setDescription("Dictation session state transitions")
                 .setUnit("1")

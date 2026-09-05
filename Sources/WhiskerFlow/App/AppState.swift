@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import CryptoKit
 import Foundation
 import Logging
 import OpenTelemetryApi
@@ -50,6 +51,12 @@ final class AppState {
         let allowAppleFallback: Bool
         let delivery: DeliveryMode
         let playSounds: Bool
+        var style: WritingStyle = .standard
+        var recognizeCorrections = false
+        var purpose: AssistantController.CapturePurpose = .dictation
+        var quickKind: AssistantRecordKind = .note
+        var clientReference: String?
+        var accountIdentity: String?
     }
 
     /// How long a `.finishing` session may take before the UI is force-recovered.
@@ -93,13 +100,22 @@ final class AppState {
     private let live: LiveDictationSession
     private let recordingCoordinator = RecordingCoordinator()
     private var pasteService = PasteService()
+    var lastPasteReceipt: PasteDeliveryReceipt?
+    var assistantVoiceInstruction = ""
+    var meetingAssistant: MeetingAssistantController { meetingCapture.assistant }
     private var correctionEditBaselines: [UUID: String] = [:]
+    let assistant: AssistantController
     let corrections: CorrectionStore
     private let correctionMonitor = PasteCorrectionMonitor()
     private let soundService = SoundService()
     let microphonePermission: MicrophonePermissionController
     let sharedVocabulary = SharedVocabularyService()
     private var hotkeyMonitor: HotkeyMonitor?
+    private var assistantHotkeyMonitors: [HotkeyMonitor] = []
+    private var assistantShortcutActive = false
+    static let selectionShortcut = KeyCombo(keyCode: 14, modifiers: [.command, .option, .shift])
+    static let quickCaptureShortcut = KeyCombo(keyCode: 45, modifiers: [.command, .option, .shift])
+    static let bookmarkShortcut = KeyCombo(keyCode: 11, modifiers: [.command, .option, .shift])
     private var hudController: RecordingHUDController?
     private var audioDeviceMonitor: AudioDeviceChangeMonitor?
     private var deviceRefreshTask: Task<Void, Never>?
@@ -140,6 +156,7 @@ final class AppState {
         let transcription = TranscriptionService()
         self.settings = resolvedSettings
         self.store = store ?? .defaultStore()
+        self.assistant = store == nil && !UIPreview.isEnabled ? .defaultStore() : AssistantController()
         self.corrections = correctionStore ?? (store == nil ? .defaultStore() : CorrectionStore())
         self.microphonePermission = resolvedMicrophonePermission
         self.transcription = transcription
@@ -149,6 +166,25 @@ final class AppState {
             transcription: transcription
         )
         self.live = LiveDictationSession(transcription: transcription)
+        assistant.accountIdentityProvider = { [weak resolvedSettings] in
+            guard let token = resolvedSettings?.atlasDeviceToken, !token.isEmpty else { return nil }
+            return SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
+        }
+        if store == nil && !UIPreview.isEnabled { assistant.synchronizeAccount() }
+        assistant.requestTransport = { [weak self] in
+            guard let self, !UIPreview.isEnabled, !self.settings.atlasDeviceToken.isEmpty,
+                  let url = URL(string: self.settings.atlasBaseURL) else { throw AssistantError.message("Connect Atlas in Meeting setup first.") }
+            return AssistantAtlasClient(baseURL: url, token: self.settings.atlasDeviceToken)
+        }
+        meetingCapture.assistant.bookmarkSync = { [weak self] request in
+            guard let self else { throw AssistantError.message("Assistant is unavailable.") }
+            var args: [String: Any] = ["requestId": request.requestID.uuidString, "meetingReference": request.meetingReference,
+                                       "offsetMs": request.elapsedMilliseconds]
+            if let label = request.label { args["label"] = label }
+            let row = try await self.assistant.call("addBookmark", args)
+            guard let reference = row["bookmarkReference"] as? String else { throw AssistantError.message("Atlas returned an invalid bookmark receipt.") }
+            return reference
+        }
         pasteService.correctionMonitor = correctionMonitor
         correctionMonitor.isEnabled = { [weak self] in
             guard let self else { return false }
@@ -326,6 +362,8 @@ final class AppState {
     func stopMonitors() {
         correctionMonitor.stop()
         hotkeyMonitor?.stop()
+        assistantHotkeyMonitors.forEach { $0.stop() }
+        assistantHotkeyMonitors = []
         hotkeyMonitor = nil
         audioDeviceMonitor?.stop()
         audioDeviceMonitor = nil
@@ -423,12 +461,13 @@ final class AppState {
     /// keys they press to record don't start a real dictation session.
     func setHotkeyCaptureActive(_ active: Bool) {
         hotkeyMonitor?.setSuspended(active)
+        assistantHotkeyMonitors.forEach { $0.setSuspended(active) }
     }
 
     /// The team glossary plus the user's personal rules, applied to every
     /// transcript. Personal rules override shared ones on conflict.
     var effectiveVocabulary: Vocabulary {
-        Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: settings.vocabulary)
+        Vocabulary.effective(shared: Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: assistant.vocabulary), personal: settings.vocabulary)
     }
 
     func refreshSharedVocabulary() {
@@ -673,6 +712,11 @@ final class AppState {
                 if pressed {
                     self.recordingIntentActive = true
                     self.pasteTargetApplication = NSWorkspace.shared.frontmostApplication
+                    if self.assistant.capturePurpose == .selectionInstruction, !self.assistant.captureSelection() {
+                        self.recordingIntentActive = false
+                        self.status = .failure(self.assistant.message ?? "Capture a selection first")
+                        return
+                    }
                     Task { await self.beginRecording() }
                 } else {
                     self.recordingIntentActive = false
@@ -685,12 +729,52 @@ final class AppState {
                 } else {
                     self.recordingIntentActive = true
                     self.pasteTargetApplication = NSWorkspace.shared.frontmostApplication
+                    if self.assistant.capturePurpose == .selectionInstruction, !self.assistant.captureSelection() {
+                        self.recordingIntentActive = false
+                        self.status = .failure(self.assistant.message ?? "Capture a selection first")
+                        return
+                    }
                     Task { await self.beginRecording() }
                 }
             }
         }
         monitor.start()
         hotkeyMonitor = monitor
+        for (combo, purpose) in [(Self.selectionShortcut, AssistantController.CapturePurpose.selectionInstruction),
+                                 (Self.quickCaptureShortcut, AssistantController.CapturePurpose.quickCapture)] {
+            let shortcut = HotkeyMonitor(combo: combo) { [weak self] pressed in
+                guard let self, self.settings.activeHotkeyCombo != combo else { return }
+                if pressed {
+                    guard !self.isRecording, !self.isTranscribing, !self.assistant.busy,
+                          !self.isMeetingCapturing, self.recordingCoordinator.phase == .idle,
+                          self.assistant.synchronizeAccount() else { return }
+                    if purpose == .selectionInstruction, !self.assistant.captureSelection() { return }
+                    self.assistant.capturePurpose = purpose
+                    self.assistantShortcutActive = true
+                    self.recordingIntentActive = true
+                    self.pasteTargetApplication = NSWorkspace.shared.frontmostApplication
+                    Task { await self.beginRecording() }
+                } else if self.assistantShortcutActive {
+                    self.assistantShortcutActive = false
+                    self.recordingIntentActive = false
+                    Task { await self.finishRecording() }
+                }
+            }
+            shortcut.start(); assistantHotkeyMonitors.append(shortcut)
+        }
+        let bookmark = HotkeyMonitor(combo: Self.bookmarkShortcut) { [weak self] pressed in
+            guard let self, pressed, self.settings.activeHotkeyCombo != Self.bookmarkShortcut else { return }
+            self.bookmarkMeeting()
+        }
+        bookmark.start(); assistantHotkeyMonitors.append(bookmark)
+    }
+
+    func bookmarkMeeting() {
+        guard isMeetingCapturing else { return }
+        do {
+            let bookmark = try meetingAssistant.addBookmark(label: nil)
+            assistant.message = "Bookmarked at \(Int(bookmark.elapsedMilliseconds / 1000)) seconds."
+        } catch { assistant.message = "The bookmark could not be saved on this Mac." }
     }
 
     private func beginRecording() async {
@@ -770,6 +854,7 @@ final class AppState {
                 "recording.mode": .string(String(describing: settings.recordingMode))
             ])
             activeRecordingConfiguration = configuration
+            assistant.capturePurpose = .dictation
             // Stream + decode live for WhisperKit; Parakeet decodes the captured
             // samples on release, with audio persistence following delivery.
             streamingActive = configuration.engine == .whisperKit && settings.liveTranscription
@@ -786,7 +871,9 @@ final class AppState {
                         model: configuration.model,
                         vocabulary: configuration.vocabulary,
                         formatting: configuration.formatting,
-                        streaming: streamingActive
+                        streaming: streamingActive,
+                        style: configuration.style,
+                        recognizeCorrections: configuration.recognizeCorrections
                     )
                     inputSelection = candidate
                     break
@@ -954,6 +1041,7 @@ final class AppState {
             if !result.text.isEmpty {
                 persistLiveRecording(
                     text: result.text,
+                    rawText: result.rawText,
                     samples: result.samples,
                     configuration: configuration,
                     sessionID: sessionID
@@ -972,14 +1060,20 @@ final class AppState {
             // persist the audio + record off the critical path.
             let mayUpdateUI = canUpdateLifecycleUI(for: sessionID)
             if mayUpdateUI { status = .transcribing }
-            deliver(
+            await deliver(
                 result.text,
                 pasteTarget: pasteTarget,
                 delivery: configuration.delivery,
-                mayUpdateStatus: mayUpdateUI
+                mayUpdateStatus: mayUpdateUI,
+                purpose: configuration.purpose,
+                quickKind: configuration.quickKind,
+                clientReference: configuration.clientReference,
+                accountIdentity: configuration.accountIdentity,
+                sessionID: sessionID
             )
             persistLiveRecording(
                 text: result.text,
+                rawText: result.rawText,
                 samples: result.samples,
                 configuration: configuration,
                 sessionID: sessionID
@@ -1082,6 +1176,7 @@ final class AppState {
     /// paste. The WAV is encoded off the main actor; the store update hops back.
     private func persistLiveRecording(
         text: String,
+        rawText: String,
         samples: [Float],
         configuration: TranscriptionJobConfiguration,
         sessionID: UUID
@@ -1124,6 +1219,7 @@ final class AppState {
                     try AudioFileWriter.writeWAV(samples: samples, to: url)
                     let saved = await self?.appendRecord(
                         text: text,
+                        rawText: rawText,
                         audioPath: url.path,
                         createdAt: createdAt,
                         duration: duration,
@@ -1153,6 +1249,7 @@ final class AppState {
 
     private func appendRecord(
         text: String,
+        rawText: String,
         audioPath: String,
         createdAt: Date,
         duration: Double,
@@ -1170,7 +1267,8 @@ final class AppState {
             model: model,
             engine: engine,
             language: language,
-            updatedAt: createdAt
+            updatedAt: createdAt,
+            rawRecognition: rawText
         )
         do {
             try store.add(record)
@@ -1336,10 +1434,9 @@ final class AppState {
                 capturedSamples: capturedSamples
             )
             let finalText = await Task.detached(priority: .userInitiated) {
-                TranscriptFormatter.format(
-                    configuration.vocabulary.apply(to: outcome.result.text),
-                    options: configuration.formatting
-                )
+                AssistantTextProcessing.process(outcome.result.text, style: configuration.style,
+                    vocabulary: configuration.vocabulary, formatting: configuration.formatting,
+                    recognizeCorrections: configuration.recognizeCorrections)
             }.value
             try store.markTranscribed(
                 id: record.id,
@@ -1347,7 +1444,8 @@ final class AppState {
                 durationSeconds: outcome.result.duration,
                 model: configuration.model.rawValue,
                 engine: outcome.engine.rawValue,
-                language: outcome.result.language
+                language: outcome.result.language,
+                rawRecognition: outcome.result.text
             )
             records = store.records
             let mayUpdateUI = canUpdateLifecycleUI(for: sessionID)
@@ -1368,11 +1466,16 @@ final class AppState {
                     "transcription.retry": "\(isRetry)"
                 ]
             )
-            deliver(
+            await deliver(
                 finalText,
                 pasteTarget: pasteTarget,
                 delivery: configuration.delivery,
-                mayUpdateStatus: mayUpdateUI
+                mayUpdateStatus: mayUpdateUI,
+                purpose: configuration.purpose,
+                quickKind: configuration.quickKind,
+                clientReference: configuration.clientReference,
+                accountIdentity: configuration.accountIdentity,
+                sessionID: sessionID
             )
         } catch {
             do {
@@ -1416,14 +1519,27 @@ final class AppState {
     #if DEBUG
     /// Invoked only by the opt-in verification command; exercises the real paste path.
     func verifyCorrectionPaste() {
-        guard let target = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.TextEdit" }) else { return }
+        guard let target = (NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "agency.thatworks.WhiskerFlow.AcceptanceEditor" }) ?? NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.TextEdit" })) else { return }
         guard let url = target.bundleURL else { return }
         Task { @MainActor in
             let configuration = NSWorkspace.OpenConfiguration()
             configuration.activates = true
             guard let opened = try? await NSWorkspace.shared.openApplication(at: url, configuration: configuration) else { return }
-            deliver("Please send the report to Mark before Friday.", pasteTarget: opened,
+            await deliver("Please send the report to Mark before Friday.", pasteTarget: opened,
                     delivery: .pasteAtCursor, mayUpdateStatus: true)
+        }
+    }
+    func verifySelectionPreview() {
+        guard let target = (NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "agency.thatworks.WhiskerFlow.AcceptanceEditor" }) ?? NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.TextEdit" })),
+              let url = target.bundleURL else { return }
+        Task { @MainActor in
+            let configuration = NSWorkspace.OpenConfiguration(); configuration.activates = true
+            _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+            guard assistant.captureSelection(), assistant.rewriteInput == "Please send the report to Mark before Friday." else {
+                assistant.clearSelection(); assistant.message = "Select the complete synthetic verification sentence in TextEdit."; return
+            }
+            assistant.rewritePreview = "Please send the summary to Marc before Thursday."
+            assistant.message = "Synthetic preview for local replacement verification; no AI request was sent."
         }
     }
     #endif
@@ -1432,36 +1548,79 @@ final class AppState {
         _ text: String,
         pasteTarget: NSRunningApplication?,
         delivery: DeliveryMode,
-        mayUpdateStatus: Bool
-    ) {
+        mayUpdateStatus: Bool,
+        purpose: AssistantController.CapturePurpose = .dictation,
+        quickKind: AssistantRecordKind = .note,
+        clientReference: String? = nil,
+        accountIdentity: String? = nil,
+        sessionID: UUID? = nil
+    ) async {
+        if purpose != .dictation {
+            switch purpose {
+            case .quickCapture:
+                _ = assistant.saveLocalDraft(text, kind: quickKind, clientReference: clientReference, accountIdentity: accountIdentity)
+            case .selectionInstruction:
+                guard mayUpdateStatus else { return }
+                // Spoken instructions are captured locally; the user explicitly requests the preview.
+                assistantVoiceInstruction = String(text.prefix(500))
+                assistant.message = "Instruction captured. Review it in Assistant, then generate a preview."
+            case .dictation: break
+            }
+            if mayUpdateStatus { status = .success(assistant.message ?? "Ready in Assistant") }
+            return
+        }
         switch delivery {
         case .copyOnly:
             pasteService.copy(text)
             if mayUpdateStatus { status = .success("Copied to clipboard") }
         case .pasteAtCursor:
-            if pasteService.paste(text, into: pasteTarget) {
-                hasAccessibilityPermission = true
-                if mayUpdateStatus { status = .success("Pasted transcript") }
-            } else {
-                hasAccessibilityPermission = false
-                if mayUpdateStatus {
-                    status = .success("Transcript copied; allow Accessibility to auto-paste")
-                }
+            let receipt = await pasteService.paste(text, into: pasteTarget)
+            hasAccessibilityPermission = pasteService.hasAccessibilityPermission
+            if mayUpdateStatus && canUpdateLifecycleUI(for: sessionID) {
+                lastPasteReceipt = receipt
+                status = receipt.state == .failed ? .failure(receipt.message) : .success(receipt.message)
             }
         }
     }
 
+    func retryFailedPaste() async {
+        guard !isRecording, !isTranscribing, !assistant.busy, let receipt = lastPasteReceipt,
+              receipt.state == .failed, let selection = receipt.retrySelection else { return }
+        assistant.busy = true
+        let next = await pasteService.paste(receipt.text, into: selection.application, replacing: selection)
+        assistant.busy = false
+        if !isRecording && !isTranscribing { lastPasteReceipt = next }
+    }
+
+    func replaceAssistantSelection() async {
+        guard !assistant.busy, !isRecording, !isTranscribing,
+              let selection = assistant.selection, !assistant.rewritePreview.isEmpty else { return }
+        assistant.busy = true
+        let receipt = await pasteService.paste(assistant.rewritePreview, into: selection.application, replacing: selection)
+        assistant.busy = false
+        assistant.message = receipt.message
+        lastPasteReceipt = receipt
+        if receipt.state == .verified { assistant.clearSelection() }
+    }
+
     private func makeTranscriptionConfiguration() -> TranscriptionJobConfiguration {
-        TranscriptionJobConfiguration(
+        let accountReady = assistant.synchronizeAccount()
+        return TranscriptionJobConfiguration(
             engine: settings.engine,
             model: settings.model,
             language: settings.resolvedLanguage,
-            vocabulary: effectiveVocabulary,
+            vocabulary: accountReady ? effectiveVocabulary : Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: settings.vocabulary),
             formatting: settings.formatting,
             cliConfiguration: settings.cliConfiguration,
             allowAppleFallback: settings.allowAppleFallback,
             delivery: settings.delivery,
-            playSounds: settings.playSounds
+            playSounds: settings.playSounds,
+            style: assistant.style(for: pasteTargetApplication?.bundleIdentifier),
+            recognizeCorrections: assistant.saved.recognizeCorrections,
+            purpose: assistant.capturePurpose,
+            quickKind: assistant.quickCaptureKind,
+            clientReference: accountReady ? assistant.saved.selectedClient : nil,
+            accountIdentity: accountReady ? assistant.saved.accountIdentity : nil
         )
     }
 

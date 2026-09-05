@@ -3,8 +3,8 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or Atlas implement-spec for the corresponding reviewed packets. Track completed steps and proof below.
 
 **Goal:** Deliver the seven approved voice features and private before/during/after meeting coaching.
-**Architecture:** Native deterministic core and bounded audio metrics; an optional on-demand local generator; paired-device Atlas tools for cloud inference and owned draft/meeting persistence. Existing capture and identity remain the owners.
-**Tech Stack:** Swift 5.10+, SwiftUI/AppKit, optional availability-gated FoundationModels, TypeScript/Convex and existing Atlas AI registry.
+**Architecture:** Native deterministic core and bounded audio metrics; explicit on-demand Atlas generation; paired-device Atlas tools for cloud inference and owned draft/meeting persistence. Existing capture and identity remain the owners.
+**Tech Stack:** Swift 5.10+, SwiftUI/AppKit, TypeScript/Convex and existing Atlas AI registry.
 **Spec:** `docs/superpowers/specs/2026-09-04-whiskerflow-2-assistant.md`
 
 ## Global Constraints
@@ -42,53 +42,53 @@ public enum AssistantRecordKind: String, Codable, CaseIterable, Sendable { case 
 ```
 Expose public Codable/Equatable/Sendable records for pending quick-capture drafts, client vocabulary profiles and meeting bookmarks with UUID/string identity, timestamps and explicit sync state. Publish exact initializers in the report so integration consumes one interface. Use existing Vocabulary/VocabularyRule rather than a new correction format.
 
-- [ ] Write conservative behavioral fixtures including:
+- [x] Write conservative behavioral fixtures including:
 ```swift
 XCTAssertEqual(SpokenSelfCorrection.resolve("Meet on Thursday, sorry, Friday."), "Meet on Friday.")
 XCTAssertEqual(SpokenSelfCorrection.resolve("I am sorry about Friday."), "I am sorry about Friday.")
 XCTAssertEqual(SpokenSelfCorrection.resolve("Do not remove the backup."), "Do not remove the backup.")
 ```
-- [ ] Implement explicit bounded correction-marker parsing, preserving ambiguous clauses and original raw text at integration boundary.
-- [ ] Add pure 60-second bounded own-mic/system activity accumulation, uncertain overlap/missing-track results and >=60-second prompt cooldown. Accept elapsed/duration/activity inputs, not text or audio storage. Write missing-source and overlap fixtures.
-- [ ] Add pure inference admission policy: deny local generation while dictation/meeting recording, model unavailable, excessive input or memory pressure; no hidden cloud fallback. Test all denials.
-- [ ] Run `swift test --filter AssistantCoreTests`; report actual failures/pass and commit only owned paths. Do not run whole suite or mutate main checkout.
+- [x] Implement explicit bounded correction-marker parsing, preserving ambiguous clauses and original raw text at integration boundary.
+- [x] Add pure 60-second bounded own-mic/system activity accumulation, uncertain overlap/missing-track results and >=60-second prompt cooldown. Accept elapsed/duration/activity inputs, not text or audio storage. Write missing-source and overlap fixtures.
+- [x] Add pure inference admission policy: deny local generation while dictation/meeting recording, model unavailable, excessive input or memory pressure; no hidden cloud fallback. Test all denials.
+- [x] Run `swift test --filter AssistantCoreTests`; report actual failures/pass and commit only owned paths. Do not run whole suite or mutate main checkout.
 
 ### Task 2: Delivery and selected-text transactions
 
-- [ ] Introduce an async delivery receipt with `verified`, `unverified`, `failed` and concrete retry eligibility. Use the exact insertion confirmation already proven by PasteCorrectionMonitor.
-- [ ] Snapshot supported selected text plus exact prefix/suffix and AX identity; reject secure/unsupported/oversized fields before value reads.
-- [ ] Add a selection replacement transaction that checks app, field and unchanged original range before changing anything. AX-selected-text write or targeted paste must preserve undo and verify output. Test Unicode, changed context, app termination, disabled permission and clipboard takeover.
-- [ ] Wire AppState to real completion instead of treating an enqueued paste as success. Expose Copy and explicit Retry from the latest receipt without automatic repeated paste.
+- [x] Introduce an async delivery receipt with `verified`, `unverified`, `failed` and concrete retry eligibility. Use the exact insertion confirmation already proven by PasteCorrectionMonitor.
+- [x] Snapshot supported selected text plus exact prefix/suffix and AX identity; reject secure/unsupported/oversized fields before value reads.
+- [x] Add a selection replacement transaction that checks app, field and unchanged original range before changing anything. AX-selected-text write or targeted paste must preserve undo and verify output. Test Unicode, changed context, app termination, disabled permission and clipboard takeover.
+- [x] Wire AppState to real completion instead of treating an enqueued paste as success. Expose Copy and explicit Retry from the latest receipt without automatic repeated paste.
 - [ ] Prove in TextEdit with known text, failed/stale replacement and undo; preserve existing correction observation tests. Commit narrow changes and provide review diff.
 
 ### Task 3: Atlas assistant contract
 
-- [ ] Use the discovery report to extend existing paired-device dispatch, authorization, rate-limit and vocabulary owners. Write a versioned transport contract before native networking implementation.
-- [ ] Implement allowlisted rewrite operations, authorized client list/profile, idempotent private quick drafts, owner-scoped bookmarks and before/after coach. Reuse registry/OpenRouter/usage helpers and existing tables where semantically correct; widen schema only for genuinely new private draft/bookmark state.
-- [ ] Implement all server validators and runtime allow/deny/idempotency/refusal/timeout tests. Bound inputs and output schema; no provider key or arbitrary model/tool selection crosses to native.
+- [x] Use the discovery report to extend existing paired-device dispatch, authorization, rate-limit and vocabulary owners. Write a versioned transport contract before native networking implementation.
+- [x] Implement allowlisted rewrite operations, authorized client list/profile, idempotent private quick drafts, owner-scoped bookmarks and before/after coach. Reuse registry/OpenRouter/usage helpers and existing tables where semantically correct; widen schema only for genuinely new private draft/bookmark state.
+- [x] Implement all server validators and runtime allow/deny/idempotency/refusal/timeout tests. Bound inputs and output schema; no provider key or arbitrary model/tool selection crosses to native.
 - [ ] Use synthetic non-production API proof. Run only focused packet checks, then independent review and serialized Atlas quality gates in coordinator. Keep deployment proof distinct.
 
 ### Task 4: Assistant UI and inference
 
 - [ ] Add Assistant coordinator/model, versioned Atlas client and optional macOS26 FoundationModels adapter. Session is on-demand and serial; cancellation/timeout and recording admission apply to both backends.
-- [ ] Add one Assistant view: selected-text preview/action, quick capture draft, client selector, app writing preferences and cloud/local capability state. Reuse FlowStyle and accessible controls.
-- [ ] Extend recording purpose so normal dictation pastes, voice editing records an instruction, quick capture records a draft; retain target/style/client snapshots at capture start. Put new shortcuts in the app menu with clear defaults and no collision with existing dictation/meeting hotkeys.
-- [ ] Preserve raw recognition in history; apply safe self-correction and destination formatting before delivery. Client vocabulary merges with existing shared/personal precedence.
-- [ ] Persist pending drafts locally before Atlas calls and show only acknowledged completion. Test relaunch/offline/duplicate retry, cancellation and stale selection using fake network only for failure injection; prove success against non-production Atlas.
+- [x] Add one Assistant view: selected-text preview/action, quick capture draft, client selector, app writing preferences and cloud/local capability state. Reuse FlowStyle and accessible controls.
+- [x] Extend recording purpose so normal dictation pastes, voice editing records an instruction, quick capture records a draft; retain target/style/client snapshots at capture start. Put new shortcuts in the app menu with clear defaults and no collision with existing dictation/meeting hotkeys.
+- [x] Preserve raw recognition in history; apply safe self-correction and destination formatting before delivery. Client vocabulary merges with existing shared/personal precedence.
+- [x] Persist pending drafts locally before Atlas calls and show only acknowledged completion. Test relaunch/offline/duplicate retry, cancellation and stale selection using fake network only for failure injection; prove success against non-production Atlas.
 
 ### Task 5: Meetings integration
 
-- [ ] Add bounded source activity callbacks to existing capture; do not retain new PCM buffers or run live LLM/ASR just for coaching.
-- [ ] Add coach objective/preparation, private live panel/pause/hide, bookmark shortcut and timestamps to Meetings. Wire metrics to actual active capture start/stop/source gaps.
-- [ ] Persist bookmarks and private review against capture session, upload idempotently after Atlas meeting acknowledgement, expose actual links/times.
-- [ ] Generate post-review through the bounded Atlas owner endpoint, render evidence/timestamps and incomplete-source labels. Offline deterministic summary remains usable.
+- [x] Add bounded source activity callbacks to existing capture; do not retain new PCM buffers or run live LLM/ASR just for coaching.
+- [x] Add coach objective/preparation, private live panel/pause/hide, bookmark shortcut and timestamps to Meetings. Wire metrics to actual active capture start/stop/source gaps.
+- [x] Persist bookmarks and private review against capture session, upload idempotently after Atlas meeting acknowledgement, expose actual links/times.
+- [x] Generate post-review through the bounded Atlas owner endpoint, render evidence/timestamps and incomplete-source labels. Offline deterministic summary remains usable.
 - [ ] Test fixture activity/cooldown, actual local capture path, restart/retry and Atlas owner denial. No automatic team sharing.
 
 ### Task 6: Completion proof
 
-- [ ] Run new regression fixtures plus existing 2.0 suite once integrated.
+- [x] Run new regression fixtures plus existing 2.0 suite once integrated.
 - [ ] Walk actual native shortcuts, selected-text instruction/preview/replace/undo, quick draft offline/relaunch/save, profile isolation, bookmarks and coach before/during/after.
-- [ ] Run synthetic local/cloud rewrite quality fixtures and record latency, content preservation and refusal behavior. Record optional model availability truthfully.
+- [x] Run synthetic local/cloud rewrite quality fixtures and record latency, content preservation and refusal behavior. Record optional model availability truthfully.
 - [ ] Measure idle and peak native physical footprint/RSS, bounded live state and memory-pressure behavior. Publish an executable M1/8GB acceptance protocol; mark real hardware test pending unless that hardware is actually available.
 - [ ] Independent whole-feature review, repair findings, final relevant checks, signed local build and outcome packet with exact native/Atlas SHAs and live deployment state.
 
@@ -97,3 +97,14 @@ XCTAssertEqual(SpokenSelfCorrection.resolve("Do not remove the backup."), "Do no
 - Baseline: native working changes preserved as `41455a7` in isolated worktree. Existing main checkout untouched.
 - Architecture decision: generation is on-demand; live coaching is deterministic and private. The M1 budget is a release acceptance requirement, not inferred from model parameter count.
 - Interface preflight: packet 1 publishes core types to packets 2/4/5; packet 2 owns paste/selection; packet 3 publishes transport to 4/5. AppState changes are serialized between packets 2 and 4; Meetings coordinator belongs to packet 5. No shared-file parallel writes.
+
+
+## Implementation and acceptance ledger — 2026-09-05
+
+All eight product capabilities are implemented in the candidate. Checked items above indicate implementation and applicable fixture proof, not a production release. Open composite items retain their original full acceptance requirement; see the validation report for the parts already proved.
+
+- Optional local-generation adapter deliberately deferred: installed Llama smoke test failed fidelity/instruction isolation; FoundationModels generation was unavailable. The delivered route is deterministic local functionality plus explicitly enabled Atlas AI. No additional resident LLM or downloadable model is shipped. See `docs/validation/2026-09-04-local-model-evaluation.md`.
+- External selection success and stale-context refusal were verified in the disposable AppKit acceptance editor. TextEdit was unresponsive; no claim of TextEdit or undo acceptance is made.
+- Native suite: 295 XCTest tests, 3 skips, zero failures, plus 10 Swift Testing meeting tests. Actual native-to-local-Atlas integration: one test passed against backend `a4ed03ea` after final repairs.
+- Signed candidate UI: local draft save/relaunch, title/body editing, profile save/reset, shortcut menu, offline preparation, external replacement exactly once, and refusal after external text changes.
+- Remaining release acceptance: fresh real meeting including voice shortcuts/bookmark and post-review, actual M1/8GB resource/latency run, live OpenRouter output quality, production deployment and its authenticated acceptance. Do not interpret fixtures or the current M5 snapshot as those results.

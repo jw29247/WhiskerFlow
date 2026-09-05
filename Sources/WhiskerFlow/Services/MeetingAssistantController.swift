@@ -41,6 +41,7 @@ final class MeetingAssistantController {
         let startedAt: Date
         var durationMilliseconds: Int64?
         var meetingReference: String?
+        var localSummary: String?
     }
 
     private struct Storage: Codable {
@@ -79,6 +80,7 @@ final class MeetingAssistantController {
 
     var bookmarks: [LocalMeetingBookmark] { storage.bookmarks }
     var activityInputsCount: Int { activityInputs.count }
+    var localReview: String? { storage.sessions.reversed().compactMap(\.localSummary).first }
 
     init(rootURL: URL? = nil, now: @escaping () -> Date = Date.init) {
         let root = rootURL ?? StorageLocations.applicationSupportRootOrTemporary()
@@ -167,6 +169,16 @@ final class MeetingAssistantController {
 
     func end(sessionID: UUID) {
         guard activeSessionID == sessionID else { return }
+        if let index = storage.sessions.firstIndex(where: { $0.id == sessionID }) {
+            let duration = max(0, now().timeIntervalSince(storage.sessions[index].startedAt))
+            let minutes = Int(duration) / 60
+            let seconds = Int(duration) % 60
+            let detail = activity.windowDurationSeconds > 0
+                ? "Microphone activity was estimated at \(Int(activity.ownMicActiveSeconds)) seconds in the final \(Int(activity.windowDurationSeconds)) seconds observed. This is an audio estimate, not a speaker assessment."
+                : "No live activity estimate was retained; coaching was off, paused, or unavailable."
+            storage.sessions[index].localSummary = "Recording lasted \(minutes)m \(seconds)s. \(detail) Review the transcript to assess decisions and next steps."
+            persistOrRecordError()
+        }
         activeSessionID = nil
         activeStartedAt = nil
         activeTitle = nil

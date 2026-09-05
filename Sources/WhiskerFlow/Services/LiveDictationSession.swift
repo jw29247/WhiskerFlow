@@ -26,7 +26,9 @@ final class LiveDictationSession {
     private var decodeLoop: Task<Void, Never>?
     private var language: String?
     private var model: WhisperModel = .tiny
-    private var vocabulary = CompiledVocabulary(Vocabulary())
+    private var vocabulary = Vocabulary()
+    private var style: WritingStyle = .standard
+    private var recognizeCorrections = false
     private var formatting = FormattingOptions()
     private var confirmedText = ""
     private var confirmedSampleCount = 0
@@ -63,11 +65,15 @@ final class LiveDictationSession {
         model: WhisperModel,
         vocabulary: Vocabulary,
         formatting: FormattingOptions,
-        streaming: Bool
+        streaming: Bool,
+        style: WritingStyle = .standard,
+        recognizeCorrections: Bool = false
     ) throws {
         self.language = language
         self.model = model
-        self.vocabulary = CompiledVocabulary(vocabulary)
+        self.vocabulary = vocabulary
+        self.style = style
+        self.recognizeCorrections = recognizeCorrections
         self.formatting = formatting
         generation &+= 1
         resetTranscript()
@@ -90,7 +96,7 @@ final class LiveDictationSession {
     /// Stop capture and return the freshest transcript plus the captured samples.
     func finish(
         reason: CaptureStopReason = .userReleased
-    ) async -> (text: String, samples: [Float], conversionFailures: Int) {
+    ) async -> (text: String, samples: [Float], conversionFailures: Int, rawText: String) {
         let myGeneration = generation
         isRunning = false
         let loop = decodeLoop
@@ -117,13 +123,14 @@ final class LiveDictationSession {
         // coordinator without waiting for us) means the state now belongs to a newer
         // session: hand back nothing rather than wiping its transcript.
         guard generation == myGeneration else {
-            return ("", samples, captured.conversionFailureCount)
+            return ("", samples, captured.conversionFailureCount, "")
         }
 
+        let rawText = LiveDecodeWindowPolicy.join(confirmedText, windowText)
         let finalText = emittedText()
         resetTranscript()
         onLevel?(0, 0)
-        return (finalText, samples, captured.conversionFailureCount)
+        return (finalText, samples, captured.conversionFailureCount, rawText)
     }
 
     /// Abort without producing a transcript (e.g. permission revoked mid-flight).
@@ -166,10 +173,8 @@ final class LiveDictationSession {
     /// window edge is not a sentence edge, so formatting fragments would
     /// capitalise mid-sentence at every seam and split spoken commands in half.
     private func emittedText() -> String {
-        TranscriptFormatter.format(
-            LiveDecodeWindowPolicy.join(confirmedText, windowText),
-            options: formatting
-        )
+        AssistantTextProcessing.process(LiveDecodeWindowPolicy.join(confirmedText, windowText),
+            style: style, vocabulary: vocabulary, formatting: formatting, recognizeCorrections: recognizeCorrections)
     }
 
     /// Fold everything up to a mid-silence cut into the confirmed prefix so the
@@ -194,7 +199,7 @@ final class LiveDictationSession {
         guard !samples.isEmpty else { return nil }
         do {
             let result = try await transcription.transcribeSamples(samples, language: language, model: model)
-            return vocabulary.apply(to: result.text)
+            return result.text
         } catch {
             // Partial decode failures are non-fatal — keep the previous text. The
             // decode loop runs several times a second, so report once per session.
