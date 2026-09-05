@@ -15,10 +15,33 @@ struct MeetingLocalProcessingResult: Codable, Sendable {
 /// timing/text alignment signal for the `You` label. SpeakerKit supplies stable
 /// diarized labels for the remaining turns. No audio leaves this process.
 actor MeetingLocalProcessor {
-  private let transcription: TranscriptionService
+  typealias MeetingTranscriber = @Sendable (URL, String?) async throws -> TranscriptionResult
+  typealias MeetingDiarizer = @Sendable (
+    @escaping @Sendable () async throws -> MeetingAudioWindow?
+  ) async throws -> [SpeakerSegment]
+
+  private let transcribeMeeting: MeetingTranscriber
+  private let diarizeMeeting: MeetingDiarizer
+  private let processingRoot: URL?
 
   init(transcription: TranscriptionService) {
-    self.transcription = transcription
+    self.transcribeMeeting = { url, language in
+      try await transcription.transcribeMeeting(audioURL: url, language: language)
+    }
+    self.diarizeMeeting = { nextWindow in
+      try await transcription.diarizeMeeting(nextWindow: nextWindow)
+    }
+    self.processingRoot = nil
+  }
+
+  init(
+    processingRoot: URL,
+    transcribeMeeting: @escaping MeetingTranscriber,
+    diarizeMeeting: @escaping MeetingDiarizer = { _ in [] }
+  ) {
+    self.transcribeMeeting = transcribeMeeting
+    self.diarizeMeeting = diarizeMeeting
+    self.processingRoot = processingRoot
   }
 
   func process(
@@ -30,37 +53,36 @@ actor MeetingLocalProcessor {
     defer { try? FileManager.default.removeItem(at: processingDirectory) }
     let canonicalTrack: MeetingAudioTrack = manifest.chunks.contains { $0.track == .mixed }
       ? .mixed : (manifest.chunks.contains { $0.track == .system } ? .system : .microphone)
-    guard
-      let mixedURL = try writeTemporaryWAV(
-        track: canonicalTrack,
-        manifest: manifest,
-        store: store,
-        directory: processingDirectory
-      )
-    else {
-      throw TranscriptionError.emptyTranscript
-    }
-    let microphoneURL = try writeTemporaryWAV(
-      track: .microphone,
+    guard let canonical = try await transcribeTrack(
+      track: canonicalTrack,
       manifest: manifest,
       store: store,
-      directory: processingDirectory
-    )
-    let systemReader = MeetingSystemAudioWindowReader(manifest: manifest, store: store)
-
-    let canonical = try await transcription.transcribeMeeting(
-      audioURL: mixedURL, language: language)
+      directory: processingDirectory,
+      language: language
+    ) else {
+      throw TranscriptionError.emptyTranscript
+    }
     let selfTranscript: TranscriptionResult?
-    if let microphoneURL {
-      selfTranscript = try? await transcription.transcribeMeeting(
-        audioURL: microphoneURL, language: language)
-    } else {
+    do {
+      selfTranscript = try await transcribeTrack(
+        track: .microphone,
+        manifest: manifest,
+        store: store,
+        directory: processingDirectory,
+        language: language
+      )
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
       selfTranscript = nil
     }
+    try Task.checkCancellation()
+    let systemReader = MeetingSystemAudioWindowReader(manifest: manifest, store: store)
 
-    let diarized = await (try? transcription.diarizeMeeting {
+    let diarized = await (try? diarizeMeeting {
       try await systemReader.nextWindow()
     }) ?? []
+    try Task.checkCancellation()
     let turns = canonical.segments.map { segment in
       let startMs = Int64((segment.start * 1_000).rounded())
       let endMs = Int64((max(segment.end, segment.start) * 1_000).rounded())
@@ -93,18 +115,78 @@ actor MeetingLocalProcessor {
     )
   }
 
-  private func writeTemporaryWAV(
+  private func transcribeTrack(
     track: MeetingAudioTrack,
     manifest: MeetingRecordingSessionManifest,
     store: EncryptedMeetingChunkStore,
-    directory: URL
-  ) throws -> URL? {
+    directory: URL,
+    language: String?
+  ) async throws -> TranscriptionResult? {
     let descriptors = manifest.chunks
       .filter { $0.track == track }
       .sorted { $0.sequence < $1.sequence }
     guard !descriptors.isEmpty else { return nil }
+    var textParts: [String] = []
+    var segments: [TranscriptionSegment] = []
+    var resolvedLanguage: String?
+    var duration: Double = 0
+    for (index, window) in MeetingTranscriptionWindowPolicy.windows(descriptors).enumerated() {
+      try Task.checkCancellation()
+      guard let first = window.first, let last = window.last else { continue }
+      let url = try writeTemporaryWAV(
+        descriptors: window,
+        manifest: manifest,
+        store: store,
+        directory: directory,
+        name: "\(track.rawValue)-\(index)"
+      )
+      defer { try? FileManager.default.removeItem(at: url) }
+      let result: TranscriptionResult
+      do {
+        result = try await transcribeMeeting(url, language)
+      } catch TranscriptionError.emptyTranscript {
+        // A silent window is not evidence that the whole meeting is empty.
+        continue
+      }
+      let offset = Double(first.startMs) / 1_000
+      for segment in result.segments {
+        let rebased = TranscriptionSegment(
+          text: segment.text,
+          start: segment.start + offset,
+          end: segment.end + offset
+        )
+        let normalized = normalize(rebased.text)
+        let duplicate = segments.contains { existing in
+          normalize(existing.text) == normalized
+            && max(existing.start, rebased.start) < min(existing.end, rebased.end)
+        }
+        if !normalized.isEmpty, !duplicate {
+          segments.append(rebased)
+          textParts.append(rebased.text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+      }
+      resolvedLanguage = resolvedLanguage ?? result.language
+      duration = max(duration, Double(last.endMs) / 1_000)
+    }
+    let text = textParts.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { throw TranscriptionError.emptyTranscript }
+    return TranscriptionResult(
+      text: text.plainTranscriptText,
+      segments: segments,
+      language: resolvedLanguage ?? language,
+      duration: duration
+    )
+  }
+
+  private func writeTemporaryWAV(
+    descriptors: [MeetingRecordingChunkDescriptor],
+    manifest: MeetingRecordingSessionManifest,
+    store: EncryptedMeetingChunkStore,
+    directory: URL,
+    name: String
+  ) throws -> URL {
     let url = directory.appendingPathComponent(
-      "whiskerflow-meeting-\(manifest.sessionID.uuidString)-\(track.rawValue).wav"
+      "whiskerflow-meeting-\(manifest.sessionID.uuidString)-\(name).wav"
     )
     let settings: [String: Any] = [
       AVFormatIDKey: kAudioFormatLinearPCM,
@@ -145,7 +227,7 @@ actor MeetingLocalProcessor {
   }
 
   private func makeProcessingDirectory(sessionID: UUID) throws -> URL {
-    let root = StorageLocations.applicationSupportRootOrTemporary()
+    let root = processingRoot ?? StorageLocations.applicationSupportRootOrTemporary()
       .appendingPathComponent("MeetingProcessing", isDirectory: true)
     let fileManager = FileManager.default
     try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
@@ -204,6 +286,41 @@ actor MeetingLocalProcessor {
     value.lowercased()
       .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
       .joined(separator: " ")
+  }
+}
+
+enum MeetingTranscriptionWindowPolicy {
+  static let maximumDurationMs: Int64 = 60_000
+
+  static func windows(
+    _ descriptors: [MeetingRecordingChunkDescriptor]
+  ) -> [[MeetingRecordingChunkDescriptor]] {
+    var result: [[MeetingRecordingChunkDescriptor]] = []
+    var current: [MeetingRecordingChunkDescriptor] = []
+    var windowStartMs: Int64?
+    var previous: MeetingRecordingChunkDescriptor?
+    for descriptor in descriptors {
+      let exceedsDuration = windowStartMs.map {
+        descriptor.endMs - $0 > maximumDurationMs
+      } ?? false
+      let followsGap = previous.map {
+          descriptor.sequence != $0.sequence + 1 || descriptor.startMs > $0.endMs
+        } ?? false
+      let mustSplit = exceedsDuration || followsGap
+      if mustSplit, !current.isEmpty {
+        result.append(current)
+        // Re-read one source chunk as acoustic context so a word crossing the
+        // boundary is present in at least one decode. Timestamp/text overlap is
+        // removed when results are merged.
+        current = exceedsDuration && !followsGap ? previous.map { [$0] } ?? [] : []
+        windowStartMs = current.first?.startMs
+      }
+      if windowStartMs == nil { windowStartMs = descriptor.startMs }
+      current.append(descriptor)
+      previous = descriptor
+    }
+    if !current.isEmpty { result.append(current) }
+    return result
   }
 }
 

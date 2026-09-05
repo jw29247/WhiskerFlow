@@ -51,6 +51,10 @@ final class MeetingCaptureCoordinator {
   private var retryTask: Task<Void, Never>?
   private var activeIntent: AtlasCaptureScheduleIntent?
   private var activeSessionID: UUID?
+  /// The newest capture owns user-visible delivery status even after its audio
+  /// stream stops. Older recovery work may finish later, but must not replace
+  /// that capture's progress or result.
+  private var statusOwnerSessionID: UUID?
   private var audioCapture: MeetingAudioCaptureService?
   private var stopTask: Task<Void, Never>?
   private var activeCaptureStopAtMs: Int64?
@@ -324,6 +328,14 @@ final class MeetingCaptureCoordinator {
       return
     }
 
+    // A fresh capture takes priority over background recovery. Local processing
+    // checks cancellation between bounded transcription windows, while every
+    // encrypted source chunk and upload receipt remains durable for retry.
+    uploadTask?.cancel()
+    uploadTask = nil
+    retryTask?.cancel()
+    retryTask = nil
+
     let sessionID = UUID()
     do {
       _ = try store.beginSession(
@@ -355,6 +367,7 @@ final class MeetingCaptureCoordinator {
       try await capture.start(selection: settings.selectedInput)
       self.audioCapture = capture
       self.activeSessionID = sessionID
+      self.statusOwnerSessionID = sessionID
       self.activeIntent = intent
       self.activeOverlapDetected = intent?.overlapsPrevious ?? false
       self.activeMeetingTitle = intent?.title ?? "Ad hoc meeting"
@@ -479,6 +492,11 @@ final class MeetingCaptureCoordinator {
       }
       try store.removeSession(sessionID: sessionID)
     } catch {
+      if Task.isCancelled || error is CancellationError {
+        try? store.markState(sessionID: sessionID, state: .awaitingTranscription)
+        scheduleUploadRetry()
+        return
+      }
       try? store.markState(sessionID: sessionID, state: .failed)
       if canPublishStatus(for: sessionID) {
         lastFailureCode = "meeting_delivery"
@@ -497,6 +515,7 @@ final class MeetingCaptureCoordinator {
       while !Task.isCancelled {
         try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
         guard !Task.isCancelled, let self else { return }
+        guard self.activeSessionID == nil, self.deliveringSessions.isEmpty else { continue }
         do {
           let pending = try self.store.recoverSessions().filter { $0.state != .recording && !$0.chunks.isEmpty }
           guard !pending.isEmpty else { return }
@@ -637,7 +656,11 @@ final class MeetingCaptureCoordinator {
   }
 
   private func canPublishStatus(for sessionID: UUID) -> Bool {
-    activeSessionID == nil || activeSessionID == sessionID
+    MeetingStatusPublicationPolicy.canPublish(
+      sessionID: sessionID,
+      activeSessionID: activeSessionID,
+      statusOwnerSessionID: statusOwnerSessionID
+    )
   }
 
   private func waitForShutdownTask(
@@ -655,6 +678,18 @@ final class MeetingCaptureCoordinator {
         gate.resolve(false)
       }
     }
+  }
+}
+
+enum MeetingStatusPublicationPolicy {
+  static func canPublish(
+    sessionID: UUID,
+    activeSessionID: UUID?,
+    statusOwnerSessionID: UUID?
+  ) -> Bool {
+    if let activeSessionID { return sessionID == activeSessionID }
+    if let statusOwnerSessionID { return sessionID == statusOwnerSessionID }
+    return true
   }
 }
 
