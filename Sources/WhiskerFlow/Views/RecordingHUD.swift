@@ -46,9 +46,7 @@ struct RecordingHUDView: View {
                         .frame(maxWidth: 320, alignment: .leading)
                 }
             }
-            if presentation == .recording {
-                LevelMeter(level: appState.audioLevel, tint: FlowStyle.accent)
-            } else if presentation == .transcribing {
+            if presentation == .transcribing {
                 ProgressView()
                     .controlSize(.small)
                     .tint(FlowStyle.accent)

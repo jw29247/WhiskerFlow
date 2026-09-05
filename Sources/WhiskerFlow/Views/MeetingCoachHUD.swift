@@ -35,7 +35,7 @@ final class MeetingCoachHUDController {
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false
         )
         panel.title = "Private meeting coach"
-        panel.level = .floating
+        panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
