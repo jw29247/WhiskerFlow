@@ -46,15 +46,6 @@ public enum MeetingChunkUploadState: String, Codable, Sendable {
     case uploaded
 }
 
-public enum MeetingCoverageStatus: String, Codable, CaseIterable, Sendable {
-    case covered
-    case partial
-    case recordedPendingUpload = "recorded_pending_upload"
-    case recordedPendingTranscription = "recorded_pending_transcription"
-    case uncovered
-    case failed
-}
-
 public struct MeetingRecordingChunkDescriptor: Codable, Equatable, Sendable {
     public let track: MeetingAudioTrack
     public let sequence: Int

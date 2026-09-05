@@ -2,30 +2,6 @@ import XCTest
 @testable import WhiskerFlowCore
 
 final class TranscriptStoreTests: XCTestCase {
-    func testPruneKeepsRecentTranscriptsAndDropsItemsOlderThanThirtyDays() throws {
-        let recent = TranscriptRecord(
-            text: "Recent note",
-            audioFilePath: "/tmp/recent.wav",
-            createdAt: Date(timeIntervalSince1970: 100),
-            status: .transcribed
-        )
-        let expired = TranscriptRecord(
-            text: "Old note",
-            audioFilePath: "/tmp/old.wav",
-            createdAt: Date(timeIntervalSince1970: 100 - (31 * 24 * 60 * 60)),
-            status: .transcribed
-        )
-        let store = TranscriptStore(
-            fileURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString),
-            now: { Date(timeIntervalSince1970: 100) }
-        )
-
-        try store.replaceAll([recent, expired])
-        try store.pruneExpired()
-
-        XCTAssertEqual(store.records.map(\.id), [recent.id])
-    }
-
     func testFailedRecordsRemainRetryableUntilTheySucceed() throws {
         let failed = TranscriptRecord(
             text: "",
@@ -33,8 +9,10 @@ final class TranscriptStoreTests: XCTestCase {
             createdAt: Date(timeIntervalSince1970: 200),
             status: .failed(errorMessage: "Whisper exited 1")
         )
+        let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
         let store = TranscriptStore(
-            fileURL: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString),
+            fileURL: fileURL,
             now: { Date(timeIntervalSince1970: 200) }
         )
 

@@ -23,7 +23,7 @@ Cloud AI is off until explicitly enabled. The native app uses the paired Atlas d
 
 All runs below occurred on M5/16GB, macOS 26.5. They do not establish M1/8GB acceptance.
 
-- Native final source suite: `swift test --skip DictationPerformanceTests` — 295 XCTest tests, 3 skips, zero failures; another 10 Swift Testing meeting tests passed. The opt-in localhost integration test is one expected skip without its environment file. Log: `/tmp/whiskerflow-assistant-final-tests.log`.
+- Native final source suite: `swift test --skip DictationPerformanceTests` — 288 XCTest tests, 3 skips, zero failures; another 10 Swift Testing meeting tests passed. The opt-in localhost integration test is one expected skip without its environment file. Log: `/tmp/whiskerflow-assistant-merged-tests.log`.
 - Native actual HTTP integration: `WHISKERFLOW_ASSISTANT_ACCEPTANCE_FILE=... swift test --filter AssistantAtlasAcceptanceTests` — one test passed in 2.781 seconds against final Atlas modules `a4ed03ea`. It exercised authorized client vocabulary, all three draft types, duplicate identity/read/discard, rewrite enqueue/poll, real native bookmark finalize/sync/restart and typed private post-coach. Log: `/tmp/whiskerflow-assistant-atlas-acceptance.log`.
 - Atlas packet: 57 focused Convex/HTTP tests, package typecheck and eight registry tests passed. Explicit localhost schema dry-run passed. Exact backend code commit: `a4ed03ea580a697076c84e5b5a3c5a0384f31585`; settled contract document commit: `d324eed1`.
 - The integration target was a real disposable Convex backend on localhost, including device authentication, mutations, scheduler, canonical inference and usage ledger. Only its provider network boundary returned synthetic AI responses; fixture-only seed and disabled unrelated crons were confined to the disposable runtime. This is not live OpenRouter quality proof or a production deployment.
@@ -47,3 +47,8 @@ Release acceptance still required:
 4. Authorized Atlas deployment, authenticated app-to-deployed-Atlas acceptance, and release signing/notarization. No production merge/deployment or public app release was performed.
 
 The local build is at `.build/arm64-apple-macosx/debug/WhiskerFlow 2.app` in this native worktree. The backend must be deployed before its new tools are available on the user's production Atlas connection. Local deterministic features remain available without those tools.
+
+
+## Upstream integration
+
+Remote main advanced to `b04a2c7` during this work. The final native candidate merges that cleanup/performance release, preserving durable WAV recovery before final decoding and adopting parameterless Parakeet preparation and current audio-device APIs. Meeting delivery retains the transport protocol required by its new dependency seam; guarded paste, raw recognition, activity metrics and reliable delivery remain intact. The merged suite passed 288 XCTest tests (3 skips) plus 10 Swift Testing tests. The reduction from the earlier 295 is upstream removal of low-value tests, not suppression of failures.

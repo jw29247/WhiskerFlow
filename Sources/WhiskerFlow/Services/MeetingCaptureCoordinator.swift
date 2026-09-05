@@ -52,7 +52,6 @@ final class MeetingCaptureCoordinator {
   private var activeIntent: AtlasCaptureScheduleIntent?
   private var activeSessionID: UUID?
   private var audioCapture: MeetingAudioCaptureService?
-  private var localProcessor: MeetingLocalProcessor?
   private var stopTask: Task<Void, Never>?
   private var activeCaptureStopAtMs: Int64?
   private var activeOverlapDetected = false
@@ -138,7 +137,7 @@ final class MeetingCaptureCoordinator {
     if activeSessionID != nil {
       let drain = Task { @MainActor [weak self] () in
         guard let self else { return }
-        await self.stopCapture(reason: "shutdown")
+        await self.stopCapture()
       }
       let completed = await waitForShutdownTask(drain, timeout: 3)
       if !completed { drain.cancel() }
@@ -150,7 +149,7 @@ final class MeetingCaptureCoordinator {
   func toggleManualCapture() {
     guard !captureTransitionInProgress else { return }
     if activeSessionID != nil {
-      Task { @MainActor [weak self] in await self?.stopCapture(reason: "manual") }
+      Task { @MainActor [weak self] in await self?.stopCapture() }
     } else {
       Task { @MainActor [weak self] in await self?.startCapture(intent: nil) }
     }
@@ -295,7 +294,7 @@ final class MeetingCaptureCoordinator {
       try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
       guard !Task.isCancelled else { return }
       self?.stopTask = nil
-      await self?.stopCapture(reason: "scheduled_end")
+      await self?.stopCapture()
     }
   }
 
@@ -390,7 +389,7 @@ final class MeetingCaptureCoordinator {
     }
   }
 
-  private func stopCapture(reason: String) async {
+  private func stopCapture() async {
     guard let sessionID = activeSessionID,
           let capture = audioCapture,
           !captureTransitionInProgress else { return }
@@ -454,7 +453,6 @@ final class MeetingCaptureCoordinator {
       let completion = try await delivery.deliver(sessionID: sessionID) {
         try self.store.markState(sessionID: sessionID, state: .awaitingTranscription)
         let processor = MeetingLocalProcessor(transcription: self.transcription)
-        self.localProcessor = processor
         return try await processor.process(manifest: self.store.loadManifest(sessionID: sessionID), store: self.store, language: self.settings.resolvedLanguage)
       } progress: { detail in
         if self.canPublishStatus(for: sessionID) {
@@ -546,10 +544,6 @@ final class MeetingCaptureCoordinator {
       await deliver(sessionID: session.sessionID)
     }
     uploadTask = nil
-  }
-
-  private static var forecastChunkCounts: [MeetingAudioTrack: Int] {
-    Dictionary(uniqueKeysWithValues: MeetingAudioTrack.allCases.map { ($0, forecastChunkCount) })
   }
 
   private func atlasClient() -> MeetingAtlasClient? {

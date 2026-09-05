@@ -7,7 +7,7 @@ import WhiskerFlowCore
 /// FluidAudio owns the model cache under Application Support. Keeping the
 /// manager alive means model loading and Core ML compilation happen during the
 /// app warm-up rather than on the release-to-paste path.
-actor ParakeetTDTv3Engine: TranscriptionEngine {
+actor ParakeetTDTv3Engine: Sendable {
     private var manager: AsrManager?
     private var preparation: (id: UUID, task: Task<AsrManager, Error>)?
     private let loadManager: @Sendable () async throws -> AsrManager
@@ -21,13 +21,7 @@ actor ParakeetTDTv3Engine: TranscriptionEngine {
         self.loadManager = loadManager
     }
 
-    nonisolated var kind: TranscriptionEngineKind { .parakeetTDTv3 }
-
-    func isAvailable() async -> Bool {
-        SystemInfo.isAppleSilicon
-    }
-
-    func prepare(model: WhisperModel, language: String?) async throws {
+    func prepare() async throws {
         guard SystemInfo.isAppleSilicon else {
             throw TranscriptionError.engineUnavailable(.parakeetTDTv3)
         }
@@ -57,7 +51,7 @@ actor ParakeetTDTv3Engine: TranscriptionEngine {
     }
 
     func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
-        try await prepare(model: request.model, language: request.language)
+        try await prepare()
         guard let manager else {
             throw TranscriptionError.modelUnavailable("Parakeet TDT v3")
         }
@@ -81,7 +75,7 @@ actor ParakeetTDTv3Engine: TranscriptionEngine {
     /// Capture already produces mono 16 kHz samples. Decode those directly,
     /// leaving WAV encoding and history persistence off the delivery path.
     func transcribe(samples: [Float], model: WhisperModel, language: String?) async throws -> TranscriptionResult {
-        try await prepare(model: model, language: language)
+        try await prepare()
         guard let manager else { throw TranscriptionError.modelUnavailable("Parakeet TDT v3") }
         do {
             try Task.checkCancellation()

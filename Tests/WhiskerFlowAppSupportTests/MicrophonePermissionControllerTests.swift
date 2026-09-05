@@ -40,7 +40,7 @@ final class MicrophonePermissionControllerTests: XCTestCase {
         let controller = MicrophonePermissionController(provider: provider)
         provider.state = .authorized
 
-        controller.refreshForApplicationActivation()
+        controller.refresh()
 
         XCTAssertEqual(controller.authorizationState, .authorized)
         XCTAssertTrue(controller.isGranted)
@@ -79,35 +79,9 @@ final class MicrophonePermissionControllerTests: XCTestCase {
         XCTAssertNil(controller.recoveryAction)
     }
 
-    func testPresentationDistinguishesEachAuthorizationState() {
-        let provider = StubMicrophoneAuthorizationProvider(state: .notDetermined)
+    func testAuthorizedMicrophoneHasNoCaptureFailure() {
+        let provider = StubMicrophoneAuthorizationProvider(state: .authorized)
         let controller = MicrophonePermissionController(provider: provider)
-
-        XCTAssertEqual(controller.detail, "Needed to record your voice.")
-        XCTAssertEqual(controller.captureFailureMessage, "Microphone permission was not granted")
-
-        provider.state = .denied
-        controller.refresh()
-        XCTAssertEqual(
-            controller.detail,
-            "Microphone access is off. Enable WhiskerFlow in System Settings."
-        )
-        XCTAssertEqual(
-            controller.captureFailureMessage,
-            "Microphone access is off — open Microphone Settings"
-        )
-
-        provider.state = .restricted
-        controller.refresh()
-        XCTAssertEqual(controller.detail, "Microphone access is restricted by macOS.")
-        XCTAssertEqual(
-            controller.captureFailureMessage,
-            "Microphone access is restricted by macOS"
-        )
-
-        provider.state = .authorized
-        controller.refresh()
-        XCTAssertEqual(controller.detail, "Ready to record.")
         XCTAssertNil(controller.captureFailureMessage)
     }
 

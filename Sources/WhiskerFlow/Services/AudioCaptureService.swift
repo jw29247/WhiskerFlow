@@ -5,12 +5,6 @@ import Foundation
 import Logging
 import WhiskerFlowAppSupport
 
-enum Microphone {
-    static func availableInputDevices() -> [AudioInputDescriptor] {
-        CoreAudioDeviceCatalog.availableInputs()
-    }
-}
-
 @MainActor
 final class AVCaptureMicrophoneAuthorizationProvider: MicrophoneAuthorizationProviding {
     var authorizationState: MicrophoneAuthorizationState {
@@ -164,17 +158,6 @@ enum CoreAudioDeviceCatalog {
     }
 }
 
-@MainActor
-private struct SystemAudioDeviceCatalog: AudioDeviceCataloging {
-    func availableInputs() -> [AudioInputDescriptor] {
-        CoreAudioDeviceCatalog.availableInputs()
-    }
-
-    func resolve(_ selection: AudioInputSelection) -> AudioInputDescriptor? {
-        CoreAudioDeviceCatalog.resolve(selection)
-    }
-}
-
 private final class AudioConverterBox: @unchecked Sendable {
     let converter: AVAudioConverter?
 
@@ -233,12 +216,11 @@ private final class ConversionFailureBox: @unchecked Sendable {
 }
 
 @MainActor
-final class AudioCaptureService: AudioCapturing {
+final class AudioCaptureService {
     private static let targetSampleRate = 16_000.0
     private let logger = Logging.Logger(
         label: "agency.thatworks.WhiskerFlow.AudioCapture"
     )
-    private let catalog: any AudioDeviceCataloging
     private let samples = LockedAudioBuffer()
     private let conversionFailures = ConversionFailureBox()
     private var engine: AVAudioEngine?
@@ -253,20 +235,12 @@ final class AudioCaptureService: AudioCapturing {
     var onSamples: (([Float]) -> Void)?
     var onConfigurationChange: (() -> Void)?
 
-    init() {
-        self.catalog = SystemAudioDeviceCatalog()
-    }
-
-    init(catalog: any AudioDeviceCataloging) {
-        self.catalog = catalog
-    }
-
     func start(selection: AudioInputSelection) throws {
-        discardCapture()
+        stopEngine()
         samples.reset()
         conversionFailures.reset()
 
-        guard let descriptor = catalog.resolve(selection) else {
+        guard let descriptor = CoreAudioDeviceCatalog.resolve(selection) else {
             throw AudioCaptureServiceError.deviceUnavailable
         }
 
@@ -294,10 +268,9 @@ final class AudioCaptureService: AudioCapturing {
             }
         }
 
-        let inputFormat = AudioTapFormatPolicy.captureFormat(
-            hardwareInput: inputNode.inputFormat(forBus: 0),
-            nodeOutput: inputNode.outputFormat(forBus: 0)
-        )
+        // The output format can still describe the previous default microphone
+        // after a device switch. Install the tap with the assigned hardware format.
+        let inputFormat = inputNode.inputFormat(forBus: 0)
         do {
             try AudioFormatValidator.validate(
                 sampleRate: inputFormat.sampleRate,
@@ -383,10 +356,6 @@ final class AudioCaptureService: AudioCapturing {
         samples.count
     }
 
-    func snapshot() -> [Float] {
-        samples.snapshot()
-    }
-
     func snapshotTail(from index: Int) -> [Float] {
         samples.suffix(from: index)
     }
@@ -406,11 +375,6 @@ final class AudioCaptureService: AudioCapturing {
         samples.reset()
         conversionFailures.reset()
         onLevel?(0, 0)
-    }
-
-    private func discardCapture() {
-        stopEngine()
-        samples.reset()
     }
 
     private func stopEngine() {

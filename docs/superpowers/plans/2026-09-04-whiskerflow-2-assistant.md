@@ -105,6 +105,6 @@ All eight product capabilities are implemented in the candidate. Checked items a
 
 - Optional local-generation adapter deliberately deferred: installed Llama smoke test failed fidelity/instruction isolation; FoundationModels generation was unavailable. The delivered route is deterministic local functionality plus explicitly enabled Atlas AI. No additional resident LLM or downloadable model is shipped. See `docs/validation/2026-09-04-local-model-evaluation.md`.
 - External selection success and stale-context refusal were verified in the disposable AppKit acceptance editor. TextEdit was unresponsive; no claim of TextEdit or undo acceptance is made.
-- Native suite: 295 XCTest tests, 3 skips, zero failures, plus 10 Swift Testing meeting tests. Actual native-to-local-Atlas integration: one test passed against backend `a4ed03ea` after final repairs.
+- Native suite: 288 XCTest tests, 3 skips, zero failures, plus 10 Swift Testing meeting tests. Actual native-to-local-Atlas integration: one test passed against backend `a4ed03ea` after final repairs.
 - Signed candidate UI: local draft save/relaunch, title/body editing, profile save/reset, shortcut menu, offline preparation, external replacement exactly once, and refusal after external text changes.
 - Remaining release acceptance: fresh real meeting including voice shortcuts/bookmark and post-review, actual M1/8GB resource/latency run, live OpenRouter output quality, production deployment and its authenticated acceptance. Do not interpret fixtures or the current M5 snapshot as those results.

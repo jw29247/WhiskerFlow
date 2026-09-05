@@ -27,7 +27,7 @@ final class DictationPerformanceTests: XCTestCase {
                     let start = ContinuousClock.now
                     let outcome = try await service.transcribe(
                         audioURL: URL(fileURLWithPath: path), kind: .parakeetTDTv3,
-                        model: .medium, language: "en", initialPrompt: nil,
+                        model: .medium, language: "en",
                         cliConfiguration: WhisperConfiguration(command: "", argumentsTemplate: ""),
                         allowAppleFallback: false,
                         capturedSamples: mode == "capture" ? samples : nil

@@ -8,10 +8,10 @@ final class ParakeetPreparationTests: XCTestCase {
         let probe = PreparationProbe()
         let engine = ParakeetTDTv3Engine(loadManager: { try await probe.load() })
         try await withThrowingTaskGroup(of: Void.self) { group in
-            for _ in 0..<3 { group.addTask { try await engine.prepare(model: .medium, language: "en") } }
+            for _ in 0..<3 { group.addTask { try await engine.prepare() } }
             try await group.waitForAll()
         }
-        try await engine.prepare(model: .medium, language: "en")
+        try await engine.prepare()
         let loads = await probe.loads
         XCTAssertEqual(loads, 1)
     }
@@ -21,11 +21,11 @@ final class ParakeetPreparationTests: XCTestCase {
         let probe = PreparationProbe(failFirst: true)
         let engine = ParakeetTDTv3Engine(loadManager: { try await probe.load() })
         do {
-            try await engine.prepare(model: .medium, language: "en")
+            try await engine.prepare()
             XCTFail("The first load should fail")
-        } catch { }
+        } catch {}
         try await withThrowingTaskGroup(of: Void.self) { group in
-            for _ in 0..<3 { group.addTask { try await engine.prepare(model: .medium, language: "en") } }
+            for _ in 0..<3 { group.addTask { try await engine.prepare() } }
             try await group.waitForAll()
         }
         let loads = await probe.loads

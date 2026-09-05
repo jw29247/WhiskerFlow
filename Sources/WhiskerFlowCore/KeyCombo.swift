@@ -71,9 +71,9 @@ public struct KeyCombo: Codable, Equatable, Sendable {
 
     public var displayName: String {
         if isModifierOnly {
-            return Self.modifierKeyName(for: keyCode) ?? "Key \(keyCode)"
+            return Self.modifierKeys[keyCode]?.name ?? "Key \(keyCode)"
         }
-        let key = Self.keyName(for: keyCode) ?? "Key \(keyCode)"
+        let key = Self.keyNames[keyCode] ?? "Key \(keyCode)"
         return modifiers.symbols + key
     }
 
@@ -93,15 +93,6 @@ public struct KeyCombo: Codable, Equatable, Sendable {
         62: ("Right ⌃", .control),
         63: ("fn (Globe)", .function)
     ]
-
-    static func modifierKeyName(for keyCode: UInt16) -> String? {
-        modifierKeys[keyCode]?.name
-    }
-
-    /// Human-readable label for a non-modifier key code.
-    static func keyName(for keyCode: UInt16) -> String? {
-        keyNames[keyCode]
-    }
 
     private static let keyNames: [UInt16: String] = [
         // Letters
