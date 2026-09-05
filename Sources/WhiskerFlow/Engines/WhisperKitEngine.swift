@@ -107,10 +107,11 @@ actor WhisperKitEngine: Sendable {
     private func loadAndInstall(identifier: String) async throws {
         let downloadBase = try ModelStoragePaths.prepareWhisperKitDownloadBase()
         let localAssets = try ModelStoragePaths.prepareLocalAssets(modelIdentifier: identifier)
-        // The pinned meeting model can spend minutes compiling for ANE on
-        // first use. GPU execution uses the same weights without that stall.
+        // Keep meeting inference off the GPU: the pinned meeting model triggered
+        // an MPSGraph shape assertion during real capture recovery. CPU/ANE
+        // completed the same recovery and the bounded-window acceptance recording.
         let compute: ModelComputeOptions? = identifier == Self.meetingModelIdentifier
-            ? ModelComputeOptions(audioEncoderCompute: .cpuAndGPU, textDecoderCompute: .cpuAndGPU)
+            ? ModelComputeOptions(audioEncoderCompute: .cpuAndNeuralEngine, textDecoderCompute: .cpuAndNeuralEngine)
             : nil
         let kit: WhisperKit
         if let localAssets {
