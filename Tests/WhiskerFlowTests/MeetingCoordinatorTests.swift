@@ -194,9 +194,9 @@ final class MeetingCoordinatorTests: XCTestCase {
         )
 
         let durations = await observations.durations
-        XCTAssertEqual(durations.count, 4, "Two bounded windows are decoded for canonical and microphone tracks")
-        XCTAssertTrue(durations.allSatisfy { $0 <= 60.01 })
-        XCTAssertTrue(result.turns.contains { abs($0.startMs - 60_000) <= 1 })
+        XCTAssertEqual(durations.count, 6, "Three native-sized windows are decoded for canonical and microphone tracks")
+        XCTAssertTrue(durations.allSatisfy { $0 <= 30.01 })
+        XCTAssertTrue(result.turns.contains { abs($0.startMs - 30_000) <= 1 })
         XCTAssertFalse(FileManager.default.fileExists(atPath: processingRoot.appendingPathComponent(sessionID.uuidString).path))
     }
 
@@ -253,8 +253,8 @@ final class MeetingCoordinatorTests: XCTestCase {
             keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))
         )
         let sessionID = UUID()
-        try store.beginSession(sessionID: sessionID, meetingID: nil, expectedChunkCounts: [.mixed: 12])
-        for sequence in 0..<12 {
+        try store.beginSession(sessionID: sessionID, meetingID: nil, expectedChunkCounts: [.mixed: 5])
+        for sequence in 0..<5 {
             _ = try store.writeChunk(
                 sessionID: sessionID,
                 track: .mixed,
@@ -270,7 +270,7 @@ final class MeetingCoordinatorTests: XCTestCase {
             case 1:
                 return TranscriptionResult(
                     text: "boundary",
-                    segments: [TranscriptionSegment(text: "boundary", start: 50, end: 60)]
+                    segments: [TranscriptionSegment(text: "boundary", start: 20, end: 30)]
                 )
             case 2:
                 return TranscriptionResult(
@@ -292,7 +292,62 @@ final class MeetingCoordinatorTests: XCTestCase {
         )
 
         XCTAssertEqual(result.turns.map(\.text), ["boundary", "next"])
-        XCTAssertEqual(result.turns.map(\.startMs), [50_000, 60_000])
+        XCTAssertEqual(result.turns.map(\.startMs), [20_000, 30_000])
+    }
+
+    func testOneHundredFiveSecondMeetingDecodesThroughFinalPartialWithoutInternalFanout() {
+        let descriptors = (0..<11).map { sequence in
+            chunk(
+                sequence: sequence,
+                startMs: Int64(sequence * 10_000),
+                endMs: sequence == 10 ? 105_000 : Int64((sequence + 1) * 10_000)
+            )
+        }
+        let windows = MeetingTranscriptionWindowPolicy.windows(descriptors)
+        XCTAssertEqual(windows.count, 5)
+        XCTAssertEqual(windows.last?.last?.endMs, 105_000)
+        XCTAssertEqual(
+            windows.map { ($0.last?.endMs ?? 0) - ($0.first?.startMs ?? 0) },
+            [30_000, 30_000, 30_000, 30_000, 25_000]
+        )
+    }
+
+    func testAudibleEmptyDecodeFailsInsteadOfUploadingTruncatedTranscript() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = EncryptedMeetingChunkStore(
+            rootURL: root.appendingPathComponent("recordings"),
+            keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))
+        )
+        let sessionID = UUID()
+        try store.beginSession(sessionID: sessionID, meetingID: nil, expectedChunkCounts: [.mixed: 3])
+        for sequence in 0..<3 {
+            let samples = [Float](repeating: sequence == 2 ? 0.1 : 0, count: 160_000)
+            _ = try store.writeChunk(
+                sessionID: sessionID,
+                track: .mixed,
+                sequence: sequence,
+                startMs: Int64(sequence * 10_000),
+                endMs: Int64((sequence + 1) * 10_000),
+                plaintext: samples.withUnsafeBufferPointer { Data(buffer: $0) }
+            )
+        }
+        let processor = MeetingLocalProcessor(
+            processingRoot: root.appendingPathComponent("processing")
+        ) { _, _ in
+            throw TranscriptionError.emptyTranscript
+        }
+
+        do {
+            _ = try await processor.process(
+                manifest: store.loadManifest(sessionID: sessionID),
+                store: store,
+                language: "en"
+            )
+            XCTFail("Audible source audio must not be accepted as a silent successful window")
+        } catch TranscriptionError.underlying(let detail) {
+            XCTAssertTrue(detail.contains("Audible meeting audio"))
+        }
     }
 
     func testOverlapReconcilerMergesRegroupedPhraseWithTimestampJitter() {

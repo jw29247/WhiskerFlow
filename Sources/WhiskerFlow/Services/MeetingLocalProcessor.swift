@@ -132,19 +132,24 @@ actor MeetingLocalProcessor {
     for (index, window) in MeetingTranscriptionWindowPolicy.windows(descriptors).enumerated() {
       try Task.checkCancellation()
       guard let first = window.first, let last = window.last else { continue }
-      let url = try writeTemporaryWAV(
+      let materialized = try writeTemporaryWAV(
         descriptors: window,
         manifest: manifest,
         store: store,
         directory: directory,
         name: "\(track.rawValue)-\(index)"
       )
-      defer { try? FileManager.default.removeItem(at: url) }
+      defer { try? FileManager.default.removeItem(at: materialized.url) }
       let result: TranscriptionResult
       do {
-        result = try await transcribeMeeting(url, language)
+        result = try await transcribeMeeting(materialized.url, language)
       } catch TranscriptionError.emptyTranscript {
-        // A silent window is not evidence that the whole meeting is empty.
+        guard !materialized.containsAudibleActivity else {
+          throw TranscriptionError.underlying(
+            "Audible meeting audio was not transcribed. The recording is saved and will retry."
+          )
+        }
+        // A measured-silent window is not evidence that the whole meeting is empty.
         continue
       }
       let offset = Double(first.startMs) / 1_000
@@ -184,7 +189,7 @@ actor MeetingLocalProcessor {
     store: EncryptedMeetingChunkStore,
     directory: URL,
     name: String
-  ) throws -> URL {
+  ) throws -> MaterializedMeetingWindow {
     let url = directory.appendingPathComponent(
       "whiskerflow-meeting-\(manifest.sessionID.uuidString)-\(name).wav"
     )
@@ -199,12 +204,18 @@ actor MeetingLocalProcessor {
     ]
     let file = try AVAudioFile(
       forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+    var containsAudibleActivity = false
     for descriptor in descriptors {
       let data = try store.readChunk(sessionID: manifest.sessionID, descriptor: descriptor)
       guard data.count % MemoryLayout<Float>.size == 0 else {
         throw TranscriptionError.underlying("Meeting audio chunk is not aligned")
       }
       let sampleCount = data.count / MemoryLayout<Float>.size
+      if !containsAudibleActivity {
+        containsAudibleActivity = data.withUnsafeBytes { rawBuffer in
+          Self.containsAudibleActivity(Array(rawBuffer.bindMemory(to: Float.self)))
+        }
+      }
       guard
         let buffer = AVAudioPCMBuffer(
           pcmFormat: file.processingFormat,
@@ -223,7 +234,22 @@ actor MeetingLocalProcessor {
       }
       try file.write(from: buffer)
     }
-    return url
+    return MaterializedMeetingWindow(
+      url: url,
+      containsAudibleActivity: containsAudibleActivity
+    )
+  }
+
+  private static func containsAudibleActivity(_ samples: [Float]) -> Bool {
+    let blockSize = 16_000
+    for start in stride(from: 0, to: samples.count, by: blockSize) {
+      let end = min(samples.count, start + blockSize)
+      let block = samples[start..<end]
+      guard !block.isEmpty else { continue }
+      let meanSquare = block.reduce(0.0) { $0 + Double($1 * $1) } / Double(block.count)
+      if meanSquare.squareRoot() >= 0.015 { return true }
+    }
+    return false
   }
 
   private func makeProcessingDirectory(sessionID: UUID) throws -> URL {
@@ -287,6 +313,11 @@ actor MeetingLocalProcessor {
       .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
       .joined(separator: " ")
   }
+}
+
+private struct MaterializedMeetingWindow {
+  let url: URL
+  let containsAudibleActivity: Bool
 }
 
 enum MeetingSegmentReconciler {
@@ -362,7 +393,10 @@ enum MeetingSegmentReconciler {
 }
 
 enum MeetingTranscriptionWindowPolicy {
-  static let maximumDurationMs: Int64 = 60_000
+  // Whisper's native feature window is 30 seconds (480,000 samples). Keeping
+  // each file at or below that boundary avoids WhisperKit's internal VAD
+  // fan-out, whose per-chunk failures are otherwise omitted from its result.
+  static let maximumDurationMs: Int64 = 30_000
 
   static func windows(
     _ descriptors: [MeetingRecordingChunkDescriptor]
