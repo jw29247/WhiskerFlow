@@ -114,7 +114,7 @@ struct TranscriptDetailView: View {
                         Text("Always replace “\(suggestion.find)” with “\(suggestion.replaceWith)”? ")
                             .font(.caption).fixedSize(horizontal: false, vertical: true)
                         Spacer()
-                        Button("Add") { appState.acceptVocabularySuggestion(suggestion) }
+                        Button("Add to Dictionary") { appState.acceptVocabularySuggestion(suggestion) }
                     }
                 }
                 Button("Dismiss") { appState.dismissVocabularySuggestions() }.font(.caption)

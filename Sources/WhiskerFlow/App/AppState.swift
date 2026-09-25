@@ -68,6 +68,7 @@ final class AppState {
         /// Resolved from the app at key press; a browser's tab can refine it at release.
         var writing = WritingStyleResolution(category: .other, tone: .formal, source: .fallback)
         var recognizeCorrections = false
+        var hints: RecognizerHints = .none
         var purpose: AssistantController.CapturePurpose = .dictation
         var quickKind: AssistantRecordKind = .note
         var clientReference: String?
@@ -116,6 +117,8 @@ final class AppState {
     /// Corrections spotted in the user's last transcript edit, offered as
     /// personal vocabulary rules until accepted or dismissed.
     var pendingVocabularySuggestions: [VocabularyCorrection] = []
+    /// The latest automatic Dictionary addition, offered for Undo.
+    var dictionaryNotice: DictionaryNotice?
     var meetingModelState: ModelState = .unloaded
 
     var settings: AppSettings
@@ -137,6 +140,7 @@ final class AppState {
     private var correctionEditBaselines: [UUID: String] = [:]
     let assistant: AssistantController
     let corrections: CorrectionStore
+    let dictionary: DictionaryStore
     private let correctionMonitor = PasteCorrectionMonitor()
     private let soundService = SoundService()
     let microphonePermission: MicrophonePermissionController
@@ -211,6 +215,7 @@ final class AppState {
         settings: AppSettings? = nil,
         store: TranscriptStore? = nil,
         correctionStore: CorrectionStore? = nil,
+        dictionaryStore: DictionaryStore? = nil,
         microphonePermission: MicrophonePermissionController? = nil,
         pasteService: (any TextDeliveryService)? = nil
     ) {
@@ -223,6 +228,9 @@ final class AppState {
         self.store = store ?? .defaultStore()
         self.assistant = store == nil && !UIPreview.isEnabled ? .defaultStore() : AssistantController()
         self.corrections = correctionStore ?? (store == nil ? .defaultStore() : CorrectionStore())
+        self.dictionary = dictionaryStore ?? (store == nil
+            ? .defaultStore(legacyVocabulary: resolvedSettings.vocabulary)
+            : DictionaryStore(legacyVocabulary: resolvedSettings.vocabulary))
         self.microphonePermission = resolvedMicrophonePermission
         self.transcription = transcription
         self.meetingCapture = MeetingCaptureCoordinator(
@@ -264,6 +272,7 @@ final class AppState {
         }
         correctionMonitor.onCorrections = { [weak self] changes, sessionID, application in
             self?.corrections.record(changes, sessionID: sessionID, application: application)
+            self?.learnFromCorrections(changes)
         }
         live.onLevel = { [weak self] level, peak in
             guard let self else { return }
@@ -449,6 +458,7 @@ final class AppState {
 
         records = store.records
         selectedRecordID = records.first?.id
+        dictionary.update { DictionaryLearning.demoteStale(&$0) }
         refreshAccessibilityPermission()
         refreshMicrophonePermission()
         refreshScreenRecordingPermission()
@@ -576,6 +586,7 @@ final class AppState {
         warmUpTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let ready = await transcription.prepare(kind: engine, model: model, language: language)
+            await transcription.prepareHints(self.recognizerHints, kind: engine)
             guard !Task.isCancelled,
                   self.settings.engine == engine,
                   self.settings.model == model,
@@ -631,7 +642,106 @@ final class AppState {
     /// The team glossary plus the user's personal rules, applied to every
     /// transcript. Personal rules override shared ones on conflict.
     var effectiveVocabulary: Vocabulary {
-        Vocabulary.effective(shared: Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: assistant.vocabulary), personal: settings.vocabulary)
+        Vocabulary.effective(shared: Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: assistant.vocabulary), personal: dictionary.vocabulary)
+    }
+
+    // MARK: - Dictionary
+
+    /// The selected client's name, for labelling its read-only entries.
+    var selectedClientName: String? {
+        guard let reference = assistant.saved.selectedClient else { return nil }
+        return assistant.saved.clients.first { $0.reference == reference }?.name ?? reference
+    }
+
+    /// Shared and client rules in the order they apply, for lint and display.
+    var readOnlyDictionaryRules: [DictionaryRule] {
+        let shared = sharedVocabulary.rules.map { DictionaryRule(rule: $0, source: .shared) }
+        let client = selectedClientName.map { name in
+            assistant.vocabulary.rules.map { DictionaryRule(rule: $0, source: .client(name)) }
+        } ?? []
+        return shared + client
+    }
+
+    var correctionObservations: [CorrectionObservation] {
+        corrections.records.map {
+            CorrectionObservation(pair: DictionaryPair(heard: $0.original, written: $0.replacement),
+                                  sessionID: $0.sessionID, application: $0.application, date: $0.date)
+        }
+    }
+
+    var dictionarySuggestions: [DictionarySuggestion] {
+        DictionaryLearning.suggestions(observations: correctionObservations, dictionary: dictionary.dictionary,
+                                       readOnly: readOnlyDictionaryRules)
+    }
+
+    /// Hints for the recognisers, from the Dictionary and the read-only libraries.
+    var recognizerHints: RecognizerHints {
+        RecognizerHints(
+            terms: DictionaryBiasing.terms(personal: dictionary.entries, readOnly: readOnlyDictionaryRules.map(\.rule)),
+            appleSpeech: settings.biasAppleSpeech,
+            whisperKit: settings.biasWhisperKit,
+            parakeet: settings.biasParakeet
+        )
+    }
+
+    /// Promotes corrections that have now been seen often enough.
+    private func learnFromCorrections(_ changes: [VocabularyCorrection]) {
+        guard settings.rememberCorrections, settings.autoAddLearnedWords, !changes.isEmpty else { return }
+        let pairs = changes.map { DictionaryPair(heard: $0.find, written: $0.replaceWith) }
+        var learned: [DictionaryChange] = []
+        let observations = correctionObservations
+        let readOnly = readOnlyDictionaryRules
+        dictionary.update { dictionary in
+            learned = DictionaryLearning.learn(from: pairs, observations: observations, dictionary: &dictionary,
+                                               readOnly: readOnly)
+        }
+        guard !learned.isEmpty else { return }
+        dictionaryNotice = DictionaryNotice(changes: learned)
+        // A short HUD note for users who fixed the word in another app; Undo lives
+        // in the main window and the Dictionary, since the HUD takes no clicks.
+        if !isRecording, !isTranscribing, status == .idle || status.hudNotificationMessage != nil, status != .delivering {
+            status = .success(dictionaryNotice?.hudMessage ?? "Added to Dictionary")
+        }
+    }
+
+    func undoDictionaryNotice() {
+        guard let notice = dictionaryNotice else { return }
+        dictionary.update { dictionary in
+            for change in notice.changes.reversed() { DictionaryLearning.undo(change, in: &dictionary) }
+        }
+        dictionaryNotice = nil
+    }
+
+    func acceptDictionarySuggestion(_ suggestion: DictionarySuggestion) {
+        dictionary.update { _ = DictionaryLearning.accept(suggestion, in: &$0) }
+    }
+
+    func dismissDictionarySuggestion(_ suggestion: DictionarySuggestion) {
+        dictionary.update { DictionaryLearning.dismiss(suggestion, in: &$0) }
+        corrections.remove(VocabularyCorrection(find: suggestion.pair.heard, replaceWith: suggestion.pair.written))
+    }
+
+    /// Counts which entries shaped a delivered transcript, then retires
+    /// auto-added entries that have gone unused.
+    /// Counting compiles a regex per entry, so it runs off the main actor and
+    /// never delays the paste that follows the history save.
+    private func recordDictionaryUsage(raw: String, final: String, configuration: TranscriptionJobConfiguration) {
+        guard configuration.writing.tone != .literal, !raw.isEmpty else { return }
+        let entries = dictionary.entries
+        let readOnlyRules = readOnlyDictionaryRules.map(\.rule)
+        Task.detached(priority: .utility) { [weak self] in
+            let counts = DictionaryUsage.counts(for: entries, raw: raw, final: final)
+            let readOnly = DictionaryUsage.counts(forReadOnly: readOnlyRules, raw: raw)
+            await self?.applyDictionaryUsage(counts, readOnly: readOnly)
+        }
+    }
+
+    private func applyDictionaryUsage(_ counts: [UUID: Int], readOnly: [String: Int]) {
+        let now = Date()
+        dictionary.update { dictionary in
+            DictionaryUsage.record(counts, readOnly: readOnly, in: &dictionary, at: now)
+            DictionaryLearning.demoteStale(&dictionary, at: now)
+        }
     }
 
     func refreshSharedVocabulary() {
@@ -812,6 +922,7 @@ final class AppState {
                 let changes = VocabularyCorrectionDetector.corrections(original: baseline, edited: text,
                                                                        maxSuggestions: 20, allowShortCorrections: true)
                 corrections.record(changes, sessionID: record.id, application: "WhiskerFlow")
+                learnFromCorrections(changes)
             }
         } catch {
             handleStorageError(error, message: "Could not save transcript changes")
@@ -844,9 +955,12 @@ final class AppState {
     }
 
     func acceptVocabularySuggestion(_ suggestion: VocabularyCorrection) {
-        settings.vocabulary.rules.append(
-            VocabularyRule(find: suggestion.find, replaceWith: suggestion.replaceWith)
-        )
+        let pair = DictionaryPair(heard: suggestion.find, written: suggestion.replaceWith)
+        let evaluation = DictionaryLearning.evaluate(pair, observations: correctionObservations,
+                                                     dictionary: dictionary.dictionary, readOnly: readOnlyDictionaryRules)
+        let accepted = DictionarySuggestion(pair: pair, proposed: evaluation.proposed, sightings: evaluation.sightings,
+                                            lastSeen: nil, applications: [], demotedAt: nil, issues: evaluation.issues)
+        acceptDictionarySuggestion(accepted)
         pendingVocabularySuggestions.removeAll { $0 == suggestion }
     }
 
@@ -1132,6 +1246,7 @@ final class AppState {
                         streaming: streamingActive,
                         tone: configuration.writing.tone,
                         recognizeCorrections: configuration.recognizeCorrections,
+                        hints: configuration.hints,
                         previewEngine: settings.liveTranscription ? configuration.engine : nil
                     )
                     inputSelection = candidate
@@ -1536,6 +1651,7 @@ final class AppState {
         configuration: TranscriptionJobConfiguration,
         sessionID: UUID
     ) {
+        recordDictionaryUsage(raw: rawText, final: text, configuration: configuration)
         let createdAt = Date()
         let duration = Double(totalSampleCount) / 16_000
         let model = configuration.model.rawValue
@@ -1669,6 +1785,7 @@ final class AppState {
                 rawRecognition: rawText,
                 appCategory: configuration.writing.category
             )
+            recordDictionaryUsage(raw: rawText, final: text, configuration: configuration)
         } catch {
             noteHistoryFailure(error)
         }
@@ -1881,7 +1998,8 @@ final class AppState {
                         language: configuration.language,
                         cliConfiguration: configuration.cliConfiguration,
                         allowAppleFallback: configuration.allowAppleFallback,
-                        capturedSamples: capturedSamples
+                        capturedSamples: capturedSamples,
+                        hints: configuration.hints
                     )
                 }
             } catch AsyncTimeoutError.timedOut {
@@ -1916,6 +2034,7 @@ final class AppState {
                     rawRecognition: outcome.result.text,
                     appCategory: configuration.writing.category
                 )
+                recordDictionaryUsage(raw: outcome.result.text, final: finalText, configuration: configuration)
             } catch {
                 // A recognized transcript is still delivered; only History missed it.
                 historySaved = false
@@ -2157,7 +2276,7 @@ final class AppState {
             engine: settings.engine,
             model: settings.model,
             language: settings.resolvedLanguage,
-            vocabulary: accountReady ? effectiveVocabulary : Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: settings.vocabulary),
+            vocabulary: accountReady ? effectiveVocabulary : Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: dictionary.vocabulary),
             formatting: settings.formatting,
             cliConfiguration: settings.cliConfiguration,
             allowAppleFallback: settings.allowAppleFallback,
@@ -2165,6 +2284,7 @@ final class AppState {
             playSounds: settings.playSounds,
             writing: assistant.resolveWritingStyle(AppContext(bundleIdentifier: pasteTargetApplication?.bundleIdentifier)),
             recognizeCorrections: assistant.saved.recognizeCorrections,
+            hints: recognizerHints,
             purpose: assistant.capturePurpose,
             quickKind: assistant.quickCaptureKind,
             clientReference: accountReady ? assistant.saved.selectedClient : nil,

@@ -112,20 +112,53 @@ public enum DeliveryMode: String, Codable, CaseIterable, Sendable, Identifiable 
     }
 }
 
+/// Dictionary terms a recogniser may be told to expect. Each engine has its own
+/// switch, and an engine whose switch is off never sees the terms.
+/// Post-recognition replacement runs either way; hints only change what the
+/// recogniser proposes.
+public struct RecognizerHints: Sendable, Equatable {
+    public var terms: [String]
+    public var appleSpeech: Bool
+    public var whisperKit: Bool
+    public var parakeet: Bool
+
+    public init(terms: [String], appleSpeech: Bool = false, whisperKit: Bool = false, parakeet: Bool = false) {
+        self.terms = terms
+        self.appleSpeech = appleSpeech
+        self.whisperKit = whisperKit
+        self.parakeet = parakeet
+    }
+
+    public static let none = RecognizerHints(terms: [])
+
+    /// The terms `engine` should use, or none when its switch is off.
+    public func terms(for engine: TranscriptionEngineKind) -> [String] {
+        switch engine {
+        case .appleSpeech: return appleSpeech ? terms : []
+        case .whisperKit: return whisperKit ? terms : []
+        case .parakeetTDTv3: return parakeet ? terms : []
+        case .whisperCLI: return []
+        }
+    }
+}
+
 public struct TranscriptionRequest: Sendable {
     public var audioURL: URL
     /// BCP-47 language code, or nil to let the engine auto-detect.
     public var language: String?
     public var model: WhisperModel
+    public var hints: RecognizerHints
 
     public init(
         audioURL: URL,
         language: String? = "en",
-        model: WhisperModel = .base
+        model: WhisperModel = .base,
+        hints: RecognizerHints = .none
     ) {
         self.audioURL = audioURL
         self.language = language
         self.model = model
+        self.hints = hints
     }
 }
 

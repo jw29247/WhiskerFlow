@@ -206,13 +206,15 @@ actor WhisperKitEngine: Sendable {
 
         let deadline = Self.audioSeconds(at: request.audioURL)
             .map(DecodeTimeoutPolicy.timeout(forAudioSeconds:)) ?? DecodeTimeoutPolicy.maximumTimeout
+        let prompt = promptTokens(for: request.hints.terms(for: .whisperKit), pipe: pipe)
         let results = try await decode(seconds: deadline, queueWait: dictationQueueWait) {
             try await pipe.transcribe(
                 audioPath: request.audioURL.path,
                 decodeOptions: Self.decodingOptions(
                     language: request.language,
                     withoutTimestamps: true,
-                    wordTimestamps: false
+                    wordTimestamps: false,
+                    promptTokens: prompt
                 )
             )
         }
@@ -237,7 +239,8 @@ actor WhisperKitEngine: Sendable {
     /// Transcribe an in-memory 16 kHz mono float buffer using the warm pipe.
     /// Used by the live dictation loop. An empty result yields an empty string
     /// (a partial that hasn't caught any speech yet is not an error).
-    func transcribe(samples: [Float], language: String?, model: WhisperModel) async throws -> WhiskerFlowCore.TranscriptionResult {
+    func transcribe(samples: [Float], language: String?, model: WhisperModel,
+                    promptTerms: [String] = []) async throws -> WhiskerFlowCore.TranscriptionResult {
         // A live pass never waits for a model load: that load is unbounded and
         // the release path awaits the loop. Start it in the background instead;
         // the file decode at release joins it for a bounded wait.
@@ -250,13 +253,15 @@ actor WhisperKitEngine: Sendable {
         // A live window is bounded by `LiveDecodeWindowPolicy.hardCapSeconds`, so it
         // gets the tight live budget rather than the file-decode budget: the release
         // path awaits these serially and the finish watchdog has to outlast them.
+        let prompt = promptTokens(for: promptTerms, pipe: pipe)
         let results = try await decode(seconds: DecodeTimeoutPolicy.livePartialTimeout) {
             try await pipe.transcribe(
                 audioArray: samples,
                 decodeOptions: Self.decodingOptions(
                     language: language,
                     withoutTimestamps: true,
-                    wordTimestamps: false
+                    wordTimestamps: false,
+                    promptTokens: prompt
                 )
             )
         }
@@ -275,18 +280,19 @@ actor WhisperKitEngine: Sendable {
     /// Decode one bounded file window with timestamps for deterministic overlap
     /// ownership. This remains separate from the timestamp-free live API above.
     func transcribeFileWindow(
-        samples: [Float], language: String?, model: WhisperModel
+        samples: [Float], language: String?, model: WhisperModel, promptTerms: [String] = []
     ) async throws -> WhiskerFlowCore.TranscriptionResult {
         try await prepareForDictationDecode(model: model, language: language)
         guard let pipe = installedPipe(for: Self.identifier(model: model, language: language)) else {
             throw TranscriptionError.modelUnavailable(model.displayName)
         }
+        let prompt = promptTokens(for: promptTerms, pipe: pipe)
         let results = try await decode(seconds: DecodeTimeoutPolicy.timeout(
             forAudioSeconds: Double(samples.count) / 16_000
         ), queueWait: dictationQueueWait) {
             try await pipe.transcribe(
                 audioArray: samples,
-                decodeOptions: Self.fileWindowDecodingOptions(language: language)
+                decodeOptions: Self.fileWindowDecodingOptions(language: language, promptTokens: prompt)
             )
         }
         let text = results.map(\.text).joined(separator: " ")
@@ -336,7 +342,8 @@ actor WhisperKitEngine: Sendable {
         language: String?,
         withoutTimestamps: Bool,
         wordTimestamps: Bool,
-        concurrentWorkerCount: Int? = nil
+        concurrentWorkerCount: Int? = nil,
+        promptTokens: [Int]? = nil
     ) -> DecodingOptions {
         // WhisperKit 0.13 derives `detectLanguage` from `!usePrefillPrompt`, so
         // auto-detect stays off unless forced on. A nil language is the only
@@ -349,18 +356,52 @@ actor WhisperKitEngine: Sendable {
             skipSpecialTokens: true,
             withoutTimestamps: withoutTimestamps,
             wordTimestamps: wordTimestamps,
+            promptTokens: promptTokens,
             concurrentWorkerCount: concurrentWorkerCount,
             chunkingStrategy: .vad
         )
     }
 
-    static func fileWindowDecodingOptions(language: String?) -> DecodingOptions {
+    static func fileWindowDecodingOptions(language: String?, promptTokens: [Int]? = nil) -> DecodingOptions {
         decodingOptions(
             language: language,
             withoutTimestamps: false,
             wordTimestamps: true,
-            concurrentWorkerCount: 1
+            concurrentWorkerCount: 1,
+            promptTokens: promptTokens
         )
+    }
+
+    /// Whisper reads `<|startofprev|>` tokens as the transcript that came before
+    /// this audio, so a short glossary there nudges it towards those spellings.
+    /// Whole terms are added until the budget is reached; the budget is far
+    /// below the 223-token limit because a long previous-text context is what
+    /// makes Whisper continue it rather than transcribe (see
+    /// docs/validation/2026-09-25-dictionary-biasing.md).
+    static let maximumPromptTokens = 64
+
+    private var promptCache: (terms: [String], tokens: [Int]?)?
+
+    private func promptTokens(for terms: [String], pipe: WhisperKit) -> [Int]? {
+        guard !terms.isEmpty, let tokenizer = pipe.tokenizer else { return nil }
+        if let promptCache, promptCache.terms == terms { return promptCache.tokens }
+        let tokens = Self.promptTokens(for: terms, tokenizer: tokenizer)
+        promptCache = (terms, tokens)
+        return tokens
+    }
+
+    static func promptTokens(for terms: [String], tokenizer: WhisperTokenizer) -> [Int]? {
+        let special = tokenizer.specialTokens.specialTokenBegin
+        var kept: [String] = []
+        var tokens: [Int] = []
+        for term in terms {
+            let candidate = tokenizer.encode(text: " " + (kept + [term]).joined(separator: ", ") + ".")
+                .filter { $0 < special }
+            guard candidate.count <= maximumPromptTokens else { break }
+            kept.append(term)
+            tokens = candidate
+        }
+        return tokens.isEmpty ? nil : tokens
     }
 
     static func timedWordSegments(

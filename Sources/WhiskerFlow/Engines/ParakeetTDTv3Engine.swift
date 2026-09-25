@@ -25,6 +25,8 @@ actor ParakeetTDTv3Engine: Sendable {
     /// running, new decodes fail fast so the caller can fall back.
     private let decodeGate = ModelDecodeGate()
     private let preparationWait: TimeInterval
+    /// Dictionary biasing; see `ParakeetVocabularyBooster`.
+    let booster = ParakeetVocabularyBooster()
 
     init(
         preparationWait: TimeInterval = DecodeTimeoutPolicy.modelPreparationWait,
@@ -149,7 +151,11 @@ actor ParakeetTDTv3Engine: Sendable {
                 return try await manager.transcribeDiskBacked(audioURL, decoderState: &decoderState)
             }
             try Task.checkCancellation()
-            return try Self.result(decoded, language: request.language)
+            let boosted = await boost(decoded, terms: request.hints.terms(for: .parakeetTDTv3)) {
+                // Only read back into memory when boosting will actually run.
+                try? AudioConverter().resampleAudioFile(audioURL)
+            }
+            return try Self.result(boosted, language: request.language)
         } catch let error as TranscriptionError {
             throw error
         } catch is CancellationError {
@@ -202,7 +208,8 @@ actor ParakeetTDTv3Engine: Sendable {
 
     /// Capture already produces mono 16 kHz samples. Decode those directly,
     /// leaving WAV encoding and history persistence off the delivery path.
-    func transcribe(samples: [Float], model: WhisperModel, language: String?) async throws -> TranscriptionResult {
+    func transcribe(samples: [Float], model: WhisperModel, language: String?,
+                    hints: RecognizerHints = .none) async throws -> TranscriptionResult {
         let manager = try await preparedManager()
         await beginDecode()
         defer { endDecode() }
@@ -214,7 +221,8 @@ actor ParakeetTDTv3Engine: Sendable {
                 return try await manager.transcribe(samples, decoderState: &decoderState)
             }
             try Task.checkCancellation()
-            return try Self.result(result, language: language)
+            let boosted = await boost(result, terms: hints.terms(for: .parakeetTDTv3)) { samples }
+            return try Self.result(boosted, language: language)
         } catch let error as TranscriptionError {
             throw error
         } catch is CancellationError {
@@ -222,6 +230,18 @@ actor ParakeetTDTv3Engine: Sendable {
         } catch {
             throw TranscriptionError.underlying(error.localizedDescription)
         }
+    }
+
+    /// Runs the vocabulary rescoring pass when there are terms and the CTC model
+    /// is ready; otherwise starts loading it for next time and returns `result`.
+    private func boost(_ result: ASRResult, terms: [String], samples: () -> [Float]?) async -> ASRResult {
+        guard !terms.isEmpty else { return result }
+        guard await booster.isReady, result.duration <= ParakeetVocabularyBooster.maximumAudioSeconds else {
+            await booster.prepare()
+            return result
+        }
+        guard let audio = samples() else { return result }
+        return await booster.rescore(result, samples: audio, terms: terms) ?? result
     }
 
     private static func result(_ result: ASRResult, language: String?) throws -> TranscriptionResult {

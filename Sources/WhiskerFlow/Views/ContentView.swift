@@ -23,6 +23,18 @@ struct ContentView: View {
                         Button("Dismiss") { appState.status = .idle }.buttonStyle(.plain)
                     }.foregroundStyle(FlowStyle.ink).padding(15).background(Color.orange.opacity(0.12))
                 }
+                if let notice = appState.dictionaryNotice {
+                    HStack(spacing: 12) {
+                        Label(notice.message, systemImage: "character.book.closed").font(.callout)
+                        Spacer()
+                        Button("Undo") { appState.undoDictionaryNotice() }
+                        if destination != .dictionary {
+                            Button("Review") { navigate { destination = .dictionary } }
+                        }
+                        Button { appState.dictionaryNotice = nil } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.plain).help("Dismiss").accessibilityLabel("Dismiss")
+                    }.foregroundStyle(FlowStyle.ink).padding(15).background(FlowStyle.selection)
+                }
                 switch destination {
                 case .dictate:
                     DictationView(appState: appState, openSetup: { showOnboarding = true }) { record in
@@ -35,8 +47,8 @@ struct ContentView: View {
                     AssistantView(appState: appState)
                 case .meetings:
                     MeetingsView(appState: appState)
-                case .corrections:
-                    CorrectionsView(appState: appState)
+                case .dictionary:
+                    DictionaryView(appState: appState, initialTab: UIPreview.dictionaryTab)
                 case .history:
                     HistoryView(appState: appState, draft: $draft, record: currentRecord, save: saveDraft) { record in
                         navigate { select(record) }
@@ -64,6 +76,8 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showOnboarding) { OnboardingView(appState: appState) }
         .onAppear {
+            if let name = UIPreview.destination, let preview = FlowDestination(rawValue: name) { destination = preview }
+            UIPreview.scheduleSnapshotIfRequested()
             DispatchQueue.main.async {
                 appState.start()
                 appState.applyActivationPolicy()
@@ -183,15 +197,15 @@ struct ContentView: View {
 }
 
 private enum FlowDestination: String, CaseIterable, Identifiable {
-    case dictate = "Dictate", meetings = "Meetings", history = "History", corrections = "Corrections", assistant = "Assistant"
+    case dictate = "Dictate", meetings = "Meetings", history = "History", dictionary = "Dictionary", assistant = "Assistant"
     var id: String { rawValue }
     var symbol: String {
-        switch self { case .assistant: return "wand.and.stars"; case .dictate: return "mic"; case .meetings: return "calendar"; case .history: return "clock.arrow.circlepath"; case .corrections: return "text.badge.checkmark" }
+        switch self { case .assistant: return "wand.and.stars"; case .dictate: return "mic"; case .meetings: return "calendar"; case .history: return "clock.arrow.circlepath"; case .dictionary: return "character.book.closed" }
     }
     var shortcut: KeyEquivalent {
-        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .corrections: return "4" }
+        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4" }
     }
     var shortcutLabel: String {
-        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .corrections: return "4" }
+        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4" }
     }
 }

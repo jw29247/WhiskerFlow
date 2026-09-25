@@ -58,6 +58,35 @@ enum UIPreview {
         }
     }
     static var isPaired: Bool { mode != "disconnected" && mode != "setup" }
+    /// `--ui-destination=Dictionary` opens that sidebar item for screenshots.
+    static var destination: String? { argument("--ui-destination=") }
+    static var dictionaryTab: DictionaryTab {
+        argument("--ui-dictionary-tab=").flatMap(DictionaryTab.init(rawValue:)) ?? .words
+    }
+
+    /// `--ui-snapshot=/path.png` renders the main window into a PNG once the UI
+    /// has settled, then quits. It draws in-process, so it needs no Screen
+    /// Recording permission.
+    static func scheduleSnapshotIfRequested() {
+        #if DEBUG
+        guard let path = argument("--ui-snapshot=") else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.frame.width > 400 }),
+                  let view = window.contentView,
+                  let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            NSApp.terminate(nil)
+        }
+        #endif
+    }
+
+    static var dictionarySearch: String { argument("--ui-dictionary-search=") ?? "" }
+
+    private static func argument(_ prefix: String) -> String? {
+        guard isEnabled else { return nil }
+        return ProcessInfo.processInfo.arguments.first { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
+    }
     static var isRecordingMeeting: Bool { mode == "meeting-recording" }
 
     static func makeAppState() -> AppState {
@@ -84,7 +113,15 @@ enum UIPreview {
                                                 status: .failed(errorMessage: "The microphone disconnected before transcription finished.")))
             }
             let permission = MicrophonePermissionController(provider: PreviewMicrophone(granted: mode != "setup"))
-            let state = AppState(settings: settings, store: store, microphonePermission: permission)
+            let (dictionary, corrections) = sampleDictionary()
+            let state = AppState(settings: settings, store: store, correctionStore: corrections,
+                                 dictionaryStore: dictionary, microphonePermission: permission)
+            if mode != "empty" && mode != "setup" {
+                let learned = dictionary.entries.first { $0.written == "Claude" }!
+                state.dictionaryNotice = DictionaryNotice(changes: [
+                    DictionaryChange(pair: learned.pair, before: nil, after: learned)
+                ])
+            }
             state.records = store.records
             state.selectedRecordID = store.records.first?.id
             state.modelState = mode == "preparing" ? .preparing : .ready
@@ -102,6 +139,45 @@ enum UIPreview {
         }
         #endif
         return AppState()
+    }
+
+    /// Sample entries covering every row state: starred, learned, imported,
+    /// absorbed misspellings, flags, usage, and suggestions both blocked and demoted.
+    private static func sampleDictionary() -> (DictionaryStore, CorrectionStore) {
+        let now = Date()
+        let hours = { (h: Double) in now.addingTimeInterval(-h * 3600) }
+        func entry(_ base: DictionaryEntry, starred: Bool = false, uses: Int = 0, lastUsed: Date? = nil) -> DictionaryEntry {
+            var entry = base
+            entry.starred = starred
+            entry.useCount = uses
+            entry.lastUsedAt = lastUsed
+            return entry
+        }
+        var dictionary = UserDictionary()
+        guard mode != "empty" && mode != "setup" else { return (DictionaryStore(), CorrectionStore()) }
+        dictionary.entries = [
+            entry(.word("Siobhan", addedAt: hours(900)), starred: true, uses: 14, lastUsed: hours(2)),
+            entry(.word("Kubernetes", variants: ["kubernetis"], origin: .learned, addedAt: hours(300)), uses: 6, lastUsed: hours(30)),
+            entry(.word("WhiskerFlow", addedAt: hours(2000)), uses: 31, lastUsed: hours(1)),
+            entry(.word("Figma", origin: .imported, addedAt: hours(50))),
+            entry(.word("Niamh", origin: .learned, addedAt: hours(5)), uses: 1, lastUsed: hours(4)),
+            entry(.replacement("clawed", "Claude", origin: .learned, addedAt: hours(0.1)), uses: 9, lastUsed: hours(0.1)),
+            entry(.replacement("sequel server", "SQL Server", addedAt: hours(400)), uses: 3, lastUsed: hours(70)),
+            entry(.replacement("CX", "customer experience", caseSensitive: true, addedAt: hours(800)), uses: 2, lastUsed: hours(200))
+        ]
+        var demoted = DictionaryEntry.replacement("vivim", "Vivamn", origin: .learned, addedAt: hours(2600))
+        demoted.useCount = 1
+        dictionary.demoted = [DemotedEntry(entry: demoted, demotedAt: hours(20))]
+        dictionary.readOnlyUsage[DictionaryPair(heard: "manukora", written: "Manukora").key] = DictionaryUsageStat(count: 4, lastUsedAt: hours(26))
+        let corrections = CorrectionStore()
+        corrections.record([VocabularyCorrection(find: "firmest teller", replaceWith: "Firma Stella")], sessionID: UUID(), application: "Slack")
+        for app in ["Notes", "Mail", "Slack"] {
+            corrections.record([VocabularyCorrection(find: "word", replaceWith: "Word")], sessionID: UUID(), application: app)
+        }
+        corrections.record([VocabularyCorrection(find: "oti", replaceWith: "Otty")], sessionID: UUID(), application: "Linear")
+        let store = DictionaryStore()
+        store.update { $0 = dictionary }
+        return (store, corrections)
     }
 
     static var meetings: [AtlasCaptureScheduleIntent] {

@@ -32,6 +32,12 @@ actor AppleSpeechEngine: Sendable {
         if recognizer.supportsOnDeviceRecognition {
             speechRequest.requiresOnDeviceRecognition = true
         }
+        // Dictionary words bias the recogniser towards those spellings. Apple
+        // recommends at most 100 phrases; more are accepted but dilute each one.
+        let terms = request.hints.terms(for: .appleSpeech)
+        if !terms.isEmpty {
+            speechRequest.contextualStrings = Array(terms.prefix(Self.maximumContextualStrings))
+        }
 
         // File recognition runs at roughly real time on older Macs, so a long
         // recording (typically a fallback after the primary engine failed) needs
@@ -71,6 +77,8 @@ actor AppleSpeechEngine: Sendable {
             }
         }
     }
+
+    static let maximumContextualStrings = 100
 
     private static func audioSeconds(at url: URL) -> Double? {
         guard let file = try? AVAudioFile(forReading: url) else { return nil }

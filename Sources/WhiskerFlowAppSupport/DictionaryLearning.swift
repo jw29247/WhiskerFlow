@@ -135,6 +135,17 @@ public struct DictionarySuggestion: Identifiable, Equatable, Sendable {
     public var demotedAt: Date?
     /// Why it wasn't (or won't be) added automatically.
     public var issues: [DictionaryIssue]
+
+    public init(pair: DictionaryPair, proposed: DictionaryEntry, sightings: Int, lastSeen: Date? = nil,
+                applications: [String] = [], demotedAt: Date? = nil, issues: [DictionaryIssue] = []) {
+        self.pair = pair
+        self.proposed = proposed
+        self.sightings = sightings
+        self.lastSeen = lastSeen
+        self.applications = applications
+        self.demotedAt = demotedAt
+        self.issues = issues
+    }
 }
 
 /// A change learning made to the dictionary, kept so it can be undone exactly.
@@ -142,6 +153,12 @@ public struct DictionaryChange: Equatable, Sendable {
     public var pair: DictionaryPair
     public var before: DictionaryEntry?
     public var after: DictionaryEntry
+
+    public init(pair: DictionaryPair, before: DictionaryEntry?, after: DictionaryEntry) {
+        self.pair = pair
+        self.before = before
+        self.after = after
+    }
 }
 
 public enum DictionaryLearning {

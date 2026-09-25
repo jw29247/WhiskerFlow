@@ -12,7 +12,7 @@ transcribes locally and pastes the text wherever your cursor is.
   is written in that category's tone (Formal, Casual, Very casual or Literal). Browsers are sorted by the
   website you're on. Change tones, or move individual apps, in **Assistant → Styles**; all rules run on this Mac.
 - **Floating HUD** with a live level meter, a rich menu-bar popover, searchable/editable
-  history, custom-vocabulary replacement, configurable hotkey, and hold-to-talk or tap-to-toggle modes.
+  history, a Dictionary that learns names and fixes from your corrections (and can hint them to the recogniser), configurable hotkey, and hold-to-talk or tap-to-toggle modes.
 
 ## Requirements
 

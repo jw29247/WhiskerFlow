@@ -32,6 +32,7 @@ final class LiveDictationSession {
     private var compiledVocabulary: CompiledVocabulary?
     private var tone: WritingTone = .formal
     private var recognizeCorrections = false
+    private var hints: RecognizerHints = .none
     private var formatting = FormattingOptions()
     private var confirmedText = ""
     private var confirmedSampleCount = 0
@@ -85,6 +86,7 @@ final class LiveDictationSession {
         streaming: Bool,
         tone: WritingTone = .formal,
         recognizeCorrections: Bool = false,
+        hints: RecognizerHints = .none,
         previewEngine: TranscriptionEngineKind? = nil
     ) throws {
         self.language = language
@@ -93,6 +95,7 @@ final class LiveDictationSession {
         compiledVocabulary = nil
         self.tone = tone
         self.recognizeCorrections = recognizeCorrections
+        self.hints = hints
         self.formatting = formatting
         generation &+= 1
         resetTranscript()
@@ -325,7 +328,7 @@ final class LiveDictationSession {
     private func decodedText(for samples: [Float], language: String?, model: WhisperModel) async -> String? {
         guard !samples.isEmpty else { return nil }
         do {
-            let result = try await transcription.transcribeSamples(samples, language: language, model: model)
+            let result = try await transcription.transcribeSamples(samples, language: language, model: model, hints: hints)
             return result.text
         } catch {
             // Partial decode failures are non-fatal — keep the previous text. The

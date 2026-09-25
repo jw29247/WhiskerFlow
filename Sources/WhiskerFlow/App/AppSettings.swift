@@ -35,6 +35,13 @@ final class AppSettings {
     /// Echo-cancel speaker playback out of dictation audio.
     var ignoreSpeakerAudio: Bool { didSet { defaults.set(ignoreSpeakerAudio, forKey: Keys.ignoreSpeakerAudio) } }
     var rememberCorrections: Bool { didSet { defaults.set(rememberCorrections, forKey: "rememberCorrections") } }
+    /// Add a remembered correction to the Dictionary once it has been seen twice.
+    var autoAddLearnedWords: Bool { didSet { defaults.set(autoAddLearnedWords, forKey: Keys.autoAddLearnedWords) } }
+    /// Per-engine recogniser hints from the Dictionary. Each can be turned off
+    /// independently; post-recognition replacement applies either way.
+    var biasAppleSpeech: Bool { didSet { defaults.set(biasAppleSpeech, forKey: Keys.biasAppleSpeech) } }
+    var biasWhisperKit: Bool { didSet { defaults.set(biasWhisperKit, forKey: Keys.biasWhisperKit) } }
+    var biasParakeet: Bool { didSet { defaults.set(biasParakeet, forKey: Keys.biasParakeet) } }
     var delivery: DeliveryMode { didSet { defaults.set(delivery.rawValue, forKey: Keys.delivery) } }
     var playSounds: Bool { didSet { defaults.set(playSounds, forKey: Keys.playSounds) } }
     var allowAppleFallback: Bool { didSet { defaults.set(allowAppleFallback, forKey: Keys.allowAppleFallback) } }
@@ -44,6 +51,8 @@ final class AppSettings {
     var selectedInputUID: String { didSet { defaults.set(selectedInputUID, forKey: Keys.selectedInputUID) } }
     var whisperCommand: String { didSet { defaults.set(whisperCommand, forKey: Keys.whisperCommand) } }
     var whisperArguments: String { didSet { defaults.set(whisperArguments, forKey: Keys.whisperArguments) } }
+    /// The pre-Dictionary personal vocabulary. Read once to migrate into
+    /// `DictionaryStore` and otherwise left as it was, as a fallback for older builds.
     var vocabulary: Vocabulary { didSet { persist(vocabulary, key: Keys.vocabulary) } }
     /// Carries the dictation language (not persisted) so filler removal can
     /// skip languages the English filler list doesn't fit.
@@ -160,6 +169,10 @@ final class AppSettings {
         liveTranscription = defaults.object(forKey: Keys.liveTranscription) as? Bool ?? true
         ignoreSpeakerAudio = defaults.object(forKey: Keys.ignoreSpeakerAudio) as? Bool ?? true
         rememberCorrections = defaults.object(forKey: "rememberCorrections") as? Bool ?? true
+        autoAddLearnedWords = defaults.object(forKey: Keys.autoAddLearnedWords) as? Bool ?? true
+        biasAppleSpeech = defaults.object(forKey: Keys.biasAppleSpeech) as? Bool ?? Self.defaultBiasAppleSpeech
+        biasWhisperKit = defaults.object(forKey: Keys.biasWhisperKit) as? Bool ?? Self.defaultBiasWhisperKit
+        biasParakeet = defaults.object(forKey: Keys.biasParakeet) as? Bool ?? Self.defaultBiasParakeet
         delivery = defaults.string(forKey: Keys.delivery).flatMap(DeliveryMode.init) ?? .pasteAtCursor
         playSounds = defaults.object(forKey: Keys.playSounds) as? Bool ?? true
         allowAppleFallback = defaults.object(forKey: Keys.allowAppleFallback) as? Bool ?? true
@@ -183,6 +196,11 @@ final class AppSettings {
     }
 
     static let atlasProductionURL = "https://atlas.thatworks.agency"
+
+    /// Defaults follow docs/validation/2026-09-25-dictionary-biasing.md.
+    static let defaultBiasAppleSpeech = true
+    static let defaultBiasWhisperKit = false
+    static let defaultBiasParakeet = false
 
     var resolvedLanguage: String? {
         language.lowercased() == "auto" ? nil : language
@@ -317,6 +335,10 @@ final class AppSettings {
         static let whisperCommand = "whisperCommand"
         static let whisperArguments = "whisperArguments"
         static let vocabulary = "vocabulary"
+        static let autoAddLearnedWords = "autoAddLearnedWords"
+        static let biasAppleSpeech = "dictionaryBiasAppleSpeech"
+        static let biasWhisperKit = "dictionaryBiasWhisperKit"
+        static let biasParakeet = "dictionaryBiasParakeet"
         static let formatting = "formattingOptions"
         static let sharedVocabularyURL = "sharedVocabularyURL"
         static let launchAtLogin = "launchAtLogin"
