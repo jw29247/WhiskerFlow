@@ -4,22 +4,31 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-debug}"
 PRODUCT="WhiskerFlow"
-APP_BUNDLE="$ROOT_DIR/.build/$CONFIGURATION/$PRODUCT Dev.app"
-BUNDLE_IDENTIFIER_OVERRIDE="agency.thatworks.WhiskerFlow.dev"
+APP_BUNDLE="${APP_BUNDLE:-$ROOT_DIR/.build/$CONFIGURATION/$PRODUCT Dev.app}"
+BUNDLE_IDENTIFIER_OVERRIDE="${BUNDLE_IDENTIFIER_OVERRIDE:-agency.thatworks.WhiskerFlow.dev}"
+BUNDLE_NAME_OVERRIDE="${BUNDLE_NAME_OVERRIDE:-$PRODUCT Dev}"
 MODE="${1:-}"
+if (( $# > 0 )); then shift; fi
 
-pkill -x "$PRODUCT" 2>/dev/null || true
+# Stop only this candidate, never another installed WhiskerFlow build.
+# App paths contain spaces; match the command suffix without splitting it.
+RUNNING_PIDS="$(ps -axo pid=,command= | while read -r pid command; do
+  if [[ "$command" == "$APP_BUNDLE/Contents/MacOS/$PRODUCT"* ]]; then echo "$pid"; fi
+done)"
+if [[ -n "$RUNNING_PIDS" ]]; then
+  while read -r pid; do kill -TERM "$pid"; done <<< "$RUNNING_PIDS"
+fi
 BUNDLE_IDENTIFIER_OVERRIDE="$BUNDLE_IDENTIFIER_OVERRIDE" \
-  BUNDLE_NAME_OVERRIDE="$PRODUCT Dev" \
+  BUNDLE_NAME_OVERRIDE="$BUNDLE_NAME_OVERRIDE" \
   "$ROOT_DIR/script/bundle_app.sh" "$APP_BUNDLE" >/dev/null
 
 echo "Launching $APP_BUNDLE"
-/usr/bin/open -n "$APP_BUNDLE"
+/usr/bin/open -n "$APP_BUNDLE" --args "$@"
 
 verify_process() {
   local attempts=0
   while (( attempts < 40 )); do
-    if pgrep -x "$PRODUCT" >/dev/null; then
+    if ps -axo command= | grep -F "$APP_BUNDLE/Contents/MacOS/$PRODUCT" | grep -v grep >/dev/null; then
       echo "$PRODUCT is running"
       return 0
     fi

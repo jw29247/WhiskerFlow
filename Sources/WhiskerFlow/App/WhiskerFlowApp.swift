@@ -13,6 +13,9 @@ struct WhiskerFlowApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
 
     init() {
+        #if DEBUG
+        if CommandLine.arguments.contains("--probe-native-meet") { MeetingSpeakerProbe.runAndExit() }
+        #endif
         if !UIPreview.isEnabled {
             Observability.start()
             DiagnosticsService.start()
@@ -58,15 +61,30 @@ struct WhiskerFlowApp: App {
                 .preferredColorScheme(UIPreview.colorScheme)
         }
 
-        MenuBarExtra(
-            "WhiskerFlow",
-            systemImage: appState.meetingStatus == .recording
-                ? "record.circle.fill"
-                : (appState.isRecording ? "waveform.circle.fill" : "waveform.circle"),
-            isInserted: $appState.settings.showMenuBarExtra
-        ) {
+        WhiskerFlowMenuBarScene(appState: appState, updaterService: updaterService)
+    }
+}
+
+struct WhiskerFlowMenuBarScene: Scene {
+    @Bindable var appState: AppState
+    let updaterService: UpdaterService
+
+    var body: some Scene {
+        MenuBarExtra(isInserted: $appState.settings.showMenuBarExtra) {
             MenuBarView(appState: appState, updaterService: updaterService)
+        } label: {
+            WhiskerFlowMenuBarLabel(appState: appState)
         }
         .menuBarExtraStyle(.window)
+    }
+}
+
+struct WhiskerFlowMenuBarLabel: View {
+    let appState: AppState
+
+    var body: some View {
+        Label("WhiskerFlow", systemImage: appState.meetingStatus == .recording
+            ? "record.circle.fill"
+            : (appState.isRecording ? "waveform.circle.fill" : "waveform.circle"))
     }
 }

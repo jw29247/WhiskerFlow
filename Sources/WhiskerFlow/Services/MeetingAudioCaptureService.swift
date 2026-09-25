@@ -56,6 +56,8 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
   private var microphoneSampleCount = 0
     private var systemSampleCount = 0
 
+    private(set) var captureStartedAtMs: Int64?
+
     var onFailure: ((Error) -> Void)?
     var onActivity: ((MeetingActivityInput) -> Void)?
 
@@ -136,6 +138,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
                 options: [.userInitiated, .idleDisplaySleepDisabled],
                 reason: "WhiskerFlow Meeting Mode capture"
             )
+            captureStartedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             acceptingSamples = true
             isRunning = true
             startActivityUpdates()

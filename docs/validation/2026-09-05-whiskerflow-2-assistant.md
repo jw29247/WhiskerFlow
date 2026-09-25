@@ -1,5 +1,12 @@
 # WhiskerFlow 2 assistant candidate
 
+This is the earlier candidate's historical evidence. Current release status and
+subsequent failures/repairs are tracked in
+[the release-readiness ledger](2026-09-05-release-readiness.md). In particular,
+the latest full native suite is not passing, resource repairs remain under
+verification, and Jacob subsequently accepted M5 measurements to estimate M1/8GB
+suitability. The results below do not certify the current head.
+
 The candidate implements the seven approved voice features and private preparation, live prompts and post-meeting coaching. It is a signed local development build, not a production release. Original working checkouts were preserved; implementation lives on `codex/whiskerflow-2-assistant` in isolated native and Atlas worktrees.
 
 ## What is implemented

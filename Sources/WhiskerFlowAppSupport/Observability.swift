@@ -51,6 +51,9 @@ public enum Observability {
 
     public static func start() {
         guard state.markStarted() else { return }
+        MainThreadHealthMonitor.shared.start()
+        let lifecycle = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
+        lifecycle.info("Application diagnostics started", metadata: ["event": "app_started"])
 
         state.tracer.spanBuilder(spanName: "app.start").withActiveSpan { span in
             span.setAttribute(key: "app.lifecycle.phase", value: "started")
@@ -260,7 +263,7 @@ public enum Observability {
 
                 var systemHandler = UnifiedLogHandler(label: label)
                 systemHandler.logLevel = .info
-                return MultiplexLogHandler([systemHandler, otelHandler])
+                return MultiplexLogHandler([systemHandler, otelHandler, LocalDiagnosticLogHandler(label: label)])
             }
         }
 

@@ -255,6 +255,72 @@ public final class EncryptedMeetingChunkStore: @unchecked Sendable {
         }
     }
 
+    public func saveSpeakerEvidence(sessionID: UUID, evidence: [MeetingSpeakerEvidence]) throws {
+        guard !evidence.isEmpty else { return }
+        try withLock {
+            guard let encryptionKey = key else { throw MeetingChunkStoreError.encryptionFailed }
+            guard fileManager.fileExists(atPath: manifestURL(sessionID).path) else { throw MeetingChunkStoreError.missingManifest }
+            let directory = sessionDirectory(sessionID).appendingPathComponent("speakers", isDirectory: true)
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let bytes = try AES.GCM.seal(JSONEncoder().encode(evidence), using: encryptionKey).combined!
+            let url = directory.appendingPathComponent(UUID().uuidString + ".enc")
+            try bytes.write(to: url, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }
+    }
+
+    public func loadSpeakerEvidence(sessionID: UUID) throws -> [MeetingSpeakerEvidence] {
+        try withLock {
+            guard let encryptionKey = key else { throw MeetingChunkStoreError.encryptionFailed }
+            let directory = sessionDirectory(sessionID).appendingPathComponent("speakers", isDirectory: true)
+            guard fileManager.fileExists(atPath: directory.path) else { return [] }
+            let files = try fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).filter { $0.pathExtension == "enc" }
+            guard files.count <= 20000 else { throw MeetingChunkStoreError.invalidSession }
+            return try files.flatMap { url in
+                let bytes = try Data(contentsOf: url)
+                let plaintext = try AES.GCM.open(AES.GCM.SealedBox(combined: bytes), using: encryptionKey)
+                return try JSONDecoder().decode([MeetingSpeakerEvidence].self, from: plaintext)
+            }
+        }
+    }
+
+    public func saveCaptionEvidence(sessionID: UUID, evidence: [MeetingCaptionEvidence]) throws {
+        try withLock {
+            guard let encryptionKey = key else { throw MeetingChunkStoreError.encryptionFailed }
+            let directory = sessionDirectory(sessionID)
+            guard fileManager.fileExists(atPath: directory.appendingPathComponent("manifest.json").path) else {
+                throw MeetingChunkStoreError.missingManifest
+            }
+            let url = directory.appendingPathComponent("captions.wfevidence")
+            var rows: [MeetingCaptionEvidence] = []
+            if let data = try? Data(contentsOf: url),
+               let plaintext = try? AES.GCM.open(AES.GCM.SealedBox(combined: data), using: encryptionKey) {
+                rows = (try? JSONDecoder().decode([MeetingCaptionEvidence].self, from: plaintext)) ?? []
+            }
+            let previous = rows
+            for row in evidence where !rows.contains(row) { rows.append(row) }
+            guard rows != previous else { return }
+            rows = Array(rows.suffix(1000))
+            let data = try JSONEncoder().encode(rows)
+            guard let encrypted = try AES.GCM.seal(data, using: encryptionKey).combined else {
+                throw MeetingChunkStoreError.encryptionFailed
+            }
+            try encrypted.write(to: url, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }
+    }
+
+    public func loadCaptionEvidence(sessionID: UUID) throws -> [MeetingCaptionEvidence] {
+        try withLock {
+            let url = sessionDirectory(sessionID).appendingPathComponent("captions.wfevidence")
+            guard fileManager.fileExists(atPath: url.path) else { return [] }
+            guard let encryptionKey = key else { throw MeetingChunkStoreError.encryptionFailed }
+            let data = try Data(contentsOf: url)
+            let plaintext = try AES.GCM.open(AES.GCM.SealedBox(combined: data), using: encryptionKey)
+            return try JSONDecoder().decode([MeetingCaptionEvidence].self, from: plaintext)
+        }
+    }
+
     /// Returns the encrypted bytes for the authenticated upload transport. The
     /// plaintext path above is used only by local transcription.
     public func readEncryptedChunk(

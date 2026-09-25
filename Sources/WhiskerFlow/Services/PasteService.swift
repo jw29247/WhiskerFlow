@@ -1,9 +1,19 @@
 import AppKit
 @preconcurrency import ApplicationServices
 import WhiskerFlowCore
+import WhiskerFlowAppSupport
+import Logging
 
 @MainActor
-struct PasteService {
+protocol TextDeliveryService {
+    var hasAccessibilityPermission: Bool { get }
+    func requestAccessibilityPermission()
+    func copy(_ text: String)
+    func paste(_ text: String, into application: NSRunningApplication?, replacing selection: TextFieldSnapshot?) async -> PasteDeliveryReceipt
+}
+
+@MainActor
+struct PasteService: TextDeliveryService {
     var correctionMonitor: PasteCorrectionMonitor?
     var hasAccessibilityPermission: Bool {
         AXIsProcessTrusted()
@@ -63,20 +73,17 @@ struct PasteService {
         guard Self.sendPasteKeyEvent(to: destination) else {
             return receipt(.failed, "The paste key could not be sent. Retry or copy your text.", retry: context)
         }
-        var confirmed = false
-        // Give the destination time to consume the clipboard even if AX cannot verify it.
-        for tick in 0..<12 {
-            try? await Task.sleep(for: .milliseconds(75))
-            if let context, context.isFocused, let value = context.readValue(), scope?.confirmsInsertion(value) == true {
-                confirmed = true
-            }
-            if tick >= 5 && (confirmed || Task.isCancelled) { break }
+        let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
+        logger.info("Paste event posted", metadata: ["event": "paste_posted"])
+        let target = context.flatMap { context in scope.map { PasteVerificationTarget(context: context, scope: $0) } }
+        let confirmed = await PasteVerification.verify {
+            target?.confirmsInsertion() ?? false
         }
         if confirmed {
             correctionMonitor?.observe(correctionTarget)
-            return receipt(.verified, "Pasted into \(destination.localizedName ?? "the destination")")
+            return receipt(.verified, "Pasted")
         }
-        return receipt(.unverified, "Sent to \(destination.localizedName ?? "the destination"); insertion could not be verified. Check before pasting again.")
+        return receipt(.unverified, "Pasted")
     }
 
     // MARK: - Activation

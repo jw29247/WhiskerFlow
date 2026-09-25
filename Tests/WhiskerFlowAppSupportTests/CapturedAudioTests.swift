@@ -34,4 +34,5 @@ final class CapturedAudioTests: XCTestCase {
 
         XCTAssertFalse(captured.reportsUnusableInput)
     }
+
 }

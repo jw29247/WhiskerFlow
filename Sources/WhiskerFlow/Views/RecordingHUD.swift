@@ -5,7 +5,6 @@ import WhiskerFlowCore
 /// The content shown inside the floating HUD panel.
 struct RecordingHUDView: View {
     @Bindable var appState: AppState
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 12) {
@@ -67,7 +66,13 @@ struct RecordingHUDView: View {
         Image(systemName: iconName)
             .font(.system(size: 16, weight: .semibold))
             .foregroundStyle(iconTint)
-            .symbolEffect(.variableColor.iterative, isActive: presentation == .transcribing && !reduceMotion)
+            // Keep the post-recording HUD static.  The previous iterative SF
+            // Symbol animation kept a Core Animation/Metal transaction alive
+            // for the entire recognition phase; a captured stall showed the
+            // main thread inside DisplayList/RenderBox while this HUD was
+            // transcribing.  Recognition has no user action to animate, so a
+            // static indicator avoids making the delivery path depend on the
+            // window-server renderer.
     }
 
     private var presentation: FloatingHUDPresentation {

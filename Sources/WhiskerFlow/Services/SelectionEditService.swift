@@ -68,9 +68,44 @@ struct TextFieldSnapshot {
 }
 
 struct PasteDeliveryReceipt {
-    enum State { case verified, unverified, failed, copied }
+    enum State: String { case verified, unverified, failed, copied }
     let state: State
     let text: String
     let message: String
     var retrySelection: TextFieldSnapshot?
+}
+
+/// Immutable AX handles used solely by the verification worker. No AppKit or
+/// observable application state is accessed on that worker.
+struct PasteVerificationTarget: @unchecked Sendable {
+    private let application: AXUIElement
+    private let element: AXUIElement
+    private let scope: PastedTextScope
+
+    @MainActor
+    init(context: TextFieldSnapshot, scope: PastedTextScope) {
+        self.application = AXUIElementCreateApplication(context.application.processIdentifier)
+        self.element = context.element
+        self.scope = scope
+        AXUIElementSetMessagingTimeout(application, 0.2)
+        AXUIElementSetMessagingTimeout(element, 0.2)
+    }
+
+    func confirmsInsertion() -> Bool {
+        guard attribute(application, kAXFrontmostAttribute) as? Bool == true,
+              let focused = attribute(application, kAXFocusedUIElementAttribute),
+              CFEqual(focused, element),
+              let role = attribute(element, kAXRoleAttribute) as? String,
+              [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role),
+              attribute(element, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole,
+              let value = attribute(element, kAXValueAttribute) as? String,
+              value.utf16.count <= 65_536 else { return false }
+        return scope.confirmsInsertion(value)
+    }
+
+    private func attribute(_ element: AXUIElement, _ key: String) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, key as CFString, &value) == .success else { return nil }
+        return value
+    }
 }

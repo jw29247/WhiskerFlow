@@ -59,44 +59,15 @@ actor ParakeetTDTv3Engine: Sendable {
         }
 
         do {
-            let file = try AVAudioFile(forReading: request.audioURL)
-            let rate = file.processingFormat.sampleRate
-            let windowFrames = AVAudioFrameCount(rate * 30)
-            var assembler = BoundedTranscriptAssembler()
-            let ranges = BoundedDecodeWindowPolicy.frameRanges(totalFrames: file.length, sampleRate: rate)
-            for range in ranges {
-                try Task.checkCancellation()
-                let start = range.lowerBound
-                file.framePosition = start
-                let count = AVAudioFrameCount(range.count)
-                guard let pcm = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: count) else {
-                    throw CocoaError(.fileReadUnknown)
-                }
-                try file.read(into: pcm, frameCount: count)
-                guard let channel = pcm.floatChannelData?[0] else { throw CocoaError(.fileReadCorruptFile) }
-                let samples = Array(UnsafeBufferPointer(start: channel, count: Int(pcm.frameLength)))
-                var decoderState = try TdtDecoderState()
-                let decoded: TranscriptionResult
-                do {
-                    decoded = try await Self.result(
-                        manager.transcribe(samples, decoderState: &decoderState),
-                        language: request.language
-                    )
-                } catch TranscriptionError.emptyTranscript {
-                    guard BoundedDecodeWindowPolicy.containsAudibleActivity(samples) else { continue }
-                    throw TranscriptionError.underlying(
-                        "Audible recording audio was not transcribed. The recording is saved and will retry."
-                    )
-                }
-                if file.length <= AVAudioFramePosition(windowFrames) { return decoded }
-                let offset = Double(start) / rate
-                let lower = start == 0 ? offset : offset + 0.5
-                let isLast = range.upperBound >= file.length
-                let upper = isLast ? .infinity : offset + Double(count) / rate - 0.5
-                try assembler.append(decoded, offsetSeconds: offset, ownership: lower..<upper,
-                                     requiresTimings: true)
-            }
-            return try assembler.finish(language: request.language, duration: Double(file.length) / rate)
+            // Let FluidAudio preserve decoder context across its bounded,
+            // disk-backed chunks. Independent 30-second decodes can return an
+            // empty window and discard speech recovered from the rest of a file.
+            try Task.checkCancellation()
+            var decoderState = try TdtDecoderState()
+            let decoded = try await manager.transcribeDiskBacked(
+                request.audioURL, decoderState: &decoderState)
+            try Task.checkCancellation()
+            return try Self.result(decoded, language: request.language)
         } catch let error as TranscriptionError {
             throw error
         } catch is CancellationError {

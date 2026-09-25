@@ -55,6 +55,7 @@ public struct CapturedAudio: Equatable, Sendable {
     public var reportsUnusableInput: Bool {
         totalSampleCount == 0 && conversionFailureCount > 0
     }
+
 }
 
 @MainActor

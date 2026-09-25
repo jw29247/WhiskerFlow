@@ -6,6 +6,31 @@ import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
 final class MeetingCoordinatorTests: XCTestCase {
+    @MainActor
+    func testMeetingSystemProbesNeverBlockDictationMainActor() async {
+        let name = "MeetingSystemProbeTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let coordinator = MeetingCaptureCoordinator(
+            settings: settings,
+            microphonePermission: MicrophonePermissionController(provider: AVCaptureMicrophoneAuthorizationProvider()),
+            transcription: TranscriptionService(),
+            tokenReader: {
+                XCTAssertFalse(Thread.isMainThread, "Keychain access must not hold the dictation completion executor")
+                return "fixture"
+            },
+            diskStateReader: {
+                XCTAssertFalse(Thread.isMainThread, "CacheDelete/free-space XPC must not hold the dictation completion executor")
+                return "ready"
+            }
+        )
+        let disk = await coordinator.localDiskState()
+        let client = await coordinator.atlasClient()
+        XCTAssertEqual(disk, "ready")
+        XCTAssertNotNil(client)
+    }
+
     func testOlderRecoveryCannotOverwriteNewestStoppedMeetingStatus() {
         let olderRecovery = UUID()
         let freshMeeting = UUID()
@@ -345,9 +370,102 @@ final class MeetingCoordinatorTests: XCTestCase {
                 language: "en"
             )
             XCTFail("Audible source audio must not be accepted as a silent successful window")
-        } catch TranscriptionError.underlying(let detail) {
-            XCTAssertTrue(detail.contains("Audible meeting audio"))
+        } catch let error as MeetingWindowTranscriptionFailure {
+            XCTAssertEqual(error.track, .mixed)
+            XCTAssertEqual(error.startMs, 20000)
+            XCTAssertEqual(error.endMs, 30000)
+            XCTAssertTrue(error.localizedDescription.contains("Audible meeting audio"))
         }
+    }
+
+    func testEmptyLongWindowRetriesDurableChunksAndPreservesTimestamps() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = EncryptedMeetingChunkStore(rootURL: root, keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256)))
+        let id = UUID()
+        try store.beginSession(sessionID: id, meetingID: nil, expectedChunkCounts: [.mixed: 3])
+        for sequence in 0..<3 {
+            let samples = [Float](repeating: 0.1, count: 160000)
+            _ = try store.writeChunk(sessionID: id, track: .mixed, sequence: sequence, startMs: Int64(sequence * 10000), endMs: Int64((sequence + 1) * 10000), plaintext: samples.withUnsafeBufferPointer { Data(buffer: $0) })
+        }
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { url, _ in
+            guard url.lastPathComponent.contains("-retry-") else { throw TranscriptionError.emptyTranscript }
+            return TranscriptionResult(text: "Fixture speech", segments: [.init(text: "Fixture speech", start: 1, end: 2)])
+        }
+        let result = try await processor.process(manifest: store.loadManifest(sessionID: id), store: store, language: "en")
+        XCTAssertEqual(result.turns.map(\.startMs), [1000, 11000, 21000])
+        XCTAssertEqual(result.turns.map(\.endMs), [2000, 12000, 22000])
+        XCTAssertEqual(try store.loadManifest(sessionID: id).chunks.count, 3)
+    }
+
+    func testTransientAudibleChunkDecodeRetriesBeforeFailingTheMeeting() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = EncryptedMeetingChunkStore(
+            rootURL: root.appendingPathComponent("recordings"),
+            keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))
+        )
+        let id = UUID()
+        try store.beginSession(sessionID: id, meetingID: nil, expectedChunkCounts: [.mixed: 2])
+        for sequence in 0..<2 {
+            let samples = [Float](repeating: 0.1, count: 160_000)
+            _ = try store.writeChunk(
+                sessionID: id, track: .mixed, sequence: sequence,
+                startMs: Int64(sequence * 10_000), endMs: Int64((sequence + 1) * 10_000),
+                plaintext: samples.withUnsafeBufferPointer { Data(buffer: $0) }
+            )
+        }
+        let attempts = MeetingDecodeObservations()
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { url, _ in
+            let attempt = await attempts.record(0)
+            if attempt <= 2 { throw TranscriptionError.emptyTranscript }
+            return TranscriptionResult(
+                text: "Recovered speech",
+                segments: [.init(text: "Recovered speech", start: 1, end: 2)]
+            )
+        }
+
+        let result = try await processor.process(
+            manifest: store.loadManifest(sessionID: id), store: store, language: "en"
+        )
+        XCTAssertEqual(result.turns.map(\.text), ["Recovered speech", "Recovered speech"])
+    }
+
+    func testPersistentChunkFailureFallsBackToBoundedAudibleSubwindows() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = EncryptedMeetingChunkStore(
+            rootURL: root.appendingPathComponent("recordings"),
+            keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))
+        )
+        let id = UUID()
+        try store.beginSession(sessionID: id, meetingID: nil, expectedChunkCounts: [.mixed: 2])
+        for sequence in 0..<2 {
+            let samples = [Float](repeating: 0.1, count: 160_000)
+            _ = try store.writeChunk(
+                sessionID: id, track: .mixed, sequence: sequence,
+                startMs: Int64(sequence * 10_000), endMs: Int64((sequence + 1) * 10_000),
+                plaintext: samples.withUnsafeBufferPointer { Data(buffer: $0) }
+            )
+        }
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { url, _ in
+            guard url.lastPathComponent.contains("-subretry-") else {
+                throw TranscriptionError.emptyTranscript
+            }
+            return TranscriptionResult(
+                text: "Recovered from subwindow",
+                segments: [.init(text: "Recovered from subwindow", start: 0.5, end: 1.5)]
+            )
+        }
+
+        let result = try await processor.process(
+            manifest: store.loadManifest(sessionID: id), store: store, language: "en"
+        )
+        XCTAssertEqual(
+            result.turns.map(\.text),
+            ["Recovered from subwindow", "Recovered from subwindow", "Recovered from subwindow", "Recovered from subwindow"]
+        )
+        XCTAssertEqual(result.turns.map(\.startMs), [500, 5_500, 10_500, 15_500])
     }
 
     func testOverlapReconcilerMergesRegroupedPhraseWithTimestampJitter() {
@@ -460,6 +578,27 @@ final class MeetingCoordinatorTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         defer { try? FileManager.default.removeItem(at: root) }
         let coordinator = MeetingCaptureCoordinator(settings: settings, microphonePermission: MicrophonePermissionController(provider: AVCaptureMicrophoneAuthorizationProvider()), transcription: TranscriptionService(), store: EncryptedMeetingChunkStore(rootURL: root, keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))), clientProvider: { client })
+        await coordinator.pollSchedule()
+        XCTAssertEqual(coordinator.scheduleIntents.count, 1, "Manual recording must not hide the Atlas calendar")
+        XCTAssertFalse(coordinator.isCapturing)
+    }
+
+    @MainActor
+    func testCalendarEntryAloneCannotStartRecording() async {
+        let name = "MeetingCoordinatorTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        settings.meetingModeEnabled = true
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MeetingScheduleStub.self]
+        let client = URLSessionMeetingAtlasClient(baseURL: URL(string: "https://atlas.test")!, token: "fixture", session: URLSession(configuration: config))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let coordinator = MeetingCaptureCoordinator(settings: settings, microphonePermission: MicrophonePermissionController(provider: AVCaptureMicrophoneAuthorizationProvider()), transcription: TranscriptionService(), store: EncryptedMeetingChunkStore(rootURL: root, keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))), clientProvider: { client }, joinedMeetingProvider: { _ in false }, diskStateReader: {
+            XCTFail("Calendar-only trigger must never reach recording setup")
+            return "unknown"
+        })
         await coordinator.pollSchedule()
         XCTAssertEqual(coordinator.scheduleIntents.count, 1, "Manual recording must not hide the Atlas calendar")
         XCTAssertFalse(coordinator.isCapturing)

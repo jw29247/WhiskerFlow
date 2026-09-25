@@ -13,19 +13,33 @@ enum AppStatus: Equatable {
     case preparingMic
     case recording
     case transcribing
+    case delivering
     case success(String)
     case failure(String)
 
     var isBusy: Bool {
         switch self {
         case .preparingMic, .recording, .transcribing: return true
-        case .idle, .success, .failure: return false
+        case .idle, .delivering, .success, .failure: return false
         }
     }
 }
 
 extension AppStatus {
+    var diagnosticName: String {
+        switch self {
+        case .idle: return "idle"
+        case .preparingMic: return "preparing"
+        case .recording: return "recording"
+        case .transcribing: return "transcribing"
+        case .delivering: return "delivering"
+        case .success: return "success"
+        case .failure: return "failure"
+        }
+    }
+
     var hudNotificationMessage: String? {
+        if self == .delivering { return "Pasting…" }
         guard case .success(let message) = self else { return nil }
         return message
     }
@@ -69,7 +83,11 @@ final class AppState {
 
     var records: [TranscriptRecord] = []
     var selectedRecordID: TranscriptRecord.ID?
-    var status: AppStatus = .idle
+    var status: AppStatus = .idle {
+        didSet {
+            lifecycleLogger.info("Dictation state changed", metadata: ["event": "state_changed", "state": "\(status.diagnosticName)", "session": "\(latestRecordingSessionID?.uuidString ?? "")", "recording": "\(isRecording)", "transcribing": "\(isTranscribing)"])
+        }
+    }
     var isRecording = false
     var isTranscribing = false
     var audioLevel: Float = 0
@@ -93,13 +111,14 @@ final class AppState {
     private let logger = Logging.Logger(
         label: "agency.thatworks.WhiskerFlow.AppState"
     )
+    private let lifecycleLogger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
     private let store: TranscriptStore
     private let transcription: TranscriptionService
     private let meetingCapture: MeetingCaptureCoordinator
     private let atlasAuthSession = AtlasAuthSession()
     private let live: LiveDictationSession
     private let recordingCoordinator = RecordingCoordinator()
-    private var pasteService = PasteService()
+    private var pasteService: any TextDeliveryService
     var lastPasteReceipt: PasteDeliveryReceipt?
     var assistantVoiceInstruction = ""
     var meetingAssistant: MeetingAssistantController { meetingCapture.assistant }
@@ -128,6 +147,7 @@ final class AppState {
     private var pasteTargetApplication: NSRunningApplication?
     private var activeTranscriptionIDs: Set<UUID> = []
     private var latestRecordingSessionID: UUID?
+    private var latestDeliveryID: UUID?
     /// The shutdown-drain token each in-flight finish holds, so the watchdog can
     /// release it when it gives up on that finish instead of leaking it for the rest
     /// of the process's life.
@@ -148,7 +168,8 @@ final class AppState {
         settings: AppSettings? = nil,
         store: TranscriptStore? = nil,
         correctionStore: CorrectionStore? = nil,
-        microphonePermission: MicrophonePermissionController? = nil
+        microphonePermission: MicrophonePermissionController? = nil,
+        pasteService: (any TextDeliveryService)? = nil
     ) {
         let resolvedSettings = settings ?? AppSettings()
         let resolvedMicrophonePermission = microphonePermission ?? MicrophonePermissionController(
@@ -167,6 +188,9 @@ final class AppState {
             transcription: transcription
         )
         self.live = LiveDictationSession(transcription: transcription)
+        var defaultPasteService = PasteService()
+        defaultPasteService.correctionMonitor = correctionMonitor
+        self.pasteService = pasteService ?? defaultPasteService
         if store == nil && !UIPreview.isEnabled {
             meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant)
         }
@@ -190,7 +214,6 @@ final class AppState {
             guard let reference = row["bookmarkReference"] as? String else { throw AssistantError.message("Atlas returned an invalid bookmark receipt.") }
             return reference
         }
-        pasteService.correctionMonitor = correctionMonitor
         correctionMonitor.isEnabled = { [weak self] in
             guard let self else { return false }
             return self.settings.rememberCorrections && !UIPreview.isEnabled
@@ -222,6 +245,7 @@ final class AppState {
         case .preparingMic: return "Preparing microphone…"
         case .recording: return "Recording…"
         case .transcribing: return "Transcribing…"
+        case .delivering: return "Pasting…"
         case .success(let message): return message
         case .failure(let message): return message
         }
@@ -290,6 +314,7 @@ final class AppState {
   }
 
   var meetingStatusDetail: String { UIPreview.isEnabled ? "Visual preview. No audio is being captured or uploaded." : meetingCapture.statusDetail }
+  var meetingSpeakerDetectionDetail: String { meetingCapture.speakerDetectionDetail }
   var activeMeetingTitle: String? { UIPreview.isEnabled ? (UIPreview.isRecordingMeeting ? "Product review" : nil) : meetingCapture.activeMeetingTitle }
   var isMeetingCapturing: Bool { UIPreview.isEnabled ? UIPreview.isRecordingMeeting : meetingCapture.isCapturing }
   var isMeetingCaptureTransitioning: Bool { meetingCapture.isCaptureTransitioning }
@@ -778,7 +803,11 @@ final class AppState {
     }
 
     private func beginRecording() async {
-        guard let sessionID = recordingCoordinator.requestStart() else { return }
+        lifecycleLogger.info("Recording requested", metadata: ["event": "recording_requested"])
+        guard let sessionID = recordingCoordinator.requestStart() else {
+            lifecycleLogger.notice("Recording request blocked by active capture", metadata: ["event": "recording_rejected"])
+            return
+        }
         await Observability.tracer.spanBuilder(spanName: "dictation.start").withActiveSpan { span in
             await beginRecording(sessionID: sessionID, span: span)
         }
@@ -798,6 +827,8 @@ final class AppState {
         }
 
         latestRecordingSessionID = sessionID
+        latestDeliveryID = nil
+        lifecycleLogger.info("Recording session started", metadata: ["event": "recording_started", "session": "\(sessionID)"])
         status = .preparingMic
         logger.info("Recording preparing")
         DiagnosticsService.breadcrumb(category: "recording", metadata: ["phase": "preparing"])
@@ -959,6 +990,9 @@ final class AppState {
         reason: CaptureStopReason,
         span: any SpanBase
     ) async {
+        let finishStarted = ProcessInfo.processInfo.systemUptime
+        lifecycleLogger.info("Finishing recording", metadata: ["event": "finish_started", "session": "\(sessionID)"])
+        defer { lifecycleLogger.info("Recording finish returned", metadata: ["event": "finish_returned", "session": "\(sessionID)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - finishStarted) * 1000)"]) }
         let capturedDuration = recordingStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         var telemetryOutcome = "error"
         defer {
@@ -1018,6 +1052,7 @@ final class AppState {
         let pasteTarget = pasteTargetApplication
         pasteTargetApplication = nil
         let result = await live.finish(reason: reason)
+        lifecycleLogger.info("Live decode returned", metadata: ["event": "decode_returned", "session": "\(sessionID)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - finishStarted) * 1000)", "samples": "\(result.totalSampleCount)"])
         watchdog.cancel()
         let wasAbandoned = abandonedSessionIDs.remove(sessionID) != nil
         _ = recordingCoordinator.didFinish(sessionID)
@@ -1086,6 +1121,7 @@ final class AppState {
                 conversionFailures: result.conversionFailures,
                 capturedAudioURL: result.audioURL,
                 totalSampleCount: result.totalSampleCount,
+                stopReason: reason,
                 pasteTarget: pasteTarget,
                 configuration: configuration,
                 sessionID: sessionID
@@ -1093,8 +1129,30 @@ final class AppState {
         }
 
         if reason == .deviceDisconnected, canUpdateLifecycleUI(for: sessionID) {
-            if result.samples.isEmpty {
-                status = .failure("Microphone disconnected; try again")
+            if CapturedAudioValidation.shouldDismissEmptyDeviceInterruption(
+                stopReason: reason,
+                totalSampleCount: result.totalSampleCount
+            ) {
+                // A route rebuild can stop AVAudioEngine before its first
+                // usable buffer. It is a discarded tap, not a failed
+                // transcription; leave the next hotkey press immediately
+                // available and keep the interruption visible in diagnostics.
+                lifecycleLogger.info(
+                    "Capture discarded after microphone route interruption",
+                    metadata: [
+                        "event": "capture_discarded",
+                        "reason": "device_interruption",
+                        "conversion_failures": "\(result.conversionFailures)"
+                    ]
+                )
+                DiagnosticsService.breadcrumb(
+                    category: "recording",
+                    metadata: [
+                        "phase": "capture_discarded",
+                        "reason": "device_interruption"
+                    ]
+                )
+                status = .idle
             } else if case .failure = status {
                 // Preserve the actionable transcription/storage failure.
             } else {
@@ -1113,6 +1171,7 @@ final class AppState {
 
     private func abandonStuckFinish(sessionID: UUID) {
         guard recordingCoordinator.phase == .finishing(sessionID) else { return }
+        lifecycleLogger.warning("Recording finish timed out", metadata: ["event": "finish_timeout", "session": "\(sessionID)"])
         recordingCoordinator.forceIdle()
         // Releasing the coordinator lets a new session start on top of this one, so
         // stamp the abandoned session: whatever its finish eventually returns must
@@ -1279,14 +1338,16 @@ final class AppState {
         conversionFailures: Int,
         capturedAudioURL: URL?,
         totalSampleCount: Int,
+        stopReason: CaptureStopReason,
         pasteTarget: NSRunningApplication?,
         configuration: TranscriptionJobConfiguration,
         sessionID: UUID
     ) async {
         guard totalSampleCount > 0 else {
+            let isDeviceInterruption = stopReason == .deviceDisconnected
             // Buffers that all failed to convert look identical to silence at this
             // point, so the failure count is the only way to tell the user why.
-            if conversionFailures > 0 {
+            if conversionFailures > 0, !isDeviceInterruption {
                 logger.error(
                     "Capture yielded no usable audio",
                     metadata: ["audio.conversion.failures": "\(conversionFailures)"]
@@ -1296,14 +1357,41 @@ final class AppState {
                     category: "audio",
                     code: String(conversionFailures)
                 )
+            } else {
+                discardCapturedAudio(capturedAudioURL)
             }
             if canUpdateLifecycleUI(for: sessionID) {
-                status = .failure(
-                    conversionFailures > 0
-                        ? "Microphone audio could not be converted — try another microphone"
-                        : "No speech was detected"
-                )
+                if conversionFailures > 0, !isDeviceInterruption {
+                    status = .failure("Microphone audio could not be converted — try another microphone")
+                } else {
+                    status = .idle
+                }
             }
+            return
+        }
+
+        if conversionFailures == 0,
+           let discardReason = CapturedAudioValidation.discardReason(
+               totalSampleCount: totalSampleCount,
+               residentSamples: samples
+           ) {
+            lifecycleLogger.info(
+                "Capture discarded before transcription",
+                metadata: [
+                    "event": "capture_discarded",
+                    "reason": "\(discardReason.rawValue)",
+                    "samples": "\(totalSampleCount)"
+                ]
+            )
+            DiagnosticsService.breadcrumb(
+                category: "recording",
+                metadata: [
+                    "phase": "capture_discarded",
+                    "reason": discardReason.rawValue
+                ]
+            )
+            discardCapturedAudio(capturedAudioURL)
+            if canUpdateLifecycleUI(for: sessionID) { status = .idle }
             return
         }
         do {
@@ -1332,6 +1420,11 @@ final class AppState {
         } catch {
             handleStorageError(error, message: "Recording failed")
         }
+    }
+
+    private func discardCapturedAudio(_ url: URL?) {
+        guard let url else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     private func transcribeRecording(
@@ -1410,6 +1503,8 @@ final class AppState {
         }
 
         do {
+            let recognitionStarted = ProcessInfo.processInfo.systemUptime
+            lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "recognition", "session": "\(sessionID ?? record.id)"])
             let outcome = try await transcription.transcribe(
                 audioURL: URL(fileURLWithPath: record.audioFilePath),
                 kind: configuration.engine,
@@ -1419,11 +1514,22 @@ final class AppState {
                 allowAppleFallback: configuration.allowAppleFallback,
                 capturedSamples: capturedSamples
             )
-            let finalText = await Task.detached(priority: .userInitiated) {
-                AssistantTextProcessing.process(outcome.result.text, style: configuration.style,
+            lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "recognition", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - recognitionStarted) * 1000)"])
+            let text_processingStarted = ProcessInfo.processInfo.systemUptime
+            lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "text_processing", "session": "\(sessionID ?? record.id)"])
+            let processed = await Task.detached(priority: .userInitiated) {
+                let started = ProcessInfo.processInfo.systemUptime
+                let text = AssistantTextProcessing.process(outcome.result.text, style: configuration.style,
                     vocabulary: configuration.vocabulary, formatting: configuration.formatting,
                     recognizeCorrections: configuration.recognizeCorrections)
+                let completed = ProcessInfo.processInfo.systemUptime
+                return (text: text, workSeconds: completed - started, completed: completed)
             }.value
+            let resumed = ProcessInfo.processInfo.systemUptime
+            let finalText = processed.text
+            lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "text_processing", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((resumed - text_processingStarted) * 1000)", "worker_elapsed_ms": "\(processed.workSeconds * 1000)", "resume_delay_ms": "\(max(0, resumed - processed.completed) * 1000)"])
+            let history_saveStarted = ProcessInfo.processInfo.systemUptime
+            lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "history_save", "session": "\(sessionID ?? record.id)"])
             try store.markTranscribed(
                 id: record.id,
                 text: finalText,
@@ -1433,13 +1539,21 @@ final class AppState {
                 language: outcome.result.language,
                 rawRecognition: outcome.result.text
             )
+            lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "history_save", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - history_saveStarted) * 1000)"])
+            let ui_updateStarted = ProcessInfo.processInfo.systemUptime
+            lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "ui_update", "session": "\(sessionID ?? record.id)"])
             records = store.records
             let mayUpdateUI = canUpdateLifecycleUI(for: sessionID)
             if mayUpdateUI {
                 selectedRecordID = record.id
             }
+            lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "ui_update", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - ui_updateStarted) * 1000)"])
             if configuration.playSounds, mayUpdateUI {
+            let completion_soundStarted = ProcessInfo.processInfo.systemUptime
+            lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "completion_sound", "session": "\(sessionID ?? record.id)"])
+
                 soundService.play(.transcriptionSucceeded)
+            lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "completion_sound", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - completion_soundStarted) * 1000)"])
             }
             telemetryOutcome = "success"
             span.setAttribute(key: "transcription.actual_engine", value: outcome.engine.rawValue)
@@ -1452,6 +1566,8 @@ final class AppState {
                     "transcription.retry": "\(isRetry)"
                 ]
             )
+            activeTranscriptionIDs.remove(record.id)
+            isTranscribing = !activeTranscriptionIDs.isEmpty
             await deliver(
                 finalText,
                 pasteTarget: pasteTarget,
@@ -1530,7 +1646,7 @@ final class AppState {
     }
     #endif
 
-    private func deliver(
+    func deliver(
         _ text: String,
         pasteTarget: NSRunningApplication?,
         delivery: DeliveryMode,
@@ -1541,6 +1657,18 @@ final class AppState {
         accountIdentity: String? = nil,
         sessionID: UUID? = nil
     ) async {
+        let deliveryStarted = ProcessInfo.processInfo.systemUptime
+        let deliveryID = UUID()
+        var deliveryOutcome = "failed"
+        // Recognition has completed. Destination verification is separate work
+        // and must not keep dictation controls in their transcription state.
+        if mayUpdateStatus && canUpdateLifecycleUI(for: sessionID) {
+            latestDeliveryID = deliveryID
+            isTranscribing = false
+            status = .delivering
+        }
+        lifecycleLogger.info("Text delivery started", metadata: ["event": "paste_started", "session": "\(sessionID?.uuidString ?? "")"])
+        defer { lifecycleLogger.info("Text delivery returned", metadata: ["event": "paste_returned", "session": "\(sessionID?.uuidString ?? "")", "outcome": "\(deliveryOutcome)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - deliveryStarted) * 1000)"]) }
         if purpose != .dictation {
             switch purpose {
             case .quickCapture:
@@ -1552,17 +1680,20 @@ final class AppState {
                 assistant.message = "Instruction captured. Review it in Assistant, then generate a preview."
             case .dictation: break
             }
-            if mayUpdateStatus { status = .success(assistant.message ?? "Ready in Assistant") }
+            deliveryOutcome = "success"
+            if mayUpdateStatus && latestDeliveryID == deliveryID && canUpdateLifecycleUI(for: sessionID) { status = .success(assistant.message ?? "Ready in Assistant") }
             return
         }
         switch delivery {
         case .copyOnly:
             pasteService.copy(text)
-            if mayUpdateStatus { status = .success("Copied to clipboard") }
+            deliveryOutcome = "copied"
+            if mayUpdateStatus && latestDeliveryID == deliveryID && canUpdateLifecycleUI(for: sessionID) { status = .success("Copied to clipboard") }
         case .pasteAtCursor:
-            let receipt = await pasteService.paste(text, into: pasteTarget)
+            let receipt = await pasteService.paste(text, into: pasteTarget, replacing: nil)
+            deliveryOutcome = receipt.state.rawValue
             hasAccessibilityPermission = pasteService.hasAccessibilityPermission
-            if mayUpdateStatus && canUpdateLifecycleUI(for: sessionID) {
+            if mayUpdateStatus && latestDeliveryID == deliveryID && canUpdateLifecycleUI(for: sessionID) {
                 lastPasteReceipt = receipt
                 status = receipt.state == .failed ? .failure(receipt.message) : .success(receipt.message)
             }

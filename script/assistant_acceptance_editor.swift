@@ -3,6 +3,7 @@ import AppKit
 @main
 final class FixtureEditor: NSObject, NSApplicationDelegate {
     var window: NSWindow!
+    var editor: NSTextView!
     static func main() {
         let app = NSApplication.shared
         let delegate = FixtureEditor()
@@ -20,11 +21,19 @@ final class FixtureEditor: NSObject, NSApplicationDelegate {
         mainMenu.addItem(applicationItem)
         let editItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: NSSelectorFromString("undo:"), keyEquivalent: "z")
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = editMenu
         mainMenu.addItem(editItem)
+        let windowItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        let focusItem = NSMenuItem(title: "Bring Editor to Front", action: #selector(focusEditor), keyEquivalent: "")
+        focusItem.target = self
+        windowMenu.addItem(focusItem)
+        windowItem.submenu = windowMenu
+        mainMenu.addItem(windowItem)
         NSApp.mainMenu = mainMenu
         window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 760, height: 360), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "WhiskerFlow · Synthetic acceptance editor"
@@ -32,6 +41,8 @@ final class FixtureEditor: NSObject, NSApplicationDelegate {
         scroll.autoresizingMask = [.width, .height]
         scroll.hasVerticalScroller = true
         let text = NSTextView(frame: scroll.bounds)
+        editor = text
+        text.allowsUndo = true
         text.isRichText = false
         text.font = .systemFont(ofSize: 18)
         text.textContainerInset = NSSize(width: 20, height: 20)
@@ -43,6 +54,11 @@ final class FixtureEditor: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(text)
         text.setSelectedRange(NSRange(location: 0, length: text.string.utf16.count))
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    @objc func focusEditor() {
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(editor)
         NSApp.activate(ignoringOtherApps: true)
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

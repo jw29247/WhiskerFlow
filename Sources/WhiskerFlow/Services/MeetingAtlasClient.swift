@@ -267,12 +267,13 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
                 "speakerLabel": turn.speaker.displayName,
                 "speakerKey": turn.speaker.key,
                 "speakerDisplayName": turn.speaker.displayName,
-                "speakerResolution": turn.speaker.resolution.rawValue,
+                "speakerResolution": turn.speaker.resolution == .googleMeet ? "unknown" : turn.speaker.resolution.rawValue,
                 "speakerProvider": {
                     switch turn.speaker.resolution {
                     case .selfSpeaker: return "whisperkit"
                     case .diarized, .unknown: return "speakerkit"
-                    case .googleMeet, .manual: return "speakerkit"
+                    case .googleMeet: return "google_meet"
+                    case .manual: return "manual"
                     }
                 }(),
                 "startMs": turn.startMs,

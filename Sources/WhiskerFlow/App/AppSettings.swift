@@ -67,8 +67,17 @@ final class AppSettings {
     }
 
     func cacheMeetingSchedule(_ intents: [AtlasCaptureScheduleIntent]) {
+        let bounded = Array(intents.prefix(50))
+        // Polling unchanged schedules must not repeatedly invoke preferences KVO
+        // and persistence on the UI thread. Compare decoded values, since JSON
+        // object key ordering is not stable between encodes.
+        if let existing = defaults.data(forKey: Keys.cachedMeetingSchedule),
+           let cached = try? JSONDecoder().decode([AtlasCaptureScheduleIntent].self, from: existing),
+           cached == bounded {
+            return
+        }
         do {
-            let data = try JSONEncoder().encode(Array(intents.prefix(50)))
+            let data = try JSONEncoder().encode(bounded)
             defaults.set(data, forKey: Keys.cachedMeetingSchedule)
             persistenceError = nil
         } catch {

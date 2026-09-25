@@ -43,6 +43,7 @@ struct MeetingsView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(appState.activeMeetingTitle ?? "Meeting in progress").font(.headline)
                                 Text(appState.meetingStatusDetail).font(.callout).foregroundStyle(FlowStyle.muted)
+                                Text(appState.meetingSpeakerDetectionDetail).font(.caption).foregroundStyle(FlowStyle.muted)
                             }
                             Spacer()
                             Text("RECORDING").font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(FlowStyle.recording)
@@ -206,7 +207,7 @@ struct MeetingSetupView: View {
                     }
                 }
             }
-            Text("macOS calls this Screen Recording access. WhiskerFlow captures audio, never screen images.")
+            Text("macOS calls this Screen Recording access. WhiskerFlow captures meeting audio and checks the Meet window locally for speaker indicators. Screen images are never saved or uploaded.")
                 .font(.caption).foregroundStyle(FlowStyle.muted)
             Button("Check permissions again") {
                 appState.refreshMicrophonePermission()

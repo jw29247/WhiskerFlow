@@ -8,6 +8,7 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        .executable(name: "WhiskerFlowMeetBridge", targets: ["WhiskerFlowMeetBridge"]),
         .executable(name: "WhiskerFlow", targets: ["WhiskerFlow"]),
         .library(name: "WhiskerFlowCore", targets: ["WhiskerFlowCore"]),
         .library(name: "WhiskerFlowAppSupport", targets: ["WhiskerFlowAppSupport"])
@@ -38,6 +39,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.3")
     ],
     targets: [
+        .executableTarget(name: "WhiskerFlowMeetBridge", dependencies: ["WhiskerFlowAppSupport"]),
         .target(name: "WhiskerFlowCore"),
         .target(
             name: "WhiskerFlowAppSupport",

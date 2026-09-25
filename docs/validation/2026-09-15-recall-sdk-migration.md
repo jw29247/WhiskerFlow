@@ -1,0 +1,47 @@
+# Recall Desktop SDK migration assessment
+
+Research date: 15 September 2026. Primary-source review only; no SDK installed, account accessed, application code changed, or live recording tested.
+
+## Updated recommendation: on-device transcription constraint
+
+Jacob subsequently stated that transcription must not go off device. **Keep WhiskerFlow's local ASR and do not enable Recall recording yet.** Recall can deliver mixed raw audio and participant events to a local callback, so local ASR is technically possible, but this does not prove the meeting audio stays on device. The documented recording API requires an upload token and the current lifecycle streams captured data to Recall. No supported configuration for suppressing uploads while retaining local audio plus named participant events was found in the current methods, overview or additional configurations. Turning off Recall transcription is not equivalent to disabling media upload. A vendor-confirmed no-upload mode would be required before claiming compatibility with a strict on-device media requirement. Raw Media beta is explicitly remote and excluded. [Methods](https://docs.recall.ai/docs/desktop-recording-sdk-methods), [lifecycle and callbacks](https://docs.recall.ai/docs/desktop-sdk), [additional configurations](https://docs.recall.ai/docs/specialized-configurations)
+
+## Feasibility if cloud recording is acceptable
+
+Pilot Recall for **meeting recording only**, retaining WhiskerFlow's native Swift UI and independent dictation path. A single installer is feasible: Recall explicitly documents bundling an official self-contained Node runtime, the SDK and its native binaries/frameworks inside a Swift app, controlled through `Process`/`Pipe` IPC. Team members would not install Node or a Chrome extension separately. This is an integration, not a drop-in Swift framework. Preserve SDK resource layout; do not copy Homebrew Node or collapse the package into a standalone script. [Native integration guide](https://docs.recall.ai/docs/integrating-with-non-electron-apps)
+
+## Product constraints that matter
+
+| Area | Verified position |
+| --- | --- |
+| Meet and machines | Chrome Meet is supported; **Meet PWA and Companion Mode are unsupported**, including in the stable SDK. macOS requires Apple Silicon and 13+. Audio-only recording requires macOS 14.2+. Intel Macs need another path. [Support matrix](https://docs.recall.ai/docs/dsdk-supported-platforms), [audio-only](https://docs.recall.ai/docs/audio-only) |
+| Captions and names | Recall uses OS accessibility for participant metadata and speaker activity. Speaker-timeline diarization maps platform activity to transcript text; Google Meet supports that mechanism without a documented CC prerequisite. Use audio transcription rather than the optional caption-transcription provider. Speaker timelines can miss changes or misattribute overlap/noise: four named speakers must still be verified in a live trial. [SDK FAQ](https://docs.recall.ai/docs/desktop-recording-sdk-faq), [diarization](https://docs.recall.ai/docs/diarization) |
+| Background visibility | On macOS, Meet detection requires the tab to be displayed or Meet picture-in-picture visible. Hidden tabs without PIP cannot be assumed supported. Video also fails when minimized or in a hidden fullscreen Space; a covering window is allowed. These are vendor limitations, not proof that audio-only naming fails in every such case. Test each state explicitly. [SDK FAQ](https://docs.recall.ai/docs/desktop-recording-sdk-faq) |
+| Network and data flow | Standard DSDK is not an offline-only recorder: backend creates an SDK upload token, capture streams to Recall, completion arrives by webhook, and transcription is optional. Offline recording is unsupported; losing the network ends recording without automatic restart. Local-only existing recovery guarantees must not be silently removed. [Lifecycle](https://docs.recall.ai/docs/desktop-sdk), [2.0 changelog](https://docs.recall.ai/docs/dsdk-changelog), [SDK FAQ](https://docs.recall.ai/docs/desktop-recording-sdk-faq) |
+| Audio and resource use | Audio-only produces MP3 rather than MP4 and uses fewer local resources. It still needs microphone, accessibility and system-audio permissions plus `NSAudioCaptureUsageDescription`; screen-capture permission is unnecessary for this mode. Standard DSDK does not expose separate participant audio streams. No measured WhiskerFlow CPU/memory/latency improvement is established. [Audio-only](https://docs.recall.ai/docs/audio-only), [SDK FAQ](https://docs.recall.ai/docs/desktop-recording-sdk-faq) |
+| Distribution | Direct signed/notarized distribution is supported. Mac App Store distribution is unsupported because SDK features conflict with sandboxing. Native components must be present on disk and signed; validate the complete Swift bundle early rather than assuming Electron's published signing recipe applies unchanged. [Publishing guide](https://docs.recall.ai/docs/publishing-your-app) |
+| Cost | Published pay-as-you-go recording is **$0.50/hour**, built-in transcription an additional **$0.15/hour** (combined $0.65/hour). Third-party transcription can be billed separately. Seven days of storage are included; extended storage is $0.05 per recorded hour retained for 30 days. First five recording hours are free. Prices exclude Atlas/notes costs. [Pricing](https://www.recall.ai/pricing), [pricing explanation](https://www.recall.ai/blog/new-recall-ai-pricing-for-2026) |
+
+The current npm `latest` tag is **2.0.31**, published 9 September 2026, requiring Node >=18. The changelog dates that release 8 September and includes Google Meet participant-name and screenshare-tile fixes. Pin the stable version for the pilot, not the nightly channel. Registry's 60,433-byte package size covers only its small npm wrapper and must not be treated as the installed app size. [Registry metadata](https://registry.npmjs.org/@recallai%2fdesktop-sdk), [changelog](https://docs.recall.ai/docs/dsdk-changelog)
+
+## Raw Media beta is a separate option
+
+Recall also offers workspace-enabled **Raw Media beta**, which captures meeting media remotely and claims reduced local CPU/memory usage. It retains the SDK lifecycle and can fall back to local capture. Meet supports specified Chromium browsers, but excludes Chrome Beta, Safari and Meet PWA. Browser automation must be enabled before a call; setup can restart the browser and is intended to be initiated through an explicit user action. This is not equivalent to the standard accessibility/audio-only setup and is not the default pilot recommendation. Confirm workspace availability before designing around it. [Raw Media beta](https://docs.recall.ai/docs/desktop-recording-sdk-raw-media)
+
+## Conditional pilot and release gate
+
+The following remains a prepared migration approach, **not authorization to upload audio**. Resolve the on-device constraint before a Recall recording trial.
+
+1. Package the stable SDK and official Node runtime in a separate signed candidate, behind a meeting-provider switch. Use bounded asynchronous IPC and sidecar lifecycle recovery; SDK work must not block the Swift main thread or dictation completion.
+2. Add an owner-authenticated Atlas SDK-upload endpoint and completion handling. Keep the Recall API key on the backend. The parent investigation reports existing Recall bot integration in Atlas, but that does not establish SDK-upload support or current credentials. Select region and retention explicitly before real meeting audio leaves the device.
+3. Run one controlled four-person **Chrome tab** call with CC off, audio-only, WhiskerFlow's window closed. Exercise Meet PIP, tab switching, screenshare, participant join/leave, overlapping speech and a brief network loss. Verify real transcript text against each speaker, not just roster names or event counts.
+4. Prove recording completion, one Atlas meeting record, transcript, named turns, notes, idempotent webhook replay and error recovery. Measure dictation stop-to-paste latency, UI responsiveness, CPU and memory against the current build. Do not remove the existing recovery path until the pilot passes.
+
+Blocking unknowns: current Recall workspace/API readiness and region, signed sidecar permission attribution on a clean team Mac, actual Chrome-tab/PIP speaker accuracy, cloud data handling choice, and measured impact on the reported window-opening stall. Changing recording infrastructure alone does not prove that stall fixed.
+
+
+## Final user decision — native implementation, not an SDK migration
+
+Jacob clarified: use the principles behind Recall speaker recognition, not its SDK. Speech-to-text stays on device. Implement native accessibility-based participant/activity observations inside WhiskerFlow and correlate timestamped activity with local transcript segments. No Recall dependency, upload token, cloud transcription, or Raw Media integration. Existing authorised Atlas sync remains separate.
+
+Chrome's current native accessibility surface was inspected: no active Meet was available. This provides no current speaker-marker evidence. Next step is a live Meet inspection with CC off, validating accessible identity and speaking-state transitions. Do not invent selectors, treat visible roster names as speech evidence, or claim working speaker recognition from the vendor documentation. Preserve the existing conservative interval matcher and encrypted evidence store; the native reader should run bounded off-main work and avoid all full-tree scans on the dictation executor.
