@@ -3,7 +3,7 @@ import WhiskerFlowCore
 
 struct ContentView: View {
     @Bindable var appState: AppState
-    @State private var destination: FlowDestination = .dictate
+    @State private var destination: FlowDestination = UIPreview.screen == "styles" ? .assistant : .dictate
     @State private var showOnboarding = false
     @State private var draft = TranscriptDraft()
     @State private var selectedSnapshot: TranscriptRecord?
@@ -70,6 +70,7 @@ struct ContentView: View {
                 if appState.records.isEmpty && DictationPresentation(appState: appState).needsSetup {
                     showOnboarding = true
                 }
+                UIPreview.writeSnapshotIfRequested()
             }
         }
         .onChange(of: appState.settings.showDockIcon) { _, _ in appState.applyActivationPolicy() }

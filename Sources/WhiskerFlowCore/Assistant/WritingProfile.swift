@@ -1,3 +1,5 @@
+/// The per-app styles WhiskerFlow shipped before app categories. Kept so saved
+/// profiles still decode and migrate into `AppStyleOverride`s unchanged.
 public enum WritingStyle: String, Codable, CaseIterable, Sendable {
     case standard
     case conversational

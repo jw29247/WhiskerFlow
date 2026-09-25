@@ -21,6 +21,42 @@ enum UIPreview {
         guard isEnabled else { return nil }
         return ProcessInfo.processInfo.arguments.contains("--ui-dark") ? .dark : .light
     }
+    /// `--ui-screen=styles` opens Assistant → Styles; `dictate-style` shows the
+    /// Dictate screen after a styled dictation.
+    static var screen: String? {
+        guard isEnabled else { return nil }
+        return ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--ui-screen=") }).map { String($0.dropFirst("--ui-screen=".count)) }
+    }
+    /// `--ui-snapshot=<path.png>` writes the main window to a PNG once it has
+    /// settled, so screenshots don't need Screen Recording permission.
+    static func writeSnapshotIfRequested() {
+        guard isEnabled, let path = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--ui-snapshot=") })
+            .map({ String($0.dropFirst("--ui-snapshot=".count)) }) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 700 }),
+                  let view = window.contentView?.superview ?? window.contentView, let layer = view.layer else { return }
+            let scale = window.backingScaleFactor
+            let size = view.bounds.size
+            guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale),
+                                                pixelsHigh: Int(size.height * scale), bitsPerSample: 8, samplesPerPixel: 4,
+                                                hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+                  let context = NSGraphicsContext(bitmapImageRep: bitmap)?.cgContext else { return }
+            context.scaleBy(x: scale, y: scale)
+            layer.render(in: context)
+            try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            // Scroll content isn't part of the window's layer render: also write
+            // the largest scroll view's whole document beside it.
+            func scrollViews(in view: NSView) -> [NSScrollView] {
+                (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews(in:))
+            }
+            if let document = scrollViews(in: view).max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })?.documentView,
+               let page = document.bitmapImageRepForCachingDisplay(in: document.bounds) {
+                document.cacheDisplay(in: document.bounds, to: page)
+                try? page.representation(using: .png, properties: [:])?
+                    .write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-content.png")))
+            }
+        }
+    }
     static var isPaired: Bool { mode != "disconnected" && mode != "setup" }
     static var isRecordingMeeting: Bool { mode == "meeting-recording" }
 
@@ -58,6 +94,10 @@ enum UIPreview {
             if mode == "error" { state.status = .failure("The microphone disconnected. Choose an available microphone in Settings.") }
             if mode == "recording" { state.isRecording = true; state.status = .recording; state.audioLevel = 0.16; state.liveText = "This is a preview of your words as you speak." }
             if mode == "transcribing" { state.isTranscribing = true; state.status = .transcribing }
+            if screen == "dictate-style" {
+                state.lastWritingStyle = DictationStyleReceipt(
+                    resolution: .init(category: .email, tone: .formal, source: .website), appName: "Safari")
+            }
             return state
         }
         #endif

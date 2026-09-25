@@ -37,7 +37,12 @@ final class AssistantController {
         var accountIdentity: String?
         var cloudEnabled = false
         var recognizeCorrections = true
+        /// Pre-category per-app styles. Read only to migrate; kept on disk so an
+        /// older build still finds them.
         var profiles: [WritingProfile] = []
+        /// Nil until the user first edits a style; until then the profiles above
+        /// are migrated on every read, so nothing changes for them.
+        var writingStyles: WritingStylePreferences?
         var clients: [AssistantClientProfile] = []
         var clientVocabulary: [String: Vocabulary] = [:]
         var clientCustomVocabulary: [String: Vocabulary]?
@@ -129,15 +134,20 @@ final class AssistantController {
     func setCloudEnabled(_ value: Bool) { update { $0.cloudEnabled = value } }
     func setRecognizeCorrections(_ value: Bool) { update { $0.recognizeCorrections = value } }
     func selectClient(_ reference: String?) { update { $0.selectedClient = reference } }
-    func setProfile(bundleIdentifier: String, style: WritingStyle) {
-        guard !bundleIdentifier.isEmpty, bundleIdentifier.count <= 200 else { return }
-        update { state in
-            state.profiles.removeAll { $0.bundleIdentifier == bundleIdentifier }
-            if style != .standard, state.profiles.count < 200 { state.profiles.append(.init(bundleIdentifier: bundleIdentifier, style: style)) }
-        }
+    var writingStyles: WritingStylePreferences {
+        saved.writingStyles ?? WritingStylePreferences(migrating: saved.profiles)
     }
-    func style(for bundleIdentifier: String?) -> WritingStyle {
-        saved.profiles.first { $0.bundleIdentifier == bundleIdentifier }?.style ?? .standard
+    /// How dictation into `context` is written. The single entry point for any
+    /// feature that needs a destination's category.
+    func resolveWritingStyle(_ context: AppContext) -> WritingStyleResolution {
+        writingStyles.resolve(context)
+    }
+    func editWritingStyles(_ edit: (inout WritingStylePreferences) -> Void) {
+        update { state in
+            var styles = state.writingStyles ?? WritingStylePreferences(migrating: state.profiles)
+            edit(&styles)
+            state.writingStyles = styles
+        }
     }
     var vocabulary: Vocabulary {
         guard let client = saved.selectedClient else { return Vocabulary() }

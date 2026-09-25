@@ -8,6 +8,9 @@ transcribes locally and pastes the text wherever your cursor is.
   account. Operational telemetry excludes audio and transcript text.
 - **Zero-setup install** — no Python, no Homebrew Whisper. The model downloads itself on first use.
 - **Works offline too** — a built-in Apple Speech engine needs no download at all.
+- **Styles by app category** — dictation into Messages, Slack, Mail, code editors, AI chats and documents
+  is written in that category's tone (Formal, Casual, Very casual or Literal). Browsers are sorted by the
+  website you're on. Change tones, or move individual apps, in **Assistant → Styles**; all rules run on this Mac.
 - **Floating HUD** with a live level meter, a rich menu-bar popover, searchable/editable
   history, custom-vocabulary replacement, configurable hotkey, and hold-to-talk or tap-to-toggle modes.
 

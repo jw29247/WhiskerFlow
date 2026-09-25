@@ -65,7 +65,8 @@ final class AppState {
         let allowAppleFallback: Bool
         let delivery: DeliveryMode
         let playSounds: Bool
-        var style: WritingStyle = .standard
+        /// Resolved from the app at key press; a browser's tab can refine it at release.
+        var writing = WritingStyleResolution(category: .other, tone: .formal, source: .fallback)
         var recognizeCorrections = false
         var purpose: AssistantController.CapturePurpose = .dictation
         var quickKind: AssistantRecordKind = .note
@@ -156,6 +157,11 @@ final class AppState {
     private var hasStarted = false
     private var recordingIntentActive = false
     private var pasteTargetApplication: NSRunningApplication?
+    /// The browser-tab read for the current recording. Accessibility IPC can be
+    /// slow, so it runs beside the recording and is applied at formatting time.
+    private var websiteLookup: Task<AppContext, Never>?
+    /// How the latest dictation was written, shown on the Dictate screen.
+    var lastWritingStyle: DictationStyleReceipt?
     private var activeTranscriptionIDs: Set<UUID> = []
     private var latestRecordingSessionID: UUID?
     private var latestDeliveryID: UUID?
@@ -540,7 +546,8 @@ final class AppState {
                 status: .failed(errorMessage: "WhiskerFlow quit before transcription finished. Retry this recording."),
                 model: pending.configuration.model.rawValue,
                 engine: pending.configuration.engine.rawValue,
-                language: pending.configuration.language
+                language: pending.configuration.language,
+                appCategory: pending.configuration.writing.category
             )
             do {
                 try store.add(record)
@@ -891,6 +898,10 @@ final class AppState {
         var configuration = makeTranscriptionConfiguration()
         configuration.deliversText = false
         configuration.purpose = .dictation
+        // The app is long gone: write the retry for the category it was dictated
+        // into, or — for a recording from before categories — as it was then.
+        configuration.writing = record.appCategory.map(assistant.writingStyles.resolve(category:))
+            ?? WritingStyleResolution(category: .other, tone: .legacyStandard, source: .fallback)
         await transcribeRecording(
             record,
             pasteTarget: nil,
@@ -1024,6 +1035,7 @@ final class AppState {
         // Before the microphone: the warm-up runs on the Neural Engine while
         // capture starts on the main actor.
         startDictationWarmUp(sessionID: sessionID)
+        startWebsiteLookup()
         updateDictationActivity()
         defer { updateDictationActivity() }
         var telemetryOutcome = "error"
@@ -1095,7 +1107,8 @@ final class AppState {
             span.setAttributes([
                 "transcription.engine": .string(configuration.engine.rawValue),
                 "transcription.model": .string(configuration.model.rawValue),
-                "recording.mode": .string(String(describing: settings.recordingMode))
+                "recording.mode": .string(String(describing: settings.recordingMode)),
+                "writing.category": .string(configuration.writing.category.rawValue)
             ])
             activeRecordingConfiguration = configuration
             assistant.capturePurpose = .dictation
@@ -1117,7 +1130,7 @@ final class AppState {
                         vocabulary: configuration.vocabulary,
                         formatting: configuration.formatting,
                         streaming: streamingActive,
-                        style: configuration.style,
+                        tone: configuration.writing.tone,
                         recognizeCorrections: configuration.recognizeCorrections,
                         previewEngine: settings.liveTranscription ? configuration.engine : nil
                     )
@@ -1272,10 +1285,19 @@ final class AppState {
 
         let wasStreaming = streamingActive
         streamingActive = false
-        let configuration = activeRecordingConfiguration ?? makeTranscriptionConfiguration()
+        var configuration = activeRecordingConfiguration ?? makeTranscriptionConfiguration()
         activeRecordingConfiguration = nil
         let pasteTarget = pasteTargetApplication
         pasteTargetApplication = nil
+        if let lookup = websiteLookup {
+            // Normally finished long ago; bounded by the reader's own budget.
+            websiteLookup = nil
+            configuration.writing = assistant.resolveWritingStyle(await lookup.value)
+            live.setTone(configuration.writing.tone)
+        }
+        if configuration.purpose == .dictation {
+            lastWritingStyle = DictationStyleReceipt(resolution: configuration.writing, appName: pasteTarget?.localizedName)
+        }
         if let url = live.currentAudioURL {
             inFlightFinishAudio[sessionID] = (url, configuration)
         }
@@ -1519,6 +1541,7 @@ final class AppState {
         let model = configuration.model.rawValue
         let engine = configuration.engine.rawValue
         let language = configuration.language
+        let category = configuration.writing.category
         guard let url = capturedAudioURL else {
             handleStorageError(CocoaError(.fileNoSuchFile), message: "Could not save recording")
             return
@@ -1554,6 +1577,7 @@ final class AppState {
                         model: model,
                         engine: engine,
                         language: language,
+                        category: category,
                         sessionID: sessionID
                 ) ?? false
                 if saved {
@@ -1576,6 +1600,7 @@ final class AppState {
         model: String,
         engine: String,
         language: String?,
+        category: AppCategory,
         sessionID: UUID
     ) -> Bool {
         let record = TranscriptRecord(
@@ -1588,7 +1613,8 @@ final class AppState {
             engine: engine,
             language: language,
             updatedAt: createdAt,
-            rawRecognition: rawText
+            rawRecognition: rawText,
+            appCategory: category
         )
         do {
             try store.add(record)
@@ -1614,7 +1640,8 @@ final class AppState {
             durationSeconds: Double(totalSampleCount) / 16_000,
             model: configuration.model.rawValue,
             engine: configuration.engine.rawValue,
-            language: configuration.language
+            language: configuration.language,
+            appCategory: configuration.writing.category
         )
         do {
             try store.add(record)
@@ -1639,7 +1666,8 @@ final class AppState {
                 model: configuration.model.rawValue,
                 engine: configuration.engine.rawValue,
                 language: configuration.language,
-                rawRecognition: rawText
+                rawRecognition: rawText,
+                appCategory: configuration.writing.category
             )
         } catch {
             noteHistoryFailure(error)
@@ -1729,7 +1757,8 @@ final class AppState {
             durationSeconds: Double(totalSampleCount) / 16_000,
             model: configuration.model.rawValue,
             engine: configuration.engine.rawValue,
-            language: configuration.language
+            language: configuration.language,
+            appCategory: configuration.writing.category
         )
         // History is best-effort here: the audio is on disk and the recognizer
         // does not need the record, so a full disk or an unwritable history must
@@ -1864,7 +1893,7 @@ final class AppState {
             lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "text_processing", "session": "\(sessionID ?? record.id)"])
             let processed = await Task.detached(priority: .userInitiated) {
                 let started = ProcessInfo.processInfo.systemUptime
-                let text = AssistantTextProcessing.process(outcome.result.text, style: configuration.style,
+                let text = AssistantTextProcessing.process(outcome.result.text, tone: configuration.writing.tone,
                     vocabulary: configuration.vocabulary, formatting: configuration.formatting,
                     recognizeCorrections: configuration.recognizeCorrections)
                 let completed = ProcessInfo.processInfo.systemUptime
@@ -1884,7 +1913,8 @@ final class AppState {
                     model: configuration.model.rawValue,
                     engine: outcome.engine.rawValue,
                     language: outcome.result.language,
-                    rawRecognition: outcome.result.text
+                    rawRecognition: outcome.result.text,
+                    appCategory: configuration.writing.category
                 )
             } catch {
                 // A recognized transcript is still delivered; only History missed it.
@@ -2108,6 +2138,19 @@ final class AppState {
         if receipt.state == .verified { assistant.clearSelection() }
     }
 
+    /// Starts reading the target browser's tab without delaying the microphone.
+    private func startWebsiteLookup() {
+        websiteLookup?.cancel()
+        websiteLookup = nil
+        guard let target = pasteTargetApplication,
+              assistant.writingStyles.needsWebsiteLookup(bundleIdentifier: target.bundleIdentifier) else { return }
+        let bundleIdentifier = target.bundleIdentifier
+        let pid = target.processIdentifier
+        websiteLookup = Task.detached(priority: .userInitiated) {
+            AppContextReader.readBrowser(bundleIdentifier: bundleIdentifier, pid: pid)
+        }
+    }
+
     private func makeTranscriptionConfiguration() -> TranscriptionJobConfiguration {
         let accountReady = assistant.synchronizeAccount()
         return TranscriptionJobConfiguration(
@@ -2120,7 +2163,7 @@ final class AppState {
             allowAppleFallback: settings.allowAppleFallback,
             delivery: settings.delivery,
             playSounds: settings.playSounds,
-            style: assistant.style(for: pasteTargetApplication?.bundleIdentifier),
+            writing: assistant.resolveWritingStyle(AppContext(bundleIdentifier: pasteTargetApplication?.bundleIdentifier)),
             recognizeCorrections: assistant.saved.recognizeCorrections,
             purpose: assistant.capturePurpose,
             quickKind: assistant.quickCaptureKind,
@@ -2245,5 +2288,23 @@ extension TranscriptStore {
             fileURL: root.appendingPathComponent("transcripts.json"),
             recordingsDirectory: AudioFileWriter.recordingsDirectoryURL()
         )
+    }
+}
+
+/// How one dictation was written, for the Dictate screen.
+struct DictationStyleReceipt: Equatable {
+    var resolution: WritingStyleResolution
+    var appName: String?
+}
+
+extension DictationStyleReceipt {
+    var description: String {
+        let style = "\(resolution.category.displayName) · \(resolution.tone.displayName)"
+        guard let appName else { return "Written as \(style)" }
+        switch resolution.source {
+        case .website: return "Written as \(style) for a website in \(appName)"
+        case .appOverride: return "Written as \(style) · your setting for \(appName)"
+        case .builtInApp, .fallback: return "Written as \(style) for \(appName)"
+        }
     }
 }

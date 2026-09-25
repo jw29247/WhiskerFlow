@@ -33,6 +33,8 @@ public struct TranscriptRecord: Codable, Equatable, Hashable, Identifiable, Send
     public var engine: String?
     public var language: String?
     public var updatedAt: Date?
+    /// The app category the dictation was written for, for per-category insights.
+    public var appCategory: AppCategory?
 
     public init(
         id: UUID = UUID(),
@@ -45,7 +47,8 @@ public struct TranscriptRecord: Codable, Equatable, Hashable, Identifiable, Send
         engine: String? = nil,
         language: String? = nil,
         updatedAt: Date? = nil,
-        rawRecognition: String? = nil
+        rawRecognition: String? = nil,
+        appCategory: AppCategory? = nil
     ) {
         self.id = id
         self.text = text
@@ -58,6 +61,7 @@ public struct TranscriptRecord: Codable, Equatable, Hashable, Identifiable, Send
         self.engine = engine
         self.language = language
         self.updatedAt = updatedAt
+        self.appCategory = appCategory
     }
 
     public var wordCount: Int { text.transcriptWordCount }
@@ -206,7 +210,8 @@ public final class TranscriptStore {
         model: String? = nil,
         engine: String? = nil,
         language: String? = nil,
-        rawRecognition: String? = nil
+        rawRecognition: String? = nil,
+        appCategory: AppCategory? = nil
     ) throws {
         guard let index = records.firstIndex(where: { $0.id == id }) else { return }
 
@@ -218,6 +223,7 @@ public final class TranscriptStore {
         if let model { records[index].model = model }
         if let engine { records[index].engine = engine }
         if let language { records[index].language = language }
+        if let appCategory { records[index].appCategory = appCategory }
         try persist()
     }
 

@@ -207,8 +207,7 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Toggle("Capitalise sentences", isOn: $appState.settings.formatting.capitalizeSentences)
-                Text("Uppercase the first letter of each sentence and line.")
+                Text("Capitalisation and end punctuation follow each app category's tone in Assistant → Styles.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
