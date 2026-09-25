@@ -122,6 +122,24 @@ final class TranscriptStoreMigrationTests: XCTestCase {
         XCTAssertEqual(again.records.map(\.id), [failed.id])
     }
 
+    func testAppCategoryRoundTripsThroughTheDatabaseAndLegacyImport() throws {
+        let legacy = TranscriptRecord(text: "old", audioFilePath: "", createdAt: Date().addingTimeInterval(-60),
+                                      status: .transcribed, appCategory: .email)
+        try JSONEncoder.whiskerFlow.encode([legacy]).write(to: jsonURL)
+        let store = TranscriptStore(fileURL: jsonURL)
+        try store.load()
+        let pending = TranscriptRecord(text: "", audioFilePath: "", status: .transcribing, appCategory: .code)
+        try store.add(pending)
+        try store.markTranscribed(id: pending.id, text: "new", appCategory: .aiPrompts)
+        try store.add(TranscriptRecord(text: "none", audioFilePath: "", status: .transcribed))
+
+        let reloaded = TranscriptStore(fileURL: jsonURL)
+        try reloaded.load()
+        XCTAssertEqual(reloaded.records.first { $0.id == legacy.id }?.appCategory, .email)
+        XCTAssertEqual(reloaded.records.first { $0.id == pending.id }?.appCategory, .aiPrompts)
+        XCTAssertNil(reloaded.records.first { $0.text == "none" }?.appCategory)
+    }
+
     // MARK: - Scale
 
     private func largeHistory(count: Int, now: Date) -> [TranscriptRecord] {
