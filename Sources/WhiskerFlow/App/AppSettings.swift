@@ -57,6 +57,14 @@ final class AppSettings {
     /// Carries the dictation language (not persisted) so filler removal can
     /// skip languages the English filler list doesn't fit.
     var formatting: FormattingOptions { didSet { persist(formatting, key: Keys.formatting) } }
+    /// Apply changes through `AppState.setHistoryRetention(_:)`, which also prunes.
+    var historyRetention: HistoryRetention {
+        didSet { defaults.set(historyRetention.rawValue, forKey: Keys.historyRetention) }
+    }
+    /// The user's own typing speed, for Insights' time-saved estimate.
+    var typingWordsPerMinute: Int {
+        didSet { defaults.set(typingWordsPerMinute, forKey: Keys.typingWordsPerMinute) }
+    }
 
     /// Atlas is the production service used by Meeting Mode. The connection
     /// token returned after Clerk sign-in remains in Keychain.
@@ -185,6 +193,11 @@ final class AppSettings {
         var initialFormatting = Self.loadFormatting(from: defaults) ?? FormattingOptions()
         initialFormatting.language = initialLanguage
         formatting = initialFormatting
+        historyRetention = Self.migratedHistoryRetention(from: defaults)
+        let storedTypingSpeed = defaults.object(forKey: Keys.typingWordsPerMinute) as? Int
+        typingWordsPerMinute = storedTypingSpeed.map {
+            min(max($0, InsightsSummary.typingWordsPerMinuteRange.lowerBound), InsightsSummary.typingWordsPerMinuteRange.upperBound)
+        } ?? InsightsSummary.defaultTypingWordsPerMinute
         defaults.removeObject(forKey: Keys.atlasBaseURL)
         // Meeting Mode is an opt-in capture surface. Existing installs must not
         // begin recording or download the large local meeting model until the
@@ -296,6 +309,16 @@ final class AppSettings {
         return "en"
     }
 
+    /// History used to be fixed at 30 days and 25 records. New and existing
+    /// installs both start at 90 days: every record an existing user has is
+    /// younger than that, so the migration deletes nothing. Written through so a
+    /// later default change can't silently shorten an existing user's history.
+    private static func migratedHistoryRetention(from defaults: UserDefaults) -> HistoryRetention {
+        if let stored = defaults.string(forKey: Keys.historyRetention).flatMap(HistoryRetention.init) { return stored }
+        defaults.set(HistoryRetention.defaultValue.rawValue, forKey: Keys.historyRetention)
+        return .defaultValue
+    }
+
     private static func loadFormatting(from defaults: UserDefaults) -> FormattingOptions? {
         guard let data = defaults.data(forKey: Keys.formatting) else { return nil }
         return try? JSONDecoder().decode(FormattingOptions.self, from: data)
@@ -340,6 +363,8 @@ final class AppSettings {
         static let biasWhisperKit = "dictionaryBiasWhisperKit"
         static let biasParakeet = "dictionaryBiasParakeet"
         static let formatting = "formattingOptions"
+        static let historyRetention = "historyRetention"
+        static let typingWordsPerMinute = "typingWordsPerMinute"
         static let sharedVocabularyURL = "sharedVocabularyURL"
         static let launchAtLogin = "launchAtLogin"
         static let atlasBaseURL = "atlasBaseURL"

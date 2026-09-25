@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
@@ -55,6 +56,21 @@ enum UIPreview {
                 try? page.representation(using: .png, properties: [:])?
                     .write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-content.png")))
             }
+        }
+    }
+    /// `--ui-settings=History` opens Settings on that category.
+    static var settingsCategory: String? { argument("--ui-settings=") }
+    /// With `--ui-settings=` and `--ui-snapshot=<path.png>`, also writes the
+    /// Settings window beside the main snapshot as `-settings.png`.
+    static func writeSettingsSnapshotIfRequested() {
+        guard settingsCategory != nil, let path = argument("--ui-snapshot=") else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title.hasSuffix("Settings") }),
+                  let view = window.contentView?.superview ?? window.contentView,
+                  let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try? bitmap.representation(using: .png, properties: [:])?
+                .write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-settings.png")))
         }
     }
     static var isPaired: Bool { mode != "disconnected" && mode != "setup" }
@@ -128,6 +144,7 @@ enum UIPreview {
             state.meetingModelState = .ready
             state.hasAccessibilityPermission = mode != "setup"
             state.hasScreenRecordingPermission = mode != "setup"
+            if mode != "empty" && mode != "setup" { addSampleInsights(to: state) }
             if mode == "error" { state.status = .failure("The microphone disconnected. Choose an available microphone in Settings.") }
             if mode == "recording" { state.isRecording = true; state.status = .recording; state.audioLevel = 0.16; state.liveText = "This is a preview of your words as you speak." }
             if mode == "transcribing" { state.isTranscribing = true; state.status = .transcribing }
@@ -178,6 +195,36 @@ enum UIPreview {
         let store = DictionaryStore()
         store.update { $0 = dictionary }
         return (store, corrections)
+    }
+
+    /// Six weeks of made-up counts (no text) so Insights has something to show.
+    private static func addSampleInsights(to state: AppState) {
+        let apps = ["com.apple.TextEdit", "com.apple.Safari", "com.apple.Notes", "com.apple.MobileSMS", "com.apple.mail"]
+        var seed: UInt64 = 0x5EED
+        func next(_ bound: Int) -> Int {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Int((seed >> 33) % UInt64(bound))
+        }
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        for dayOffset in 0..<42 where dayOffset < 9 || next(5) > 0 {
+            guard let day = calendar.date(byAdding: .day, value: -dayOffset, to: today) else { continue }
+            let weekday = calendar.component(.weekday, from: day)
+            let busy = weekday != 1 && weekday != 7
+            for _ in 0..<(busy ? 3 + next(9) : next(3)) {
+                let hour = [9, 9, 10, 10, 11, 11, 14, 15, 16, 17, 20, 22][next(12)]
+                let date = day.addingTimeInterval(TimeInterval(hour * 3600 + next(3600)))
+                guard date < Date() else { continue }
+                let seconds = Double(6 + next(40))
+                let app = apps[min(next(9), apps.count - 1)]
+                try? state.insights.record(DictationInsight(
+                    date: date, words: Int(seconds * Double(120 + next(60)) / 60), speakingSeconds: seconds,
+                    appBundleID: app, engine: "parakeetTDTv3",
+                    vocabularyReplacements: next(4) == 0 ? 1 : 0, selfCorrections: next(9) == 0 ? 1 : 0
+                ))
+            }
+        }
+        state.refreshInsightsSummary()
     }
 
     static var meetings: [AtlasCaptureScheduleIntent] {

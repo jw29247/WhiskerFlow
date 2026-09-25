@@ -107,6 +107,17 @@ public struct CompiledVocabulary: Sendable {
     public func matchCount(in text: String) -> Int {
         rules.reduce(0) { $0 + $1.matchCount(in: text) }
     }
+
+    /// How many replacements `apply(to:)` makes that actually change the text.
+    public func replacementCount(in text: String) -> Int {
+        var current = text
+        var count = 0
+        for rule in rules {
+            count += rule.changingMatchCount(in: current)
+            current = rule.apply(to: current)
+        }
+        return count
+    }
 }
 
 /// NSRegularExpression is immutable once built and safe to match from any
@@ -181,6 +192,19 @@ private struct CompiledRule: Sendable {
         guard didMatch else { return text }
         result += source.substring(from: copiedUpTo)
         return result
+    }
+
+    func changingMatchCount(in text: String) -> Int {
+        let source = text as NSString
+        var count = 0
+        regex.regex.enumerateMatches(in: text, options: [], range: NSRange(location: 0, length: source.length)) { match, _, _ in
+            guard let match else { return }
+            let matched = source.substring(with: match.range)
+            let replaced = replacement(forMatched: matched,
+                                       atSentenceStart: Self.isSentenceStart(in: source, before: match.range.location))
+            if matched != replaced { count += 1 }
+        }
+        return count
     }
 
     /// The replacement is inserted literally — never as a regex template — so a

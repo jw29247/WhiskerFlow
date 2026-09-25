@@ -35,4 +35,26 @@ public enum AssistantTextProcessing {
             return WritingToneRenderer.render(cleaned.trimmingCharacters(in: .whitespacesAndNewlines), tone: tone)
         }
     }
+
+    /// Counts the corrections `process` applies to `raw`, for Insights. Run off
+    /// the delivery path: it repeats the self-correction and vocabulary passes.
+    public static func correctionCounts(_ raw: String, tone: WritingTone, vocabulary: Vocabulary,
+                                        recognizeCorrections: Bool) -> TextCorrectionCounts {
+        guard tone != .literal else { return TextCorrectionCounts() }
+        let repaired = recognizeCorrections ? SpokenSelfCorrection.resolveCounting(raw) : (text: raw, repairs: 0)
+        return TextCorrectionCounts(
+            vocabularyReplacements: CompiledVocabulary(vocabulary).replacementCount(in: repaired.text),
+            selfCorrections: repaired.repairs
+        )
+    }
+}
+
+public struct TextCorrectionCounts: Equatable, Sendable {
+    public var vocabularyReplacements: Int
+    public var selfCorrections: Int
+
+    public init(vocabularyReplacements: Int = 0, selfCorrections: Int = 0) {
+        self.vocabularyReplacements = vocabularyReplacements
+        self.selfCorrections = selfCorrections
+    }
 }

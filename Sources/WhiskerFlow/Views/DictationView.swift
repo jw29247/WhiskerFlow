@@ -114,7 +114,7 @@ struct DictationView: View {
                     .buttonStyle(.plain).foregroundStyle(FlowStyle.accent)
             }.padding(.vertical, 23)
 
-            let recent = Array(appState.records.filter { $0.status == .transcribed }.prefix(3))
+            let recent = appState.recentTranscripts(limit: 3)
             if recent.isEmpty {
                 HStack(spacing: 12) {
                     Image(systemName: "text.alignleft").foregroundStyle(FlowStyle.muted)

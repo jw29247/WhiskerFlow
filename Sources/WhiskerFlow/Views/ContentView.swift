@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var selectedSnapshot: TranscriptRecord?
     @State private var pendingNavigation: (() -> Void)?
     @State private var confirmNavigation = false
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         HStack(spacing: 0) {
@@ -50,9 +51,11 @@ struct ContentView: View {
                 case .dictionary:
                     DictionaryView(appState: appState, initialTab: UIPreview.dictionaryTab)
                 case .history:
-                    HistoryView(appState: appState, draft: $draft, record: currentRecord, save: saveDraft) { record in
-                        navigate { select(record) }
-                    }
+                    HistoryView(appState: appState, draft: $draft, record: currentRecord, save: saveDraft,
+                                select: { record in navigate { select(record) } },
+                                openInsights: { navigate { destination = .insights } })
+                case .insights:
+                    InsightsView(appState: appState)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -78,6 +81,8 @@ struct ContentView: View {
         .onAppear {
             if let name = UIPreview.destination, let preview = FlowDestination(rawValue: name) { destination = preview }
             UIPreview.scheduleSnapshotIfRequested()
+            if UIPreview.settingsCategory != nil { openSettings() }
+            UIPreview.writeSettingsSnapshotIfRequested()
             DispatchQueue.main.async {
                 appState.start()
                 appState.applyActivationPolicy()
@@ -197,15 +202,16 @@ struct ContentView: View {
 }
 
 private enum FlowDestination: String, CaseIterable, Identifiable {
-    case dictate = "Dictate", meetings = "Meetings", history = "History", dictionary = "Dictionary", assistant = "Assistant"
+    case dictate = "Dictate", meetings = "Meetings", history = "History", dictionary = "Dictionary", assistant = "Assistant",
+         insights = "Insights"
     var id: String { rawValue }
     var symbol: String {
-        switch self { case .assistant: return "wand.and.stars"; case .dictate: return "mic"; case .meetings: return "calendar"; case .history: return "clock.arrow.circlepath"; case .dictionary: return "character.book.closed" }
+        switch self { case .assistant: return "wand.and.stars"; case .dictate: return "mic"; case .meetings: return "calendar"; case .history: return "clock.arrow.circlepath"; case .dictionary: return "character.book.closed"; case .insights: return "chart.bar.xaxis" }
     }
     var shortcut: KeyEquivalent {
-        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4" }
+        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4"; case .insights: return "6" }
     }
     var shortcutLabel: String {
-        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4" }
+        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4"; case .insights: return "6" }
     }
 }

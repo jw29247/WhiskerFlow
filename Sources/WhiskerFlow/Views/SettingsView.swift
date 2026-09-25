@@ -6,7 +6,7 @@ import WhiskerFlowCore
 struct SettingsView: View {
     @Bindable var appState: AppState
     @ObservedObject var updaterService: UpdaterService
-    @State private var category: SettingsCategory = .dictation
+    @State private var category: SettingsCategory = UIPreview.settingsCategory.flatMap(SettingsCategory.init) ?? .dictation
 
     var body: some View {
         HStack(spacing: 0) {
@@ -34,6 +34,7 @@ struct SettingsView: View {
                     switch category {
                     case .dictation: dictationTab
                     case .text: vocabularyTab
+                    case .history: historyTab
                     case .meetings: Form { MeetingSetupView(appState: appState) }.formStyle(.grouped)
                     case .app: appTab
                     case .advanced: engineTab
@@ -135,6 +136,41 @@ struct SettingsView: View {
             }
 
         }.formStyle(.grouped)
+    }
+
+    // MARK: - History
+
+    @State private var confirmResetInsights = false
+
+    private var historyTab: some View {
+        Form {
+            Section("Transcript history") {
+                HistoryRetentionControl(appState: appState)
+                Text(appState.settings.historyRetention.savesTranscripts
+                     ? "Older transcripts are deleted automatically. Recordings that failed to transcribe are kept until they are retried or expire."
+                     : "Dictations are still pasted, and the latest can be copied for a few minutes, but no transcript is saved. Failed recordings are kept for 24 hours so you can retry them.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Insights") {
+                Stepper(value: Binding(get: { appState.settings.typingWordsPerMinute }, set: { appState.setTypingSpeed($0) }),
+                        in: InsightsSummary.typingWordsPerMinuteRange, step: 5) {
+                    LabeledContent("Your typing speed", value: "\(appState.settings.typingWordsPerMinute) wpm")
+                }
+                Text("Insights keep counts only — words, speaking time, app and engine — never transcript text. They stay on this Mac and are kept whatever the history setting.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Reset insights…", role: .destructive) { confirmResetInsights = true }
+                    .disabled(appState.insightsSummary.isEmpty)
+            }
+        }
+        .formStyle(.grouped)
+        .alert("Reset insights?", isPresented: $confirmResetInsights) {
+            Button("Reset insights", role: .destructive) { appState.resetInsights() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your word counts, speed, streaks and activity start again from zero. History is not affected.")
+        }
     }
 
     // MARK: - Engine
@@ -313,12 +349,13 @@ struct SettingsView: View {
 }
 
 private enum SettingsCategory: String, CaseIterable, Identifiable {
-    case dictation = "Dictation", text = "Text", meetings = "Meetings", app = "App", advanced = "Advanced"
+    case dictation = "Dictation", text = "Text", history = "History", meetings = "Meetings", app = "App", advanced = "Advanced"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .dictation: return "mic"
         case .text: return "textformat"
+        case .history: return "clock.arrow.circlepath"
         case .meetings: return "calendar"
         case .app: return "macwindow"
         case .advanced: return "slider.horizontal.3"

@@ -141,6 +141,15 @@ final class AppState {
     let assistant: AssistantController
     let corrections: CorrectionStore
     let dictionary: DictionaryStore
+    let insights: InsightsStore
+    /// Recomputed when a dictation is recorded, on reset and on a typing-speed change.
+    private(set) var insightsSummary = InsightsSummary(buckets: [], recentSamples: [])
+    /// With history off, the last transcript stays in memory for a few minutes
+    /// so Copy keeps working. It is never written to disk.
+    private(set) var ephemeralTranscript: TranscriptRecord?
+    private var ephemeralTranscriptExpiry: Task<Void, Never>?
+    private var retentionPruneTask: Task<Void, Never>?
+    nonisolated static let ephemeralTranscriptLifetimeSeconds: UInt64 = 10 * 60
     private let correctionMonitor = PasteCorrectionMonitor()
     private let soundService = SoundService()
     let microphonePermission: MicrophonePermissionController
@@ -216,6 +225,7 @@ final class AppState {
         store: TranscriptStore? = nil,
         correctionStore: CorrectionStore? = nil,
         dictionaryStore: DictionaryStore? = nil,
+        insightsStore: InsightsStore? = nil,
         microphonePermission: MicrophonePermissionController? = nil,
         pasteService: (any TextDeliveryService)? = nil
     ) {
@@ -231,6 +241,8 @@ final class AppState {
         self.dictionary = dictionaryStore ?? (store == nil
             ? .defaultStore(legacyVocabulary: resolvedSettings.vocabulary)
             : DictionaryStore(legacyVocabulary: resolvedSettings.vocabulary))
+        // An injected history (tests, UI preview) never writes the real Insights.
+        self.insights = insightsStore ?? (store == nil && !UIPreview.isEnabled ? .defaultStore() : .temporaryStore())
         self.microphonePermission = resolvedMicrophonePermission
         self.transcription = transcription
         self.meetingCapture = MeetingCaptureCoordinator(
@@ -327,15 +339,14 @@ final class AppState {
     }
 
     var latestTranscript: TranscriptRecord? {
-        records.first { $0.status == .transcribed }
+        records.first { $0.status == .transcribed } ?? ephemeralTranscript
     }
 
-    var analytics: TranscriptAnalytics {
-        TranscriptAnalytics(records: records)
-    }
-
-    var dailyWordCounts: [DailyWordCount] {
-        records.dailyWordCounts(days: 14)
+    /// The newest successful transcripts, or the in-memory one with history off.
+    func recentTranscripts(limit: Int) -> [TranscriptRecord] {
+        let saved = Array(records.lazy.filter { $0.status == .transcribed }.prefix(limit))
+        if saved.isEmpty, let ephemeralTranscript { return [ephemeralTranscript] }
+        return saved
     }
 
     var recordingElapsed: TimeInterval {
@@ -443,6 +454,7 @@ final class AppState {
         // bootstrap down with it: an unreadable transcripts.json would otherwise
         // leave the app running with no hotkey monitor and no HUD — no way to
         // dictate at all — and `hasStarted` blocks any retry.
+        store.retention = settings.historyRetention
         do {
             try store.load()
             normalizeInterruptedRecords()
@@ -459,6 +471,8 @@ final class AppState {
         records = store.records
         selectedRecordID = records.first?.id
         dictionary.update { DictionaryLearning.demoteStale(&$0) }
+        loadInsights()
+        startRetentionPruning()
         refreshAccessibilityPermission()
         refreshMicrophonePermission()
         refreshScreenRecordingPermission()
@@ -981,6 +995,132 @@ final class AppState {
         }
     }
 
+    // MARK: - History retention and Insights
+
+    /// How many saved transcripts a switch to `retention` would delete now.
+    func historyRemovalCount(for retention: HistoryRetention) -> Int {
+        store.removalCount(for: retention)
+    }
+
+    func setHistoryRetention(_ retention: HistoryRetention) {
+        settings.historyRetention = retention
+        do {
+            try store.applyRetention(retention)
+        } catch {
+            handleStorageError(error, message: "Could not apply the history setting")
+        }
+        records = store.records
+        if let selectedRecordID, !records.contains(where: { $0.id == selectedRecordID }) {
+            self.selectedRecordID = records.first?.id
+        }
+        if retention.savesTranscripts { clearEphemeralTranscript() }
+    }
+
+    func setTypingSpeed(_ wordsPerMinute: Int) {
+        settings.typingWordsPerMinute = min(max(wordsPerMinute, InsightsSummary.typingWordsPerMinuteRange.lowerBound),
+                                            InsightsSummary.typingWordsPerMinuteRange.upperBound)
+        refreshInsightsSummary()
+    }
+
+    func resetInsights() {
+        do {
+            try insights.reset()
+        } catch {
+            handleStorageError(error, message: "Could not reset Insights")
+        }
+        refreshInsightsSummary()
+    }
+
+    func refreshInsightsSummary() {
+        insightsSummary = insights.summary(typingWordsPerMinute: settings.typingWordsPerMinute)
+    }
+
+    /// Loads the aggregates and, on the first launch with Insights, seeds them
+    /// from the history the user already has.
+    private func loadInsights() {
+        do {
+            try insights.load()
+            if try insights.backfillIfNeeded(from: store.records) {
+                logger.info("Insights backfilled from history", metadata: ["records": "\(store.records.count)"])
+            }
+        } catch {
+            logger.error("Insights unavailable", metadata: ["error.code": "\((error as NSError).code)"])
+            DiagnosticsService.capture(error: error, category: "storage", code: String((error as NSError).code))
+        }
+        refreshInsightsSummary()
+    }
+
+    /// "24 hours" has to expire records even when nothing new is dictated.
+    private func startRetentionPruning() {
+        retentionPruneTask?.cancel()
+        retentionPruneTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 15 * 60 * 1_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                guard !self.isRecording, !self.isTranscribing else { continue }
+                let before = self.store.records.count
+                do { try self.store.applyRetention(self.settings.historyRetention) } catch { continue }
+                if self.store.records.count != before || self.store.records != self.records { self.records = self.store.records }
+            }
+        }
+    }
+
+    /// Every successful dictation is counted in Insights whatever the history
+    /// setting. Only counts leave this method: the words are counted here and
+    /// the correction passes run off the main actor.
+    private func recordSuccessfulDictation(
+        text: String,
+        rawText: String,
+        speakingSeconds: Double?,
+        engine: String,
+        appBundleID: String?,
+        configuration: TranscriptionJobConfiguration
+    ) {
+        guard configuration.purpose == .dictation, !UIPreview.isEnabled else { return }
+        let date = Date()
+        if !settings.historyRetention.savesTranscripts {
+            showEphemeralTranscript(TranscriptRecord(text: text, audioFilePath: "", createdAt: date, status: .transcribed,
+                                                     durationSeconds: speakingSeconds, engine: engine))
+        }
+        let words = text.transcriptWordCount
+        let tone = configuration.writing.tone
+        let vocabulary = configuration.vocabulary
+        let recognizeCorrections = configuration.recognizeCorrections
+        Task { @MainActor [weak self] in
+            let counts = await Task.detached(priority: .utility) {
+                AssistantTextProcessing.correctionCounts(rawText, tone: tone, vocabulary: vocabulary,
+                                                         recognizeCorrections: recognizeCorrections)
+            }.value
+            guard let self else { return }
+            do {
+                try self.insights.record(DictationInsight(
+                    date: date, words: words, speakingSeconds: speakingSeconds ?? 0, appBundleID: appBundleID,
+                    engine: engine, vocabularyReplacements: counts.vocabularyReplacements,
+                    selfCorrections: counts.selfCorrections
+                ))
+            } catch {
+                self.logger.error("Insights update failed", metadata: ["error.code": "\((error as NSError).code)"])
+            }
+            self.refreshInsightsSummary()
+        }
+    }
+
+    private func showEphemeralTranscript(_ record: TranscriptRecord) {
+        ephemeralTranscript = record
+        ephemeralTranscriptExpiry?.cancel()
+        ephemeralTranscriptExpiry = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.ephemeralTranscriptLifetimeSeconds * 1_000_000_000)
+            guard !Task.isCancelled, self?.ephemeralTranscript?.id == record.id else { return }
+            self?.clearEphemeralTranscript()
+        }
+    }
+
+    private func clearEphemeralTranscript() {
+        ephemeralTranscriptExpiry?.cancel()
+        ephemeralTranscriptExpiry = nil
+        ephemeralTranscript = nil
+    }
+
     func retry(_ record: TranscriptRecord) {
         guard !UIPreview.isEnabled else { return }
         guard !activeTranscriptionIDs.contains(record.id) else { return }
@@ -1437,6 +1577,12 @@ final class AppState {
                 ]
             )
             inFlightFinishAudio[sessionID] = nil
+            if recovered {
+                recordSuccessfulDictation(text: result.text, rawText: result.rawText,
+                                          speakingSeconds: Double(result.totalSampleCount) / 16_000,
+                                          engine: configuration.engine.rawValue, appBundleID: nil,
+                                          configuration: configuration)
+            }
             if let recordID = recoveryRecordIDs.removeValue(forKey: sessionID) {
                 // Shutdown already filed this audio for retry; complete it in place.
                 if recovered {
@@ -1483,6 +1629,10 @@ final class AppState {
                 sessionID: sessionID
             )
             inFlightFinishAudio[sessionID] = nil
+            recordSuccessfulDictation(text: result.text, rawText: result.rawText,
+                                      speakingSeconds: Double(result.totalSampleCount) / 16_000,
+                                      engine: configuration.engine.rawValue,
+                                      appBundleID: pasteTarget?.bundleIdentifier, configuration: configuration)
             if let recordID = recoveryRecordIDs.removeValue(forKey: sessionID) {
                 abandonedSessionIDs.remove(sessionID)
                 completeRecoveryRecord(recordID, text: result.text, rawText: result.rawText,
@@ -2069,6 +2219,10 @@ final class AppState {
             )
             activeTranscriptionIDs.remove(record.id)
             isTranscribing = !activeTranscriptionIDs.isEmpty
+            recordSuccessfulDictation(text: finalText, rawText: outcome.result.text,
+                                      speakingSeconds: outcome.result.duration ?? record.durationSeconds,
+                                      engine: outcome.engine.rawValue, appBundleID: pasteTarget?.bundleIdentifier,
+                                      configuration: configuration)
             guard configuration.deliversText else {
                 if mayUpdateUI {
                     status = historySaved ? .success("Retry saved to History") : .failure("Could not save transcript")
@@ -2398,6 +2552,18 @@ final class AppState {
         )
         lastError = error.localizedDescription
         status = .failure(message)
+    }
+}
+
+extension InsightsStore {
+    static func defaultStore() -> InsightsStore {
+        InsightsStore(databaseURL: StorageLocations.applicationSupportRootOrTemporary().appendingPathComponent("insights.sqlite"))
+    }
+
+    static func temporaryStore() -> InsightsStore {
+        InsightsStore(databaseURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("WhiskerFlow-insights-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("insights.sqlite"))
     }
 }
 

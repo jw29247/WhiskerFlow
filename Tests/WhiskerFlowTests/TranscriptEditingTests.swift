@@ -8,9 +8,10 @@ final class TranscriptEditingTests: XCTestCase {
     func testSavingPrunedTranscriptRecoversTextWithoutResurrectingAudio() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let store = TranscriptStore(fileURL: root.appendingPathComponent("history.json"), retentionLimit: 1, removeAudioFile: { _ in })
+        let store = TranscriptStore(fileURL: root.appendingPathComponent("history.json"), removeAudioFile: { _ in })
         let old = TranscriptRecord(text: "Original", audioFilePath: "/already/pruned.wav", createdAt: Date().addingTimeInterval(-100), status: .transcribed)
         try store.add(old)
+        try store.delete(id: old.id)
         try store.add(TranscriptRecord(text: "New dictation", audioFilePath: "", status: .transcribed))
         let state = makeState(store: store)
         let recovered = try XCTUnwrap(state.saveEditedTranscript(old, text: "Unsaved correction"))
@@ -25,8 +26,9 @@ final class TranscriptEditingTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        // A directory cannot be atomically replaced by the history JSON file.
-        let store = TranscriptStore(fileURL: root)
+        // A directory where the history database belongs cannot be opened.
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("history.sqlite"), withIntermediateDirectories: true)
+        let store = TranscriptStore(fileURL: root.appendingPathComponent("history.json"))
         let state = makeState(store: store)
         let record = TranscriptRecord(text: "Original", audioFilePath: "", status: .transcribed)
         XCTAssertNil(state.saveEditedTranscript(record, text: "Keep my draft"))

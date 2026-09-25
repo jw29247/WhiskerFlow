@@ -4,16 +4,27 @@ public enum SpokenSelfCorrection {
     /// Resolves one comma-delimited repair per sentence. Quoted dictation and
     /// sentences with negation, extra clauses, or unbounded repairs stay intact.
     public static func resolve(_ text: String) -> String {
-        guard !text.contains(where: { "\"“”‘’".contains($0) }) else { return text }
+        resolveCounting(text).text
+    }
+
+    /// `resolve`, plus how many sentences it repaired (for Insights).
+    public static func resolveCounting(_ text: String) -> (text: String, repairs: Int) {
+        guard !text.contains(where: { "\"“”‘’".contains($0) }) else { return (text, 0) }
         var result = ""
+        var repairs = 0
         var start = text.startIndex
+        func append(_ sentence: String) {
+            let resolved = resolvePreservingWhitespace(sentence)
+            if resolved != sentence { repairs += 1 }
+            result += resolved
+        }
         for index in text.indices where isSentenceBoundary(text, at: index) {
             let end = text.index(after: index)
-            result += resolvePreservingWhitespace(String(text[start..<end]))
+            append(String(text[start..<end]))
             start = end
         }
-        result += resolvePreservingWhitespace(String(text[start...]))
-        return result
+        append(String(text[start...]))
+        return (result, repairs)
     }
 
     private static func isSentenceBoundary(_ text: String, at index: String.Index) -> Bool {
