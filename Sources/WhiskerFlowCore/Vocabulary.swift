@@ -101,6 +101,12 @@ public struct CompiledVocabulary: Sendable {
             rule.apply(to: partial)
         }
     }
+
+    /// How many places in `text` any rule would fire on, counted against the
+    /// text as given rather than cascaded, using the same patterns `apply` uses.
+    public func matchCount(in text: String) -> Int {
+        rules.reduce(0) { $0 + $1.matchCount(in: text) }
+    }
 }
 
 /// NSRegularExpression is immutable once built and safe to match from any
@@ -144,6 +150,10 @@ private struct CompiledRule: Sendable {
         regex = RegexBox(compiled)
         replaceWith = rule.replaceWith
         caseSensitive = rule.caseSensitive
+    }
+
+    func matchCount(in text: String) -> Int {
+        regex.regex.numberOfMatches(in: text, options: [], range: NSRange(location: 0, length: (text as NSString).length))
     }
 
     func apply(to text: String) -> String {

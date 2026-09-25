@@ -53,6 +53,15 @@ public enum GlossaryLint {
         return result
     }
 
+    /// True when every word of `text` is everyday English, so a rule keyed on it
+    /// would fire in ordinary speech. Unlike `flags(for:)` this does not excuse
+    /// casing-only rules: a learned "word" → "Word" would still capitalise every
+    /// "word" a user dictates.
+    public static func isEverydaySpeech(_ text: String) -> Bool {
+        let tokens = tokens(in: text)
+        return !tokens.isEmpty && tokens.allSatisfy(isCommonEnglish)
+    }
+
     private static func tokens(in find: String) -> [String] {
         find
             .split(whereSeparator: { $0.isWhitespace || separators.contains($0) })
