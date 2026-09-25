@@ -18,15 +18,9 @@ public enum MeetingVisualActivity {
   public static func speakingTiles(image: CGImage, nameHeight: CGFloat) -> [CGRect] {
     let width = image.width
     let height = image.height
-    guard width > 0, height > 0, width <= 4096, height <= 4096, nameHeight >= 8 else { return [] }
-    var bytes = [UInt8](repeating: 0, count: width * height * 4)
-    guard
-      let c = CGContext(
-        data: &bytes, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-        space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    guard width > 0, height > 0, width <= 4096, height <= 4096, nameHeight >= 8,
+      let bytes = rasterize(image)
     else { return [] }
-    c.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
     var mask = [UInt8](repeating: 0, count: width * height)
     for i in mask.indices {
       let r = Int(bytes[i * 4])
@@ -38,57 +32,86 @@ public enum MeetingVisualActivity {
     }
     let scale = nameHeight / 13
     var matches: [CGRect] = []
+    // Scanline fill: the stack holds one seed per run, not one per pixel, so
+    // a large blue region (shared slide, background) stays cheap.
+    var stack: [Int] = []
     for start in mask.indices where mask[start] == 1 {
-      var stack = [start]
+      stack.removeAll(keepingCapacity: true)
+      stack.append(start)
       var minX = width
       var maxX = 0
       var minY = height
       var maxY = 0
-      mask[start] = 0
-      while let i = stack.popLast() {
-        let x = i % width
-        let y = i / width
-        minX = min(minX, x)
-        maxX = max(maxX, x)
+      while let seed = stack.popLast() {
+        let y = seed / width
+        let row = y * width
+        var left = seed % width
+        guard mask[row + left] == 1 else { continue }
+        var right = left
+        while left > 0 && mask[row + left - 1] == 1 { left -= 1 }
+        while right < width - 1 && mask[row + right + 1] == 1 { right += 1 }
+        for x in left...right { mask[row + x] = 0 }
+        minX = min(minX, left)
+        maxX = max(maxX, right)
         minY = min(minY, y)
         maxY = max(maxY, y)
         // Eight-connected: anti-aliased rounded corners can be diagonal.
-        for dy in -1...1 {
-          for dx in -1...1 where dx != 0 || dy != 0 {
-            let nx = x + dx
-            let ny = y + dy
-            if nx >= 0 && nx < width && ny >= 0 && ny < height {
-              let next = ny * width + nx
-              if mask[next] == 1 {
-                mask[next] = 0
-                stack.append(next)
-              }
+        let lower = max(0, left - 1)
+        let upper = min(width - 1, right + 1)
+        for ny in [y - 1, y + 1] where ny >= 0 && ny < height {
+          let next = ny * width
+          var inRun = false
+          for x in lower...upper {
+            if mask[next + x] == 1 {
+              if !inRun { stack.append(next + x) }
+              inRun = true
+            } else {
+              inRun = false
             }
           }
         }
       }
       let rect = CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
       guard rect.width >= 120 * scale, rect.height >= 90 * scale else { continue }
-      if isSpeaking(image: image, tile: rect, scale: scale) { matches.append(rect) }
+      if isSpeaking(bytes: bytes, width: width, height: height, tile: rect, scale: scale) {
+        matches.append(rect)
+      }
     }
     return matches
   }
 
   public static func isSpeaking(image: CGImage, tile: CGRect, scale: CGFloat = 1) -> Bool {
-    guard scale > 0, tile.width >= 120 * scale, tile.height >= 90 * scale,
-      CGRect(x: 0, y: 0, width: image.width, height: image.height).contains(tile),
-      image.width <= 4096, image.height <= 4096
-    else { return false }
+    guard image.width <= 4096, image.height <= 4096, let bytes = rasterize(image) else { return false }
+    return isSpeaking(bytes: bytes, width: image.width, height: image.height, tile: tile, scale: scale)
+  }
+
+  /// RGBA8 premultiplied, top row first. Drawn once per frame and shared by
+  /// every candidate tile.
+  private static func rasterize(_ image: CGImage) -> [UInt8]? {
     let width = image.width
     let height = image.height
+    guard width > 0, height > 0 else { return nil }
     var bytes = [UInt8](repeating: 0, count: width * height * 4)
-    guard
-      let context = CGContext(
-        data: &bytes, width: width, height: height,
-        bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    let drawn = bytes.withUnsafeMutableBytes { buffer -> Bool in
+      guard
+        let context = CGContext(
+          data: buffer.baseAddress, width: width, height: height,
+          bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+      else { return false }
+      context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+      return true
+    }
+    return drawn ? bytes : nil
+  }
+
+  static func isSpeaking(bytes: [UInt8], width: Int, height: Int, tile: CGRect, scale: CGFloat)
+    -> Bool
+  {
+    guard scale > 0, tile.width >= 120 * scale, tile.height >= 90 * scale,
+      CGRect(x: 0, y: 0, width: width, height: height).contains(tile),
+      bytes.count >= width * height * 4
     else { return false }
-    context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
     func pixel(_ x: CGFloat, _ y: CGFloat) -> (Int, Int, Int) {
       let px = max(0, min(width - 1, Int(x)))
       let py = max(0, min(height - 1, Int(y)))

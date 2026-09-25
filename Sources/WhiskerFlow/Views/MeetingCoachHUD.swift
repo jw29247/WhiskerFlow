@@ -46,10 +46,16 @@ final class MeetingCoachHUDController {
         panel.hasShadow = true
         panel.sharingType = .none
         panel.contentView = NSHostingView(rootView: MeetingCoachHUDView(controller: controller) { [weak panel] size in
-            guard let panel, size.height > 0 else { return }
-            let top = panel.frame.maxY
-            panel.setContentSize(size)
-            panel.setFrameOrigin(NSPoint(x: panel.frame.minX, y: top - panel.frame.height))
+            guard size.height > 0 else { return }
+            // Called from SwiftUI layout; resizing the hosting window here would
+            // re-enter AppKit layout. Apply it on the next actor turn instead.
+            Task { @MainActor [weak panel] in
+                await Task.yield()
+                guard let panel, panel.contentLayoutRect.size != size else { return }
+                let top = panel.frame.maxY
+                panel.setContentSize(size)
+                panel.setFrameOrigin(NSPoint(x: panel.frame.minX, y: top - panel.frame.height))
+            }
         })
         if let screen = NSScreen.main ?? NSScreen.screens.first {
             let bounds = screen.visibleFrame

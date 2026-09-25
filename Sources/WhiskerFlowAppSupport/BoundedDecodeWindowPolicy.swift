@@ -11,12 +11,32 @@ public enum BoundedDecodeWindowPolicy {
         var ranges: [Range<Int64>] = []
         var start: Int64 = 0
         while start < totalFrames {
+            // The last window is anchored to the end of the audio so it is always
+            // full length: a stepped tail can be a second of already-owned overlap
+            // plus a key click, which Whisper decodes as empty and fails the file.
+            if start > 0, totalFrames - start < window { start = totalFrames - window }
             let end = min(totalFrames, start + window)
             ranges.append(start..<end)
             guard end < totalFrames else { break }
             start = end - overlap
         }
         return ranges
+    }
+
+    /// The span (seconds) each window owns when stitching timed segments: the
+    /// boundary between neighbours sits mid-way through their overlap, which is
+    /// wider than `overlapSeconds` for the end-anchored final window.
+    public static func ownership(of ranges: [Range<Int64>], sampleRate: Double) -> [Range<Double>] {
+        guard sampleRate > 0 else { return [] }
+        return ranges.indices.map { index in
+            let lower = index == ranges.startIndex
+                ? -Double.infinity
+                : Double(ranges[index].lowerBound + ranges[index - 1].upperBound) / 2 / sampleRate
+            let upper = index == ranges.index(before: ranges.endIndex)
+                ? Double.infinity
+                : Double(ranges[index + 1].lowerBound + ranges[index].upperBound) / 2 / sampleRate
+            return lower..<upper
+        }
     }
 
     public static func containsAudibleActivity(

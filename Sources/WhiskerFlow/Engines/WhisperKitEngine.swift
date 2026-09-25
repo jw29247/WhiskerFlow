@@ -7,38 +7,41 @@ import WhiskerFlowCore
 /// Primary engine: on-device Whisper via CoreML / Neural Engine. The model is
 /// loaded once and kept warm, so only the first transcription pays the load cost.
 actor WhisperKitEngine: Sendable {
+    /// The dictation model. Meeting Mode keeps its own slot below: sharing one
+    /// made every meeting window evict the dictation model and vice versa, each
+    /// swap reloading a multi-GB Core ML model.
     private var pipe: WhisperKit?
     /// Keyed by identifier, not by `WhisperModel`, so switching between the
     /// English-only and multilingual variants of one size reloads the pipe.
     private var loadedIdentifier: String?
-    private var meetingPreparation: Task<Void, Error>?
+    private var meetingPipe: WhisperKit?
+    /// At most one load per identifier. Launch warm-up, a first dictation and a
+    /// settings change can all ask for the same model; they join one load.
+    private var pendingLoads: [String: Task<Void, Error>] = [:]
     private let decodeGate = ModelDecodeGate()
 
+    /// Waits for the model to finish loading, however long that takes; a
+    /// cancelled caller stops waiting while the load itself carries on.
     func prepare(model: WhisperModel, language: String?) async throws {
-        let identifier = model.whisperKitIdentifier(
-            multilingual: WhisperModel.requiresMultilingualModel(language: language)
-        )
-        try await prepare(identifier: identifier, displayName: model.displayName)
+        try await prepare(identifier: Self.identifier(model: model, language: language), displayName: model.displayName)
     }
 
     /// Meeting Mode uses a pinned high-accuracy model without changing the
-    /// user's lightweight push-to-talk model preference.
-    func prepareMeeting(language: String?) async throws {
-        if pipe != nil, loadedIdentifier == Self.meetingModelIdentifier { return }
-        // Startup warm-up and recovery can arrive together. Join one model load
-        // instead of compiling the same large CoreML model concurrently.
-        let preparation: Task<Void, Error>
-        if let pending = meetingPreparation {
-            preparation = pending
-        } else {
-            preparation = Task {
-                defer { meetingPreparation = nil }
-                try await prepare(identifier: Self.meetingModelIdentifier, displayName: "WhisperKit meeting model")
-            }
-            meetingPreparation = preparation
+    /// user's lightweight push-to-talk model preference. A nil wait blocks until
+    /// the load settles (warm-up); decodes pass a bound so they can retry later.
+    func prepareMeeting(
+        language: String?,
+        waitingUpTo seconds: TimeInterval? = DecodeTimeoutPolicy.modelPreparationWait
+    ) async throws {
+        if meetingPipe != nil { return }
+        guard let seconds else {
+            try await prepare(identifier: Self.meetingModelIdentifier, displayName: "WhisperKit meeting model")
+            return
         }
         do {
-            try await withAbandoningDeadline(seconds: 180) { try await preparation.value }
+            try await withAbandoningDeadline(seconds: seconds) {
+                try await self.prepare(identifier: Self.meetingModelIdentifier, displayName: "WhisperKit meeting model")
+            }
         } catch AsyncTimeoutError.timedOut {
             // CoreML compilation is not cancellable. Let that single load finish
             // in the background; subsequent attempts join it instead of restarting.
@@ -50,12 +53,12 @@ actor WhisperKitEngine: Sendable {
         _ request: TranscriptionRequest
     ) async throws -> WhiskerFlowCore.TranscriptionResult {
         try await prepareMeeting(language: request.language)
-        guard let pipe else {
+        guard let pipe = meetingPipe else {
             throw TranscriptionError.modelUnavailable("WhisperKit meeting model")
         }
         let deadline = Self.audioSeconds(at: request.audioURL)
             .map(DecodeTimeoutPolicy.timeout(forAudioSeconds:)) ?? DecodeTimeoutPolicy.maximumTimeout
-        let results = try await decode(seconds: deadline) {
+        let results = try await decode(seconds: deadline, queueWait: DecodeTimeoutPolicy.gateQueueWait) {
             try await pipe.transcribe(
                 audioPath: request.audioURL.path,
                 decodeOptions: Self.decodingOptions(
@@ -84,27 +87,72 @@ actor WhisperKitEngine: Sendable {
         )
     }
 
+    private static func identifier(model: WhisperModel, language: String?) -> String {
+        model.whisperKitIdentifier(
+            multilingual: WhisperModel.requiresMultilingualModel(language: language)
+        )
+    }
+
+    private func installedPipe(for identifier: String) -> WhisperKit? {
+        if identifier == Self.meetingModelIdentifier { return meetingPipe }
+        return loadedIdentifier == identifier ? pipe : nil
+    }
+
     private func prepare(identifier: String, displayName: String) async throws {
-        if pipe != nil, loadedIdentifier == identifier { return }
+        if installedPipe(for: identifier) != nil { return }
+        let load = startLoad(identifier: identifier)
         do {
-            // Loading and prediction share one admission gate. Actor reentrancy
-            // otherwise allows two callers with different identifiers to enter
-            // separate Core ML loads while the first constructor is suspended.
-            try await decodeGate.runExclusive {
-                try await self.loadAndInstall(identifier: identifier)
-            }
-        } catch ModelDecodeGateError.occupied {
-            throw TranscriptionError.underlying(
-                "The previous local model operation is still finishing. The recording is saved and will retry."
-            )
+            try await withAbandoningCancellation { try await load.value }
+        } catch is CancellationError {
+            throw TranscriptionError.cancelled
         } catch {
-            pipe = nil
-            loadedIdentifier = nil
+            // Only a successful load installs a pipe, so a failed one leaves any
+            // model already loaded (in either slot) in place.
             throw TranscriptionError.modelUnavailable(displayName)
         }
     }
 
+    /// Dictation decodes wait only briefly for the load (see
+    /// `DecodeTimeoutPolicy.dictationModelLoadWait`) so the Apple fallback runs
+    /// during a first-run download; the load keeps going for the next attempt.
+    private func prepareForDictationDecode(model: WhisperModel, language: String?) async throws {
+        if installedPipe(for: Self.identifier(model: model, language: language)) != nil { return }
+        do {
+            try await withAbandoningDeadline(seconds: DecodeTimeoutPolicy.dictationModelLoadWait) {
+                try await self.prepare(model: model, language: language)
+            }
+        } catch AsyncTimeoutError.timedOut {
+            throw TranscriptionError.underlying(
+                "The \(model.displayName) model is still loading. The recording is saved and will retry."
+            )
+        }
+    }
+
+    /// Queue wait for a dictation file decode: a whole decode window normally,
+    /// but only briefly while a model load (which can take minutes) is pending.
+    private var dictationQueueWait: TimeInterval {
+        pendingLoads.isEmpty ? DecodeTimeoutPolicy.gateQueueWait : DecodeTimeoutPolicy.dictationModelLoadWait
+    }
+
+    /// Start the load for `identifier`, or return the one already running.
+    /// Loads queue on the shared gate rather than failing while another load or
+    /// decode holds it, so two warm-ups arriving together both succeed.
+    @discardableResult
+    private func startLoad(identifier: String) -> Task<Void, Error> {
+        if let pending = pendingLoads[identifier] { return pending }
+        let gate = decodeGate
+        let load = Task {
+            defer { pendingLoads[identifier] = nil }
+            try await gate.runQueued(waitingUpTo: nil) {
+                try await self.loadAndInstall(identifier: identifier)
+            }
+        }
+        pendingLoads[identifier] = load
+        return load
+    }
+
     private func loadAndInstall(identifier: String) async throws {
+        if installedPipe(for: identifier) != nil { return }
         let downloadBase = try ModelStoragePaths.prepareWhisperKitDownloadBase()
         let localAssets = try ModelStoragePaths.prepareLocalAssets(modelIdentifier: identifier)
         // Keep meeting inference off the GPU: the pinned meeting model triggered
@@ -113,9 +161,11 @@ actor WhisperKitEngine: Sendable {
         let compute: ModelComputeOptions? = identifier == Self.meetingModelIdentifier
             ? ModelComputeOptions(audioEncoderCompute: .cpuAndNeuralEngine, textDecoderCompute: .cpuAndNeuralEngine)
             : nil
-        let kit: WhisperKit
+        var kit: WhisperKit?
         if let localAssets {
-            kit = try await WhisperKit(
+            // A local folder can be incomplete (an interrupted download). Fall
+            // through to the downloading load, which fetches what is missing.
+            kit = try? await WhisperKit(
                 modelFolder: localAssets.modelFolder.path,
                 tokenizerFolder: localAssets.tokenizerDownloadBase,
                 computeOptions: compute,
@@ -124,8 +174,12 @@ actor WhisperKitEngine: Sendable {
                 load: true,
                 download: false
             )
+        }
+        let loaded: WhisperKit
+        if let kit {
+            loaded = kit
         } else {
-            kit = try await WhisperKit(
+            loaded = try await WhisperKit(
                 model: identifier,
                 downloadBase: downloadBase,
                 tokenizerFolder: downloadBase,
@@ -136,19 +190,23 @@ actor WhisperKitEngine: Sendable {
                 download: true
             )
         }
-        pipe = kit
-        loadedIdentifier = identifier
+        if identifier == Self.meetingModelIdentifier {
+            meetingPipe = loaded
+        } else {
+            pipe = loaded
+            loadedIdentifier = identifier
+        }
     }
 
     func transcribe(_ request: TranscriptionRequest) async throws -> WhiskerFlowCore.TranscriptionResult {
-        try await prepare(model: request.model, language: request.language)
-        guard let pipe else {
+        try await prepareForDictationDecode(model: request.model, language: request.language)
+        guard let pipe = installedPipe(for: Self.identifier(model: request.model, language: request.language)) else {
             throw TranscriptionError.modelUnavailable(request.model.displayName)
         }
 
         let deadline = Self.audioSeconds(at: request.audioURL)
             .map(DecodeTimeoutPolicy.timeout(forAudioSeconds:)) ?? DecodeTimeoutPolicy.maximumTimeout
-        let results = try await decode(seconds: deadline) {
+        let results = try await decode(seconds: deadline, queueWait: dictationQueueWait) {
             try await pipe.transcribe(
                 audioPath: request.audioURL.path,
                 decodeOptions: Self.decodingOptions(
@@ -180,8 +238,12 @@ actor WhisperKitEngine: Sendable {
     /// Used by the live dictation loop. An empty result yields an empty string
     /// (a partial that hasn't caught any speech yet is not an error).
     func transcribe(samples: [Float], language: String?, model: WhisperModel) async throws -> WhiskerFlowCore.TranscriptionResult {
-        try await prepare(model: model, language: language)
-        guard let pipe else {
+        // A live pass never waits for a model load: that load is unbounded and
+        // the release path awaits the loop. Start it in the background instead;
+        // the file decode at release joins it for a bounded wait.
+        let identifier = Self.identifier(model: model, language: language)
+        guard let pipe = installedPipe(for: identifier) else {
+            startLoad(identifier: identifier)
             throw TranscriptionError.modelUnavailable(model.displayName)
         }
 
@@ -215,11 +277,13 @@ actor WhisperKitEngine: Sendable {
     func transcribeFileWindow(
         samples: [Float], language: String?, model: WhisperModel
     ) async throws -> WhiskerFlowCore.TranscriptionResult {
-        try await prepare(model: model, language: language)
-        guard let pipe else { throw TranscriptionError.modelUnavailable(model.displayName) }
+        try await prepareForDictationDecode(model: model, language: language)
+        guard let pipe = installedPipe(for: Self.identifier(model: model, language: language)) else {
+            throw TranscriptionError.modelUnavailable(model.displayName)
+        }
         let results = try await decode(seconds: DecodeTimeoutPolicy.timeout(
             forAudioSeconds: Double(samples.count) / 16_000
-        )) {
+        ), queueWait: dictationQueueWait) {
             try await pipe.transcribe(
                 audioArray: samples,
                 decodeOptions: Self.fileWindowDecodingOptions(language: language)
@@ -243,13 +307,15 @@ actor WhisperKitEngine: Sendable {
     /// Run only one Core ML decode at a time. A deadline may release the caller,
     /// but the underlying prediction is not necessarily cancellable; the gate
     /// remains occupied until that actual operation settles so a retry cannot
-    /// load another model beside it.
+    /// load another model beside it. Live partials pass no queue wait and fail
+    /// fast; file decodes wait their turn behind a load or another decode.
     private func decode<T: Sendable>(
         seconds: Double,
+        queueWait: TimeInterval = 0,
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         do {
-            return try await decodeGate.run(seconds: seconds, operation: operation)
+            return try await decodeGate.run(seconds: seconds, waitingUpTo: queueWait, operation: operation)
         } catch AsyncTimeoutError.timedOut {
             throw TranscriptionError.timedOut(seconds: Int(seconds))
         } catch ModelDecodeGateError.occupied {
@@ -314,15 +380,33 @@ enum ModelDecodeGateError: Error, Equatable {
 
 actor ModelDecodeGate {
     private var activeOperationID: UUID?
+    /// FIFO queue of callers waiting for the gate; `finish` hands it straight
+    /// to the next one so a fail-fast caller cannot jump the queue.
+    private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
+    /// Set while the holder is an operation its caller already abandoned (a
+    /// possibly wedged prediction). Waiters, bounded or not, fail fast instead
+    /// of sitting out their wait behind something that may never return.
+    private var abandonedOperationID: UUID?
 
     var isOccupied: Bool { activeOperationID != nil }
+    /// A timed-out operation still holds the gate.
+    var isHeldByAbandonedOperation: Bool { abandonedOperationID != nil }
 
+    /// Fails with `occupied` instead of waiting when anything holds the gate.
     func runExclusive(
         operation: @escaping @Sendable () async throws -> Void
     ) async throws {
-        guard activeOperationID == nil else { throw ModelDecodeGateError.occupied }
-        let operationID = UUID()
-        activeOperationID = operationID
+        try await runQueued(waitingUpTo: 0, operation: operation)
+    }
+
+    /// Like `runExclusive`, but waits up to `seconds` (nil: indefinitely) for
+    /// the gate before failing with `occupied`. Behind an abandoned holder every
+    /// caller fails with `occupied`.
+    func runQueued(
+        waitingUpTo seconds: TimeInterval?,
+        operation: @escaping @Sendable () async throws -> Void
+    ) async throws {
+        let operationID = try await acquire(waitingUpTo: seconds)
         do {
             try await operation()
             finish(operationID)
@@ -334,11 +418,10 @@ actor ModelDecodeGate {
 
     func run<T: Sendable>(
         seconds: TimeInterval,
+        waitingUpTo queueSeconds: TimeInterval = 0,
         operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
-        guard activeOperationID == nil else { throw ModelDecodeGateError.occupied }
-        let operationID = UUID()
-        activeOperationID = operationID
+        let operationID = try await acquire(waitingUpTo: queueSeconds)
         let work = Task { try await operation() }
         do {
             let value = try await withAbandoningDeadline(seconds: seconds) {
@@ -348,22 +431,66 @@ actor ModelDecodeGate {
             return value
         } catch AsyncTimeoutError.timedOut {
             work.cancel()
-            retainOccupancy(untilSettled: work, operationID: operationID)
+            retainOccupancy(untilSettled: work, operationID: operationID, abandoned: true)
             throw AsyncTimeoutError.timedOut
         } catch {
             // Treat every non-success as potentially abandoning a
             // non-cooperative provider operation. If it has already settled,
             // this clears immediately; otherwise retries remain excluded.
             work.cancel()
-            retainOccupancy(untilSettled: work, operationID: operationID)
+            retainOccupancy(untilSettled: work, operationID: operationID, abandoned: false)
             throw error
         }
     }
 
+    private func acquire(waitingUpTo seconds: TimeInterval?) async throws -> UUID {
+        let operationID = UUID()
+        if activeOperationID == nil, waiters.isEmpty {
+            activeOperationID = operationID
+            return operationID
+        }
+        // Nothing queues behind an abandoned (possibly wedged) holder, not even an
+        // unbounded load: it may never return, and every later caller would join it.
+        if abandonedOperationID != nil { throw ModelDecodeGateError.occupied }
+        if let seconds, seconds <= 0 { throw ModelDecodeGateError.occupied }
+        let expiry = seconds.map { seconds in
+            Task { [weak self] in
+                try await Task.sleep(nanoseconds: UInt64(min(seconds, 86_400) * 1_000_000_000))
+                await self?.dropWaiter(operationID, error: ModelDecodeGateError.occupied)
+            }
+        }
+        defer { expiry?.cancel() }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    waiters.append((operationID, continuation))
+                }
+            }
+        } onCancel: {
+            Task { await self.dropWaiter(operationID, error: CancellationError()) }
+        }
+        return operationID
+    }
+
+    private func dropWaiter(_ operationID: UUID, error: Error) {
+        guard let index = waiters.firstIndex(where: { $0.id == operationID }) else { return }
+        waiters.remove(at: index).continuation.resume(throwing: error)
+    }
+
     private func retainOccupancy<T: Sendable>(
         untilSettled work: Task<T, Error>,
-        operationID: UUID
+        operationID: UUID,
+        abandoned: Bool
     ) {
+        if abandoned, activeOperationID == operationID {
+            abandonedOperationID = operationID
+            // Callers already queued behind it fail now too, as later ones will.
+            let queued = waiters
+            waiters.removeAll()
+            queued.forEach { $0.continuation.resume(throwing: ModelDecodeGateError.occupied) }
+        }
         Task { [weak self] in
             _ = try? await work.value
             await self?.finish(operationID)
@@ -371,6 +498,14 @@ actor ModelDecodeGate {
     }
 
     private func finish(_ operationID: UUID) {
-        if activeOperationID == operationID { activeOperationID = nil }
+        guard activeOperationID == operationID else { return }
+        abandonedOperationID = nil
+        if waiters.isEmpty {
+            activeOperationID = nil
+        } else {
+            let next = waiters.removeFirst()
+            activeOperationID = next.id
+            next.continuation.resume()
+        }
     }
 }

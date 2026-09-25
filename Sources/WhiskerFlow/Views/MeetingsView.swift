@@ -14,6 +14,9 @@ struct MeetingsView: View {
     }
 
     var body: some View {
+        // Evaluated once per body rather than once per meeting row.
+        let startDisabled = self.startDisabled
+        let needsSetup = self.needsSetup
         VStack(spacing: 0) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -91,14 +94,16 @@ struct MeetingsView: View {
                         } else {
                             VStack(spacing: 10) {
                                 ForEach(appState.upcomingMeetings, id: \.eventID) { meeting in
-                                    meetingRow(meeting, previous: false)
+                                    meetingRow(meeting, previous: false, startDisabled: startDisabled, needsSetup: needsSetup)
                                 }
                             }
                         }
                         if !appState.previousMeetings.isEmpty {
                             DisclosureGroup("Previous · last 7 days", isExpanded: $showPrevious) {
                                 VStack(spacing: 10) {
-                                    ForEach(appState.previousMeetings, id: \.eventID) { meeting in meetingRow(meeting, previous: true) }
+                                    ForEach(appState.previousMeetings, id: \.eventID) { meeting in
+                                        meetingRow(meeting, previous: true, startDisabled: startDisabled, needsSetup: needsSetup)
+                                    }
                                 }.padding(.top, 16)
                             }.font(.system(size: 13, weight: .medium))
                         }
@@ -149,7 +154,8 @@ struct MeetingsView: View {
         }
     }
 
-    private func meetingRow(_ meeting: AtlasCaptureScheduleIntent, previous: Bool) -> some View {
+    private func meetingRow(_ meeting: AtlasCaptureScheduleIntent, previous: Bool,
+                            startDisabled: Bool, needsSetup: Bool) -> some View {
         HStack(spacing: 16) {
             let start = Date(timeIntervalSince1970: Double(meeting.startMs) / 1000)
             VStack(spacing: 2) {

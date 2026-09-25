@@ -114,6 +114,19 @@ final class AssistantCoreTests: XCTestCase {
         }
     }
 
+    func testSpokenCorrectionKeepsEmphaticAndAddressingPhrases() {
+        for input in [
+            "Thank you so much, I mean it.",
+            "Yes, I mean it.",
+            "Great work, I mean that.",
+            "Hey, sorry, Tom.",
+            "Hi, sorry, Sarah!"
+        ] {
+            XCTAssertEqual(SpokenSelfCorrection.resolve(input), input)
+        }
+        XCTAssertEqual(SpokenSelfCorrection.resolve("Send it to Mark, sorry, Mike."), "Send it to Mike.")
+    }
+
     func testWritingAndRecordModelsRoundTripThroughCodable() throws {
         let now = Date(timeIntervalSince1970: 1_725_552_000)
         let draft = PendingQuickCaptureDraft(id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!, rawText: "Call Acme tomorrow", kind: .taskDraft, createdAt: now, updatedAt: now, syncState: .pending)

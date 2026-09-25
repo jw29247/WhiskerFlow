@@ -80,6 +80,22 @@ final class HotkeyMatcherTests: XCTestCase {
         XCTAssertFalse(matcher.isPressed)
     }
 
+    /// Regression: releasing Right ⌘ while Left ⌘ is still held keeps the shared
+    /// `.command` flag set, so the side-specific device bit must end the press.
+    func testModifierOnlyReleasesWhileMirrorKeyStillHeld() {
+        let leftBit = KeyModifiers(rawValue: 0x08), rightBit = KeyModifiers(rawValue: 0x10)
+        var matcher = HotkeyMatcher(combo: KeyCombo(keyCode: rightCommand, modifiers: .command, isModifierOnly: true))
+        // Left ⌘ down alone never starts the trigger.
+        XCTAssertNil(matcher.handleFlags(keyCode: leftCommand, modifiers: [.command, leftBit]))
+        XCTAssertEqual(matcher.handleFlags(keyCode: rightCommand, modifiers: [.command, leftBit, rightBit]), true)
+        XCTAssertEqual(matcher.handleFlags(keyCode: rightCommand, modifiers: [.command, leftBit]), false)
+        XCTAssertNil(matcher.handleFlags(keyCode: leftCommand, modifiers: []))
+        // Right ⌥ with Left ⌥ held behaves the same way.
+        var option = HotkeyMatcher(combo: KeyCombo(keyCode: 61, modifiers: .option, isModifierOnly: true))
+        XCTAssertEqual(option.handleFlags(keyCode: 61, modifiers: [.option, KeyModifiers(rawValue: 0x40)]), true)
+        XCTAssertEqual(option.handleFlags(keyCode: 61, modifiers: [.option, KeyModifiers(rawValue: 0x20)]), false)
+    }
+
     func testKeyEventsIgnoredForModifierOnlyCombo() {
         var matcher = HotkeyMatcher(combo: KeyCombo(keyCode: rightCommand, modifiers: .command, isModifierOnly: true))
         XCTAssertNil(matcher.handleKey(keyCode: dKey, modifiers: .command, isKeyDown: true, isRepeat: false))

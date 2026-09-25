@@ -70,3 +70,34 @@ public enum MeetingCaptureSchedulePolicy {
         }
     }
 }
+
+/// Calendar events the user stopped recording by hand.
+///
+/// A manual stop means "off the record". The schedule poll must not start a
+/// new capture for the same event while its window is still open.
+public struct MeetingCaptureSuppression: Equatable, Sendable {
+    private var untilMs: [String: Int64] = [:]
+
+    public init() {}
+
+    public mutating func suppress(eventID: String, untilMs: Int64) {
+        self.untilMs[eventID] = max(self.untilMs[eventID] ?? untilMs, untilMs)
+    }
+
+    public func isSuppressed(_ eventID: String, nowMs: Int64) -> Bool {
+        guard let until = untilMs[eventID] else { return false }
+        return nowMs <= until
+    }
+
+    public mutating func release(eventID: String) {
+        untilMs[eventID] = nil
+    }
+
+    public mutating func removeAll() {
+        untilMs.removeAll()
+    }
+
+    public mutating func prune(nowMs: Int64) {
+        untilMs = untilMs.filter { nowMs <= $0.value }
+    }
+}

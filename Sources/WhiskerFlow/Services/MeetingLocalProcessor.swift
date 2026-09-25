@@ -1,4 +1,5 @@
 import AVFoundation
+import CryptoKit
 import Foundation
 import Logging
 import SpeakerKit
@@ -16,6 +17,33 @@ struct MeetingLocalProcessingResult: Codable, Sendable {
   let turns: [MeetingSpeakerTurn]
   let modelVersion: String
   let durationMs: Int64
+  /// Audible canonical windows that every bounded retry decoded as empty
+  /// (hold music, typing, coughs). Retained as gaps rather than failing.
+  var untranscribedAudibleWindowCount: Int? = nil
+}
+
+/// Resumable per-window progress, stored in the encrypted processing
+/// checkpoint. It never decodes as a `MeetingLocalProcessingResult`.
+struct MeetingLocalProcessingProgress: Codable, Sendable {
+  struct Segment: Codable, Sendable {
+    let text: String
+    let start: Double
+    let end: Double
+  }
+  struct Track: Codable, Sendable {
+    var completedWindows = 0
+    var segments: [Segment] = []
+    var language: String?
+    var duration: Double = 0
+    var audibleWindows = 0
+    var untranscribedWindows: [[Int64]] = []
+    /// Set when most audible windows decoded empty during this app launch.
+    var majorityEmptyLaunchID: UUID?
+  }
+  static let currentVersion = 1
+  var progressVersion = currentVersion
+  let sourceKey: String
+  var tracks: [String: Track] = [:]
 }
 
 /// Post-meeting-only local processing. The canonical text comes from WhisperKit
@@ -25,6 +53,14 @@ struct MeetingLocalProcessingResult: Codable, Sendable {
 actor MeetingLocalProcessor {
   private static let audibleChunkRetryCount = 3
   private static let audibleChunkSubwindowCount = 2
+  private static let transientDecodeAttemptCount = 3
+  /// Mean square of the RMS 0.015 audibility floor used for source windows.
+  private static let audibleMeanSquare = 0.015 * 0.015
+  /// About +3 dB: mic energy must clearly exceed the remote audio it overlaps.
+  private static let selfDominanceRatio = 2.0
+  /// Identifies this process, so a majority-empty verdict is re-decoded only
+  /// after a relaunch (fresh decoder state or an updated build).
+  private static let launchID = UUID()
 
   typealias MeetingTranscriber = @Sendable (URL, String?) async throws -> TranscriptionResult
   typealias MeetingDiarizer = @Sendable (
@@ -34,6 +70,7 @@ actor MeetingLocalProcessor {
   private let transcribeMeeting: MeetingTranscriber
   private let diarizeMeeting: MeetingDiarizer
   private let processingRoot: URL?
+  private let transientRetryUnitNanoseconds: UInt64
 
   init(transcription: TranscriptionService, processingRoot: URL? = nil) {
     self.transcribeMeeting = { url, language in
@@ -43,44 +80,62 @@ actor MeetingLocalProcessor {
       try await transcription.diarizeMeeting(nextWindow: nextWindow)
     }
     self.processingRoot = processingRoot
+    self.transientRetryUnitNanoseconds = 1_000_000_000
   }
 
   init(
     processingRoot: URL,
     transcribeMeeting: @escaping MeetingTranscriber,
-    diarizeMeeting: @escaping MeetingDiarizer = { _ in [] }
+    diarizeMeeting: @escaping MeetingDiarizer = { _ in [] },
+    transientRetryUnitNanoseconds: UInt64 = 1_000_000_000
   ) {
     self.transcribeMeeting = transcribeMeeting
     self.diarizeMeeting = diarizeMeeting
     self.processingRoot = processingRoot
+    self.transientRetryUnitNanoseconds = transientRetryUnitNanoseconds
   }
 
+  /// - Parameter resumable: persist per-window progress in the session's
+  ///   encrypted checkpoint so cancellation or a transient failure resumes
+  ///   at the next window instead of re-decoding the whole meeting.
   func process(
     manifest: MeetingRecordingSessionManifest,
     store: EncryptedMeetingChunkStore,
-    language: String?
+    language: String?,
+    resumable: Bool = true
   ) async throws -> MeetingLocalProcessingResult {
     let processingDirectory = try makeProcessingDirectory(sessionID: manifest.sessionID)
     defer { try? FileManager.default.removeItem(at: processingDirectory) }
     let canonicalTrack: MeetingAudioTrack = manifest.chunks.contains { $0.track == .mixed }
       ? .mixed : (manifest.chunks.contains { $0.track == .system } ? .system : .microphone)
+    var checkpoint = resumable
+      ? Self.loadProgress(manifest: manifest, store: store, language: language)
+      : MeetingLocalProcessingProgress(sourceKey: "")
     guard let canonical = try await transcribeTrack(
       track: canonicalTrack,
       manifest: manifest,
       store: store,
       directory: processingDirectory,
-      language: language
+      language: language,
+      alignmentOnly: false,
+      checkpoint: &checkpoint,
+      persist: resumable
     ) else {
       throw TranscriptionError.emptyTranscript
     }
     let selfTranscript: TranscriptionResult?
     do {
+      // Alignment-only: an undecodable microphone window is skipped so the
+      // rest of the `You` evidence survives.
       selfTranscript = try await transcribeTrack(
         track: .microphone,
         manifest: manifest,
         store: store,
         directory: processingDirectory,
-        language: language
+        language: language,
+        alignmentOnly: true,
+        checkpoint: &checkpoint,
+        persist: resumable
       )
     } catch is CancellationError {
       throw CancellationError()
@@ -95,11 +150,22 @@ actor MeetingLocalProcessor {
     }) ?? []
     try Task.checkCancellation()
     let speakerEvidence = (try? store.loadSpeakerEvidence(sessionID: manifest.sessionID)) ?? []
+    // The microphone is captured without echo cancellation: on speakers it
+    // also hears remote participants. Loaded only if a fuzzy match needs it.
+    var energy: (microphone: MeetingTrackEnergyProfile, system: MeetingTrackEnergyProfile)??
     let turns = canonical.segments.map { segment in
       let startMs = Int64((segment.start * 1_000).rounded())
       let endMs = Int64((max(segment.end, segment.start) * 1_000).rounded())
       let identity: MeetingSpeakerIdentity
-      if matchesSelf(segment, in: selfTranscript?.segments ?? []) {
+      if matchesSelf(segment, in: selfTranscript?.segments ?? [], microphoneDominates: {
+        if energy == nil {
+          energy = .some(try? (MeetingTrackEnergyProfile(track: .microphone, manifest: manifest, store: store),
+                               MeetingTrackEnergyProfile(track: .system, manifest: manifest, store: store)))
+        }
+        // Unreadable energy fails closed to the diarized label.
+        guard let profiles = energy ?? nil else { return false }
+        return Self.microphoneDominates(segment, microphone: profiles.microphone, system: profiles.system)
+      }) {
         identity = .microphone
       } else if !(selfTranscript?.segments ?? []).contains(where: { $0.end > segment.start && $0.start < segment.end }),
                 let named = MeetingSpeakerEvidenceMatcher.identity(startMs: startMs, endMs: endMs, evidence: speakerEvidence) {
@@ -123,10 +189,12 @@ actor MeetingLocalProcessor {
 
     let fallbackDuration = Double(manifest.chunks.map(\.endMs).max() ?? 0) / 1_000
     let durationMs = manifest.chunks.map(\.endMs).max() ?? Int64(fallbackDuration * 1_000)
+    let untranscribed = checkpoint.tracks[canonicalTrack.rawValue]?.untranscribedWindows.count ?? 0
     return MeetingLocalProcessingResult(
       turns: turns,
       modelVersion: WhisperKitEngine.meetingModelIdentifier,
-      durationMs: durationMs
+      durationMs: durationMs,
+      untranscribedAudibleWindowCount: untranscribed > 0 ? untranscribed : nil
     )
   }
 
@@ -135,9 +203,80 @@ actor MeetingLocalProcessor {
       "Meeting window decode failed",
       metadata: ["event": "meeting_window_empty", "session": .string(sessionID.uuidString),
                  "track": .string(track.rawValue), "window_start_ms": .string(String(startMs)),
-                 "window_end_ms": .string(String(endMs))]
+                 "window_end_ms": .string(String(endMs)), "outcome": "failed"]
     )
     return MeetingWindowTranscriptionFailure(track: track, startMs: startMs, endMs: endMs)
+  }
+
+  private func logUntranscribedWindow(sessionID: UUID, track: MeetingAudioTrack, startMs: Int64, endMs: Int64) {
+    Logging.Logger(label: "agency.thatworks.WhiskerFlow.MeetingProcessing").warning(
+      "Audible meeting window retained as an untranscribed gap",
+      metadata: ["event": "meeting_window_empty", "session": .string(sessionID.uuidString),
+                 "track": .string(track.rawValue), "window_start_ms": .string(String(startMs)),
+                 "window_end_ms": .string(String(endMs)), "reason": "empty"]
+    )
+  }
+
+  private func logAlignmentStopped(sessionID: UUID, startMs: Int64, error: Error) {
+    Logging.Logger(label: "agency.thatworks.WhiskerFlow.MeetingProcessing").warning(
+      "Microphone alignment pass stopped; decoded self evidence retained",
+      metadata: ["event": "meeting_alignment_stopped", "session": .string(sessionID.uuidString),
+                 "track": .string(MeetingAudioTrack.microphone.rawValue), "window_start_ms": .string(String(startMs)),
+                 "reason": .string(String(describing: type(of: error)))]
+    )
+  }
+
+  /// Binds progress to the exact source chunks, model and language so a
+  /// changed manifest or setting never resumes from stale windows.
+  private static func progressKey(manifest: MeetingRecordingSessionManifest, language: String?) -> String {
+    var lines = ["session=\(manifest.sessionID.uuidString)", "model=\(WhisperKitEngine.meetingModelIdentifier)",
+                 "language=\(language ?? "auto")", "window=\(MeetingTranscriptionWindowPolicy.maximumDurationMs)"]
+    for chunk in manifest.chunks.sorted(by: { ($0.track.rawValue, $0.sequence) < ($1.track.rawValue, $1.sequence) }) {
+      lines.append("\(chunk.track.rawValue)|\(chunk.sequence)|\(chunk.startMs)|\(chunk.endMs)|\(chunk.checksum)")
+    }
+    return SHA256.hash(data: Data(lines.joined(separator: "\n").utf8)).map { String(format: "%02x", $0) }.joined()
+  }
+
+  private static func loadProgress(
+    manifest: MeetingRecordingSessionManifest, store: EncryptedMeetingChunkStore, language: String?
+  ) -> MeetingLocalProcessingProgress {
+    let key = progressKey(manifest: manifest, language: language)
+    if let data = try? store.readProcessingCheckpoint(sessionID: manifest.sessionID),
+       let saved = try? JSONDecoder().decode(MeetingLocalProcessingProgress.self, from: data),
+       saved.progressVersion == MeetingLocalProcessingProgress.currentVersion, saved.sourceKey == key {
+      return saved
+    }
+    return MeetingLocalProcessingProgress(sourceKey: key)
+  }
+
+  private static func saveProgress(
+    _ progress: MeetingLocalProcessingProgress, sessionID: UUID, store: EncryptedMeetingChunkStore
+  ) {
+    // Best effort: a failed write only costs re-decoding on the next attempt.
+    guard let data = try? JSONEncoder().encode(progress) else { return }
+    try? store.writeProcessingCheckpoint(sessionID: sessionID, data: data)
+  }
+
+  /// Retries decoder errors that are usually transient on slower Macs: a
+  /// deadline under thermal pressure, or the model gate still held by an
+  /// abandoned decode or a dictation. Waits scale with the failure kind.
+  private func decodeWithTransientRetry(_ url: URL, _ language: String?) async throws -> TranscriptionResult {
+    var attempt = 0
+    while true {
+      do {
+        return try await transcribeMeeting(url, language)
+      } catch let error as TranscriptionError {
+        let delayUnits: UInt64
+        switch error {
+        case .timedOut: delayUnits = 10
+        case .underlying: delayUnits = UInt64(5 * (attempt + 1))
+        default: throw error
+        }
+        attempt += 1
+        guard attempt < Self.transientDecodeAttemptCount else { throw error }
+        try await Task.sleep(nanoseconds: delayUnits * transientRetryUnitNanoseconds)
+      }
+    }
   }
 
   private func transcribeTrack(
@@ -145,16 +284,31 @@ actor MeetingLocalProcessor {
     manifest: MeetingRecordingSessionManifest,
     store: EncryptedMeetingChunkStore,
     directory: URL,
-    language: String?
+    language: String?,
+    alignmentOnly: Bool,
+    checkpoint: inout MeetingLocalProcessingProgress,
+    persist: Bool
   ) async throws -> TranscriptionResult? {
     let descriptors = manifest.chunks
       .filter { $0.track == track }
       .sorted { $0.sequence < $1.sequence }
     guard !descriptors.isEmpty else { return nil }
-    var segments: [TranscriptionSegment] = []
-    var resolvedLanguage: String?
-    var duration: Double = 0
-    for (index, window) in MeetingTranscriptionWindowPolicy.windows(descriptors).enumerated() {
+    var progress = checkpoint.tracks[track.rawValue] ?? MeetingLocalProcessingProgress.Track()
+    // Empty decodes of the same audio repeat, so a majority-empty verdict from
+    // this launch fails fast; a later launch re-decodes the track once.
+    if !alignmentOnly, let verdictLaunch = progress.majorityEmptyLaunchID {
+      if verdictLaunch == Self.launchID, let failure = progress.untranscribedWindows.first {
+        throw windowFailure(sessionID: manifest.sessionID, track: track, startMs: failure[0], endMs: failure[1])
+      }
+      progress = MeetingLocalProcessingProgress.Track()
+    }
+    var segments = progress.segments.map { TranscriptionSegment(text: $0.text, start: $0.start, end: $0.end) }
+    var resolvedLanguage = progress.language
+    var duration = progress.duration
+    let windows = MeetingTranscriptionWindowPolicy.windows(descriptors)
+    windowLoop: for (index, window) in windows.enumerated() {
+      // Windows already recorded in the checkpoint are not decoded again.
+      guard index >= progress.completedWindows else { continue }
       try Task.checkCancellation()
       guard let first = window.first, let last = window.last else { continue }
       let materialized = try writeTemporaryWAV(
@@ -165,115 +319,177 @@ actor MeetingLocalProcessor {
         name: "\(track.rawValue)-\(index)"
       )
       defer { try? FileManager.default.removeItem(at: materialized.url) }
-      let result: TranscriptionResult
+      if materialized.containsAudibleActivity { progress.audibleWindows += 1 }
+      var decodedResult: TranscriptionResult?
       do {
-        result = try await transcribeMeeting(materialized.url, language)
+        decodedResult = try await decodeWithTransientRetry(materialized.url, language)
       } catch TranscriptionError.emptyTranscript {
         // Whisper can emit an empty result for a longer window even when the
         // same source decodes at smaller boundaries. Retry each durable chunk
-        // once; never silently skip an audible failed retry.
-        guard materialized.containsAudibleActivity else { continue }
-        guard window.count > 1 else {
-          throw windowFailure(sessionID: manifest.sessionID, track: track, startMs: first.startMs, endMs: last.endMs)
-        }
-        var recovered: [TranscriptionSegment] = []
-        var firstAudibleFailure: (startMs: Int64, endMs: Int64)?
-        for descriptor in window {
-          try Task.checkCancellation()
-          let retry = try writeTemporaryWAV(descriptors: [descriptor], manifest: manifest, store: store,
-                                            directory: directory, name: "\(track.rawValue)-\(index)-retry-\(descriptor.sequence)")
-          defer { try? FileManager.default.removeItem(at: retry.url) }
-          var decoded: TranscriptionResult?
-          for attempt in 0..<Self.audibleChunkRetryCount {
-            do {
-              decoded = try await transcribeMeeting(retry.url, language)
-              break
-            } catch TranscriptionError.emptyTranscript {
-              guard retry.containsAudibleActivity else { break }
-              guard attempt + 1 < Self.audibleChunkRetryCount else { break }
-              // A short retry gives WhisperKit time to release a transient
-              // decoder/VAD failure without allowing overlapping model work.
-              try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 200_000_000)
-            }
+        // and bounded subwindows before treating the window as non-speech.
+        if materialized.containsAudibleActivity {
+          let recovery: (result: TranscriptionResult?, firstAudibleFailure: (startMs: Int64, endMs: Int64)?)
+          do {
+            recovery = try await recoverEmptyWindow(
+              window, track: track, index: index, manifest: manifest, store: store,
+              directory: directory, language: language)
+          } catch let error where alignmentOnly && !(error is CancellationError) && !Task.isCancelled {
+            logAlignmentStopped(sessionID: manifest.sessionID, startMs: first.startMs, error: error)
+            break windowLoop
           }
-          if decoded == nil, retry.containsAudibleActivity {
-            firstAudibleFailure = firstAudibleFailure ?? (descriptor.startMs, descriptor.endMs)
-            let source = try readSamples(
-              descriptors: [descriptor], manifest: manifest, store: store
-            )
-            let partSize = max(1, source.count / Self.audibleChunkSubwindowCount)
-            for part in 0..<Self.audibleChunkSubwindowCount {
-              let start = part * partSize
-              let end = part == Self.audibleChunkSubwindowCount - 1
-                ? source.count : min(source.count, start + partSize)
-              guard start < end else { continue }
-              let subwindow = try writeTemporaryWAV(
-                samples: source[start..<end], directory: directory,
-                name: "\(track.rawValue)-\(index)-subretry-\(descriptor.sequence)-\(part)"
-              )
-              defer { try? FileManager.default.removeItem(at: subwindow.url) }
-              guard subwindow.containsAudibleActivity else { continue }
-              for attempt in 0..<Self.audibleChunkRetryCount {
-                do {
-                  decoded = try await transcribeMeeting(subwindow.url, language)
-                  break
-                } catch TranscriptionError.emptyTranscript {
-                  guard attempt + 1 < Self.audibleChunkRetryCount else { break }
-                  try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 200_000_000)
-                }
-              }
-              if let subwindowDecoded = decoded {
-                let offset = Double(descriptor.startMs - first.startMs) / 1_000
-                  + Double(start) / 16_000
-                recovered.append(contentsOf: subwindowDecoded.segments.map {
-                  TranscriptionSegment(text: $0.text, start: $0.start + offset, end: $0.end + offset)
-                })
-                decoded = nil
-              }
-            }
-          }
-          if let decoded {
-            let offset = Double(descriptor.startMs - first.startMs) / 1000
-            recovered.append(contentsOf: decoded.segments.map {
-              TranscriptionSegment(text: $0.text, start: $0.start + offset, end: $0.end + offset)
-            })
+          decodedResult = recovery.result
+          if decodedResult == nil {
+            let failure = recovery.firstAudibleFailure ?? (first.startMs, last.endMs)
+            logUntranscribedWindow(sessionID: manifest.sessionID, track: track, startMs: failure.startMs, endMs: failure.endMs)
+            progress.untranscribedWindows.append([failure.startMs, failure.endMs])
           }
         }
-        guard !recovered.isEmpty else {
-          let failure = firstAudibleFailure ?? (first.startMs, last.endMs)
-          throw windowFailure(sessionID: manifest.sessionID, track: track, startMs: failure.startMs, endMs: failure.endMs)
-        }
-        result = TranscriptionResult(text: recovered.map(\.text).joined(separator: " "), segments: recovered, language: language)
+      } catch let error where alignmentOnly && !(error is CancellationError) && !Task.isCancelled {
+        // A deadline or held model gate after bounded retries means the decoder
+        // is unavailable, so later windows would fail too. Keep the `You`
+        // evidence decoded so far; this window stays pending for a later run.
+        logAlignmentStopped(sessionID: manifest.sessionID, startMs: first.startMs, error: error)
+        break windowLoop
       }
-      let offset = Double(first.startMs) / 1_000
-      let ownershipBoundary = index > 0 && window.count > 1
-        ? Double(window[1].startMs) / 1_000
-        : nil
-      for segment in result.segments {
-        let rebased = TranscriptionSegment(
-          text: segment.text,
-          start: segment.start + offset,
-          end: segment.end + offset
-        )
-        MeetingSegmentReconciler.insert(
-          rebased,
-          ownershipBoundary: ownershipBoundary,
-          into: &segments
-        )
+      if let result = decodedResult {
+        let offset = Double(first.startMs) / 1_000
+        let ownershipBoundary = index > 0 && window.count > 1
+          ? Double(window[1].startMs) / 1_000
+          : nil
+        for segment in result.segments {
+          let rebased = TranscriptionSegment(
+            text: segment.text,
+            start: segment.start + offset,
+            end: segment.end + offset
+          )
+          MeetingSegmentReconciler.insert(
+            rebased,
+            ownershipBoundary: ownershipBoundary,
+            into: &segments
+          )
+        }
+        resolvedLanguage = resolvedLanguage ?? result.language
+        duration = max(duration, Double(last.endMs) / 1_000)
       }
-      resolvedLanguage = resolvedLanguage ?? result.language
-      duration = max(duration, Double(last.endMs) / 1_000)
+      progress.completedWindows = index + 1
+      progress.segments = segments.map { .init(text: $0.text, start: $0.start, end: $0.end) }
+      progress.language = resolvedLanguage
+      progress.duration = duration
+      checkpoint.tracks[track.rawValue] = progress
+      if persist { Self.saveProgress(checkpoint, sessionID: manifest.sessionID, store: store) }
+      // Stop early once the verdict below is certain for the whole track.
+      if !alignmentOnly, progress.untranscribedWindows.count * 2 > windows.count { break }
+    }
+    // Non-speech noise in a few windows is a gap. When most audible canonical
+    // audio decodes empty, the decoder may be at fault rather than the audio:
+    // keep the recording and fail. Decoded windows stay checkpointed, so retries
+    // in this launch fail fast instead of re-decoding the meeting.
+    if !alignmentOnly, let failure = progress.untranscribedWindows.first,
+       progress.untranscribedWindows.count * 2 > progress.audibleWindows {
+      progress.majorityEmptyLaunchID = Self.launchID
+      checkpoint.tracks[track.rawValue] = progress
+      if persist { Self.saveProgress(checkpoint, sessionID: manifest.sessionID, store: store) }
+      throw windowFailure(sessionID: manifest.sessionID, track: track, startMs: failure[0], endMs: failure[1])
     }
     segments.sort { ($0.start, $0.end) < ($1.start, $1.end) }
     let text = segments.map(\.text).joined(separator: " ")
       .trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty else { throw TranscriptionError.emptyTranscript }
+    // No speech anywhere is a valid, terminal outcome (for example an
+    // unattended or silent recording); callers decide how to deliver it.
     return TranscriptionResult(
       text: text.plainTranscriptText,
       segments: segments,
       language: resolvedLanguage ?? language,
       duration: duration
     )
+  }
+
+  /// Bounded recovery for an audible window that decoded empty: each durable
+  /// chunk is retried, then split into subwindows. Returns nil when every
+  /// attempt is still empty.
+  private func recoverEmptyWindow(
+    _ window: [MeetingRecordingChunkDescriptor],
+    track: MeetingAudioTrack,
+    index: Int,
+    manifest: MeetingRecordingSessionManifest,
+    store: EncryptedMeetingChunkStore,
+    directory: URL,
+    language: String?
+  ) async throws -> (result: TranscriptionResult?, firstAudibleFailure: (startMs: Int64, endMs: Int64)?) {
+    guard let first = window.first else { return (nil, nil) }
+    var recovered: [TranscriptionSegment] = []
+    var firstAudibleFailure: (startMs: Int64, endMs: Int64)?
+    for descriptor in window {
+      try Task.checkCancellation()
+      let retry = try writeTemporaryWAV(descriptors: [descriptor], manifest: manifest, store: store,
+                                        directory: directory, name: "\(track.rawValue)-\(index)-retry-\(descriptor.sequence)")
+      defer { try? FileManager.default.removeItem(at: retry.url) }
+      var decoded: TranscriptionResult?
+      // A single-chunk window was just decoded whole; go straight to subwindows.
+      let chunkAttempts = window.count > 1 ? Self.audibleChunkRetryCount : 0
+      for attempt in 0..<chunkAttempts {
+        do {
+          decoded = try await decodeWithTransientRetry(retry.url, language)
+          break
+        } catch TranscriptionError.emptyTranscript {
+          guard retry.containsAudibleActivity else { break }
+          guard attempt + 1 < Self.audibleChunkRetryCount else { break }
+          // A short retry gives WhisperKit time to release a transient
+          // decoder/VAD failure without allowing overlapping model work.
+          try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 200_000_000)
+        }
+      }
+      if decoded == nil, retry.containsAudibleActivity {
+        let source = try readSamples(
+          descriptors: [descriptor], manifest: manifest, store: store
+        )
+        let partSize = max(1, source.count / Self.audibleChunkSubwindowCount)
+        var subwindowFailed = false
+        for part in 0..<Self.audibleChunkSubwindowCount {
+          let start = part * partSize
+          let end = part == Self.audibleChunkSubwindowCount - 1
+            ? source.count : min(source.count, start + partSize)
+          guard start < end else { continue }
+          let subwindow = try writeTemporaryWAV(
+            samples: source[start..<end], directory: directory,
+            name: "\(track.rawValue)-\(index)-subretry-\(descriptor.sequence)-\(part)"
+          )
+          defer { try? FileManager.default.removeItem(at: subwindow.url) }
+          guard subwindow.containsAudibleActivity else { continue }
+          for attempt in 0..<Self.audibleChunkRetryCount {
+            do {
+              decoded = try await decodeWithTransientRetry(subwindow.url, language)
+              break
+            } catch TranscriptionError.emptyTranscript {
+              guard attempt + 1 < Self.audibleChunkRetryCount else { break }
+              try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 200_000_000)
+            }
+          }
+          if let subwindowDecoded = decoded {
+            let offset = Double(descriptor.startMs - first.startMs) / 1_000
+              + Double(start) / 16_000
+            recovered.append(contentsOf: subwindowDecoded.segments.map {
+              TranscriptionSegment(text: $0.text, start: $0.start + offset, end: $0.end + offset)
+            })
+            decoded = nil
+          } else {
+            subwindowFailed = true
+          }
+        }
+        if subwindowFailed {
+          firstAudibleFailure = firstAudibleFailure ?? (descriptor.startMs, descriptor.endMs)
+        }
+      }
+      if let decoded {
+        let offset = Double(descriptor.startMs - first.startMs) / 1000
+        recovered.append(contentsOf: decoded.segments.map {
+          TranscriptionSegment(text: $0.text, start: $0.start + offset, end: $0.end + offset)
+        })
+      }
+    }
+    guard !recovered.isEmpty else { return (nil, firstAudibleFailure) }
+    return (TranscriptionResult(text: recovered.map(\.text).joined(separator: " "), segments: recovered, language: language),
+            firstAudibleFailure)
   }
 
   private func writeTemporaryWAV(
@@ -424,15 +640,53 @@ actor MeetingLocalProcessor {
     return directory
   }
 
-  private func matchesSelf(_ segment: TranscriptionSegment, in selfSegments: [TranscriptionSegment])
-    -> Bool {
-    selfSegments.contains { candidate in
+  /// Independent mic and mixed decodes rarely agree on segment boundaries or
+  /// exact wording (punctuation, a remote backchannel). An exact, sustained
+  /// match is accepted as before. A looser match (overlap plus most canonical
+  /// words on the mic) also needs the mic to dominate the system track there,
+  /// because remote speech played on speakers is transcribed on the mic too.
+  func matchesSelf(
+    _ segment: TranscriptionSegment,
+    in selfSegments: [TranscriptionSegment],
+    microphoneDominates: () -> Bool = { true }
+  ) -> Bool {
+    let words = normalize(segment.text).split(separator: " ").map(String.init)
+    guard !words.isEmpty else { return false }
+    let duration = max(0.01, segment.end - segment.start)
+    let overlapping = selfSegments.filter { $0.end > segment.start && $0.start < segment.end }
+    let normalizedSegment = words.joined(separator: " ")
+    if overlapping.contains(where: { candidate in
       let overlap = max(0, min(segment.end, candidate.end) - max(segment.start, candidate.start))
-      let duration = max(0.01, segment.end - segment.start)
-      let normalizedSegment = normalize(segment.text)
-      let normalizedCandidate = normalize(candidate.text)
-      return overlap / duration >= 0.75 && normalizedSegment == normalizedCandidate
+      return overlap / duration >= 0.75 && normalize(candidate.text) == normalizedSegment
+    }) {
+      return true
     }
+    let overlap = overlapping.reduce(0.0) {
+      $0 + max(0, min(segment.end, $1.end) - max(segment.start, $1.start))
+    }
+    guard min(1, overlap / duration) >= 0.5 else { return false }
+    var available = overlapping.flatMap { normalize($0.text).split(separator: " ").map(String.init) }
+      .reduce(into: [String: Int]()) { $0[$1, default: 0] += 1 }
+    var matched = 0
+    for word in words where available[word, default: 0] > 0 {
+      available[word, default: 0] -= 1
+      matched += 1
+    }
+    return Double(matched) / Double(words.count) >= 0.6 && microphoneDominates()
+  }
+
+  /// The user's own voice reaches the mic far louder than the system track
+  /// carries it (normally not at all); speaker echo is quieter on the mic
+  /// than the remote audio itself. A quiet system track cannot be echoed.
+  static func microphoneDominates(
+    _ segment: TranscriptionSegment,
+    microphone: MeetingTrackEnergyProfile,
+    system: MeetingTrackEnergyProfile
+  ) -> Bool {
+    guard let systemEnergy = system.meanSquare(start: segment.start, end: segment.end),
+          systemEnergy >= Self.audibleMeanSquare else { return true }
+    let microphoneEnergy = microphone.meanSquare(start: segment.start, end: segment.end) ?? 0
+    return microphoneEnergy >= Self.selfDominanceRatio * systemEnergy
   }
 
   private func diarizedSpeaker(
@@ -459,6 +713,50 @@ actor MeetingLocalProcessor {
 private struct MaterializedMeetingWindow {
   let url: URL
   let containsAudibleActivity: Bool
+}
+
+/// Mean-square energy of one track in 100 ms blocks on the meeting timeline.
+/// Bounded memory (about 290 KB for a two-hour meeting) and one chunk read.
+struct MeetingTrackEnergyProfile {
+  static let blockMs: Int64 = 100
+  private static let samplesPerBlock = Int(16_000 * blockMs / 1_000)
+  private var blocks: [Float] = []
+  private var covered: [Bool] = []
+
+  init(track: MeetingAudioTrack, manifest: MeetingRecordingSessionManifest, store: EncryptedMeetingChunkStore) throws {
+    for descriptor in manifest.chunks where descriptor.track == track {
+      let data = try store.readChunk(sessionID: manifest.sessionID, descriptor: descriptor)
+      guard data.count % MemoryLayout<Float>.size == 0 else {
+        throw TranscriptionError.underlying("Meeting audio chunk is not aligned")
+      }
+      let firstBlock = Int(max(0, descriptor.startMs) / Self.blockMs)
+      data.withUnsafeBytes { rawBuffer in
+        let samples = rawBuffer.bindMemory(to: Float.self)
+        for (offset, start) in stride(from: 0, to: samples.count, by: Self.samplesPerBlock).enumerated() {
+          let end = min(samples.count, start + Self.samplesPerBlock)
+          var sum: Float = 0
+          for index in start..<end { sum += samples[index] * samples[index] }
+          let block = firstBlock + offset
+          if block >= blocks.count {
+            blocks.append(contentsOf: repeatElement(0, count: block - blocks.count + 1))
+            covered.append(contentsOf: repeatElement(false, count: block - covered.count + 1))
+          }
+          blocks[block] = sum / Float(end - start)
+          covered[block] = true
+        }
+      }
+    }
+  }
+
+  /// Nil when the track has no audio in the span.
+  func meanSquare(start: Double, end: Double) -> Double? {
+    let first = max(0, Int((start * 1_000) / Double(Self.blockMs)))
+    let last = min(blocks.count - 1, Int((max(end, start) * 1_000) / Double(Self.blockMs)))
+    guard first <= last else { return nil }
+    let values = (first...last).filter { covered[$0] }.map { Double(blocks[$0]) }
+    guard !values.isEmpty else { return nil }
+    return values.reduce(0, +) / Double(values.count)
+  }
 }
 
 enum MeetingSegmentReconciler {

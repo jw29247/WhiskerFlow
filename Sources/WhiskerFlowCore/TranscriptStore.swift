@@ -130,7 +130,21 @@ public final class TranscriptStore {
             return
         }
 
-        let data = try Data(contentsOf: fileURL)
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            records = []
+            try pruneExpired()
+            return
+        } catch {
+            // The file exists but can't be read (permissions after a restore,
+            // I/O error). Its bytes are still the only copy of the history, so
+            // the next `add` must not replace it with a one-record list.
+            records = []
+            persistenceSuspended = true
+            throw error
+        }
         do {
             records = try JSONDecoder.whiskerFlow.decode([TranscriptRecord].self, from: data)
         } catch {
@@ -241,7 +255,9 @@ public final class TranscriptStore {
             removeAudioFile(record.audioFilePath)
         }
         records = retained
-        if sweepOrphans { removeOldOrphanedAudioFiles(cutoff: cutoff) }
+        // While suspended, `records` doesn't reflect the history on disk, so every
+        // WAV it references would look orphaned.
+        if sweepOrphans, !persistenceSuspended { removeOldOrphanedAudioFiles(cutoff: cutoff) }
         try persist()
     }
 

@@ -40,10 +40,14 @@ public enum MeetingBrowserInbox {
     }
     public static func accept(_ bytes: Data, root: URL = root) throws -> Bool {
         guard bytes.count <= 65536 else { return false }
-        let batch = try JSONDecoder().decode(MeetBrowserBatch.self, from: bytes)
-        guard batch.meetingCode.range(of: "^[a-z]{3}-[a-z]{4}-[a-z]{3}$", options: .regularExpression) != nil,
-              batch.samples.count <= 64,
-              batch.samples.allSatisfy({ !$0.participantID.isEmpty && $0.participantID.utf8.count <= 512 && !$0.displayName.isEmpty && $0.displayName.utf8.count <= 200 && $0.atMs >= nowMs - 10000 && $0.atMs <= nowMs + 500 }) else { return false }
+        let decoded = try JSONDecoder().decode(MeetBrowserBatch.self, from: bytes)
+        guard decoded.meetingCode.range(of: "^[a-z]{3}-[a-z]{4}-[a-z]{3}$", options: .regularExpression) != nil,
+              decoded.samples.count <= 64,
+              decoded.samples.allSatisfy({ !$0.participantID.isEmpty && $0.participantID.utf8.count <= 512 && !$0.displayName.isEmpty && $0.displayName.utf8.count <= 200 }) else { return false }
+        // Page clocks drift from ours (sleep, NTP steps). Drop out-of-window
+        // samples one by one: rejecting the batch would disarm the relay.
+        let now = nowMs
+        let batch = MeetBrowserBatch(meetingCode: decoded.meetingCode, samples: decoded.samples.filter { $0.atMs >= now - 10000 && $0.atMs <= now + 500 })
         let config = try JSONDecoder().decode(Configuration.self, from: Data(contentsOf: root.appendingPathComponent("active.json")))
         guard config.updatedMs >= nowMs - 5000 && config.updatedMs <= nowMs + 500 else { return false }
         let files = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil).filter { $0.pathExtension == "incoming" }

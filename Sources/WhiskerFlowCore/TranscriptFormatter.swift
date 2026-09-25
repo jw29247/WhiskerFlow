@@ -6,15 +6,21 @@ public struct FormattingOptions: Codable, Equatable, Sendable {
     public var spokenLineCommands: Bool
     public var capitalizeSentences: Bool
     public var removeFillerWords: Bool
+    /// Dictation language (BCP-47, "auto" or nil). Runtime context only, never
+    /// persisted: the filler list is English, and words like German "um"
+    /// ("um 5 Uhr") must survive when dictating in another language.
+    public var language: String?
 
     public init(
         spokenLineCommands: Bool = false,
         capitalizeSentences: Bool = false,
-        removeFillerWords: Bool = false
+        removeFillerWords: Bool = false,
+        language: String? = nil
     ) {
         self.spokenLineCommands = spokenLineCommands
         self.capitalizeSentences = capitalizeSentences
         self.removeFillerWords = removeFillerWords
+        self.language = language
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -40,10 +46,20 @@ public enum TranscriptFormatter {
         guard options.isActive else { return text }
 
         var result = text
-        if options.removeFillerWords { result = removingFillerWords(result) }
+        if options.removeFillerWords, usesEnglishFillers(options.language) {
+            result = removingFillerWords(result)
+        }
         if options.spokenLineCommands { result = applyingSpokenCommands(result) }
         if options.capitalizeSentences { result = capitalizingSentences(result) }
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Unknown or auto-detected language keeps the English list, matching the
+    /// behaviour before the language was known here.
+    static func usesEnglishFillers(_ language: String?) -> Bool {
+        guard let code = language?.trimmingCharacters(in: .whitespaces).lowercased(),
+              !code.isEmpty, code != "auto" else { return true }
+        return code == "en" || code.hasPrefix("en-") || code.hasPrefix("en_")
     }
 
     /// A hyphen is a word boundary to `\b`, so plain boundaries would fire inside

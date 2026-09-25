@@ -19,7 +19,12 @@ final class AppSettings {
     var engine: TranscriptionEngineKind { didSet { defaults.set(engine.rawValue, forKey: Keys.engine) } }
     var model: WhisperModel { didSet { defaults.set(model.rawValue, forKey: Keys.model) } }
     /// BCP-47 code, or "auto" to let the engine detect.
-    var language: String { didSet { defaults.set(language, forKey: Keys.language) } }
+    var language: String {
+        didSet {
+            defaults.set(language, forKey: Keys.language)
+            formatting.language = language
+        }
+    }
     var hotkey: HotkeyTrigger { didSet { defaults.set(hotkey.rawValue, forKey: Keys.hotkey) } }
     /// The key combination used when `hotkey == .custom`.
     var customHotkey: KeyCombo { didSet { persist(customHotkey, key: Keys.customHotkey) } }
@@ -40,6 +45,8 @@ final class AppSettings {
     var whisperCommand: String { didSet { defaults.set(whisperCommand, forKey: Keys.whisperCommand) } }
     var whisperArguments: String { didSet { defaults.set(whisperArguments, forKey: Keys.whisperArguments) } }
     var vocabulary: Vocabulary { didSet { persist(vocabulary, key: Keys.vocabulary) } }
+    /// Carries the dictation language (not persisted) so filler removal can
+    /// skip languages the English filler list doesn't fit.
     var formatting: FormattingOptions { didSet { persist(formatting, key: Keys.formatting) } }
 
     /// Atlas is the production service used by Meeting Mode. The connection
@@ -104,6 +111,16 @@ final class AppSettings {
 
     private static let legacyParakeetMigrationKey = "parakeetTDTv3DefaultMigrated"
 
+    /// Parakeet refuses to run off Apple Silicon, so never migrate a working
+    /// WhisperKit setup onto it there.
+    private static var supportsParakeet: Bool {
+        #if arch(arm64)
+        true
+        #else
+        false
+        #endif
+    }
+
     var launchAtLogin: Bool {
         didSet {
             defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
@@ -118,11 +135,13 @@ final class AppSettings {
         let storedEngine = defaults.string(forKey: Keys.engine).flatMap(TranscriptionEngineKind.init)
         let storedModel = defaults.string(forKey: Keys.model).flatMap(WhisperModel.init)
         let shouldMigrateLegacyDefault = !defaults.bool(forKey: Self.legacyParakeetMigrationKey)
+            && Self.supportsParakeet
             && storedEngine == .whisperKit
             && storedModel == .medium
-        if shouldMigrateLegacyDefault {
-            defaults.set(true, forKey: Self.legacyParakeetMigrationKey)
-        }
+        // One-shot: only a WhisperKit + medium pair stored before this build is the
+        // legacy default. Marking every launch keeps a later deliberate choice of
+        // that pair from being migrated away on the next launch.
+        defaults.set(true, forKey: Self.legacyParakeetMigrationKey)
         let resolvedEngine = TranscriptionEngineKind.engineForStoredPreferences(
             engine: storedEngine,
             model: storedModel,
@@ -133,7 +152,8 @@ final class AppSettings {
             defaults.set(resolvedEngine.rawValue, forKey: Keys.engine)
         }
         model = storedModel ?? .tiny
-        language = Self.migratedLanguage(from: defaults)
+        let initialLanguage = Self.migratedLanguage(from: defaults)
+        language = initialLanguage
         hotkey = defaults.string(forKey: Keys.hotkey).flatMap(HotkeyTrigger.init) ?? .fn
         customHotkey = Self.loadCustomHotkey(from: defaults) ?? .default
         recordingMode = defaults.string(forKey: Keys.recordingMode).flatMap(RecordingMode.init) ?? .holdToTalk
@@ -149,7 +169,9 @@ final class AppSettings {
         whisperCommand = defaults.string(forKey: Keys.whisperCommand) ?? Self.defaultWhisperCommand
         whisperArguments = defaults.string(forKey: Keys.whisperArguments) ?? Self.defaultWhisperArguments
         vocabulary = Self.loadVocabulary(from: defaults) ?? Vocabulary()
-        formatting = Self.loadFormatting(from: defaults) ?? FormattingOptions()
+        var initialFormatting = Self.loadFormatting(from: defaults) ?? FormattingOptions()
+        initialFormatting.language = initialLanguage
+        formatting = initialFormatting
         defaults.removeObject(forKey: Keys.atlasBaseURL)
         // Meeting Mode is an opt-in capture surface. Existing installs must not
         // begin recording or download the large local meeting model until the
@@ -244,12 +266,14 @@ final class AppSettings {
     /// several-hundred-megabyte download (and a dead engine when offline). The
     /// one-shot flag means a user who picks Auto-detect deliberately afterwards
     /// keeps it. Assigning in `init` doesn't run `didSet`, so the value is written
-    /// through to `defaults` here.
+    /// through to `defaults` here. The flag is set on every launch, not just when
+    /// migrating, so an "auto" chosen after a fresh install (or after any other
+    /// stored language) is never mistaken for the legacy value.
     private static func migratedLanguage(from defaults: UserDefaults) -> String {
-        guard let stored = defaults.string(forKey: Keys.language) else { return "en" }
-        guard stored.lowercased() == "auto",
-              !defaults.bool(forKey: Keys.languageAutoMigrated) else { return stored }
+        let alreadyMigrated = defaults.bool(forKey: Keys.languageAutoMigrated)
         defaults.set(true, forKey: Keys.languageAutoMigrated)
+        guard let stored = defaults.string(forKey: Keys.language) else { return "en" }
+        guard stored.lowercased() == "auto", !alreadyMigrated else { return stored }
         defaults.set("en", forKey: Keys.language)
         return "en"
     }

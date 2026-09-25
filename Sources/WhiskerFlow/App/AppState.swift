@@ -71,6 +71,13 @@ final class AppState {
         var quickKind: AssistantRecordKind = .note
         var clientReference: String?
         var accountIdentity: String?
+        /// Retries re-transcribe old audio in the background, long after its paste
+        /// target is gone: they only update History and never paste or copy.
+        var deliversText = true
+        /// The capture never cleared the audibility floor, so a recognizer that
+        /// also finds no words means nothing was said: discard it rather than
+        /// file a failure that no retry can ever recover.
+        var discardsWithoutSpeech = false
     }
 
     /// How long a `.finishing` session may take before the UI is force-recovered.
@@ -79,7 +86,11 @@ final class AppState {
     /// merely slow decode is never reported as a timeout.
     private static let finishWatchdogSeconds = Int(DecodeTimeoutPolicy.liveFinishBudget) + 15
     /// Upper bound on how long quitting waits for a transcript to finish saving.
+    /// A release-time live decode can take far longer on a slow Mac, so anything
+    /// still in flight when it runs out is filed for retry rather than waited on.
     private static let shutdownDrainSeconds: TimeInterval = 5
+    /// How often the Meetings view's free-space verdict is re-measured off-main.
+    private static let meetingStorageRefreshSeconds: UInt64 = 60
 
     var records: [TranscriptRecord] = []
     var selectedRecordID: TranscriptRecord.ID?
@@ -156,6 +167,22 @@ final class AppState {
     /// session was abandoned must not paste, must not touch lifecycle UI a newer
     /// session owns, and must not play sounds — it only files the transcript.
     private var abandonedSessionIDs: Set<UUID> = []
+    /// The spooled audio of each finish still in flight. The streaming path only
+    /// files its record after the live decode and the paste, so a quit that
+    /// outlasts the drain would otherwise leave that audio referenced by nothing.
+    private var inFlightFinishAudio: [UUID: (url: URL, configuration: TranscriptionJobConfiguration)] = [:]
+    /// Sessions whose audio shutdown already filed as a retryable record, keyed
+    /// to that record, so a finish landing afterwards completes it instead of
+    /// adding a duplicate.
+    private var recoveryRecordIDs: [UUID: UUID] = [:]
+    private var retryAllTask: Task<Void, Never>?
+    private var meetingStorageTask: Task<Void, Never>?
+    private var meetingStoragePollTask: Task<Void, Never>?
+    /// Cached Keychain state. Views and the hotkey path read these instead of the
+    /// Keychain, which can block the main thread on a slow securityd or an ACL
+    /// prompt; see `refreshAtlasAccountCache()`.
+    private var atlasTokenAvailable = false
+    private var atlasAccountIdentity: String?
     private var activeRecordingConfiguration: TranscriptionJobConfiguration?
     /// Whether the most recent recording streamed live (vs. file-based capture).
     private var streamingActive = false
@@ -204,10 +231,11 @@ final class AppState {
         if store == nil && !UIPreview.isEnabled {
             meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant)
         }
-        assistant.accountIdentityProvider = { [weak resolvedSettings] in
-            guard let token = resolvedSettings?.atlasDeviceToken, !token.isEmpty else { return nil }
-            return SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
-        }
+        // Until the Keychain proves otherwise, the account is the one the
+        // assistant state was last saved for.
+        atlasAccountIdentity = assistant.saved.accountIdentity
+        refreshAtlasAccountCache()
+        assistant.accountIdentityProvider = { [weak self] in self?.atlasAccountIdentity }
         meetingCapture.assistant.accountIdentityProvider = assistant.accountIdentityProvider
         if store == nil && !UIPreview.isEnabled { assistant.synchronizeAccount() }
         assistant.requestTransport = { [weak self] in
@@ -335,26 +363,57 @@ final class AppState {
     var isAtlasPaired: Bool {
         if UIPreview.isEnabled { return UIPreview.isPaired }
         guard URL(string: settings.atlasBaseURL)?.scheme == "https" else { return false }
-        return !settings.atlasDeviceToken.isEmpty
+        return atlasTokenAvailable
+    }
+
+    nonisolated static func accountIdentity(forToken token: String) -> String {
+        SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Reads the Keychain once — at launch, on activation and after sign-in —
+    /// never on the render or hotkey paths.
+    private func refreshAtlasAccountCache() {
+        guard !UIPreview.isEnabled else { return }
+        let token = settings.atlasDeviceToken
+        if atlasTokenAvailable != !token.isEmpty { atlasTokenAvailable = !token.isEmpty }
+        // A failed Keychain read (locked keychain, re-signed build, busy securityd)
+        // looks exactly like "no token", and the app has no sign-out. Keep the last
+        // known account so a transient failure cannot wipe the assistant's
+        // per-account state; a real account change always arrives with a new token.
+        guard !token.isEmpty else { return }
+        let identity = Self.accountIdentity(forToken: token)
+        if atlasAccountIdentity != identity { atlasAccountIdentity = identity }
     }
 
     var hasScreenRecordingPermission = false
 
-    /// Refreshed off the main actor: the capacity query can wait synchronously on
-    /// CacheDelete XPC, and the Meetings view reads this several times per render.
+    /// Cached, because the capacity query can synchronously wait on CacheDelete
+    /// XPC; it is re-measured off the main thread by
+    /// `refreshMeetingStorageAvailability()`. The coordinator re-checks before
+    /// any capture starts, so the optimistic launch value never records on a
+    /// full disk.
     private(set) var isMeetingStorageAvailable = true
 
     func refreshMeetingStorageAvailability() {
-        Task { @MainActor [weak self] in
-            let available = await Task.detached(priority: .utility) {
-                let root = StorageLocations.applicationSupportRootOrTemporary()
-                    .appendingPathComponent("MeetingRecordings", isDirectory: true)
-                guard let values = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
-                      let capacity = values.volumeAvailableCapacityForImportantUsage else { return false }
-                return capacity >= 500 * 1024 * 1024
+        guard !UIPreview.isEnabled, meetingStorageTask == nil else { return }
+        meetingStorageTask = Task { @MainActor [weak self] in
+            let state = await Task.detached(priority: .utility) {
+                MeetingCaptureCoordinator.readLocalDiskState()
             }.value
-            guard let self, self.isMeetingStorageAvailable != available else { return }
-            self.isMeetingStorageAvailable = available
+            guard let self else { return }
+            self.meetingStorageTask = nil
+            let available = state == "ready"
+            if self.isMeetingStorageAvailable != available { self.isMeetingStorageAvailable = available }
+        }
+    }
+
+    private func startMeetingStoragePolling() {
+        meetingStoragePollTask?.cancel()
+        meetingStoragePollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                self?.refreshMeetingStorageAvailability()
+                try? await Task.sleep(nanoseconds: Self.meetingStorageRefreshSeconds * 1_000_000_000)
+            }
         }
     }
 
@@ -402,6 +461,7 @@ final class AppState {
         prepareNextCapture()
         refreshMeetingStorageAvailability()
         meetingCapture.start()
+        startMeetingStoragePolling()
         hudController = RecordingHUDController(appState: self)
         warmUpEngine()
         warmUpMeetingEngine()
@@ -428,6 +488,8 @@ final class AppState {
         hotkeyMonitor = nil
         audioDeviceMonitor?.stop()
         audioDeviceMonitor = nil
+        meetingStoragePollTask?.cancel()
+        meetingStoragePollTask = nil
         meetingCapture.stopMonitoring()
     }
 
@@ -461,7 +523,35 @@ final class AppState {
             break
         }
 
-        _ = await pendingPersistWork.waitUntilIdle(timeout: Self.shutdownDrainSeconds)
+        guard await !pendingPersistWork.waitUntilIdle(timeout: Self.shutdownDrainSeconds) else { return }
+        fileInFlightFinishesForRecovery()
+    }
+
+    /// A release whose live decode outlasted the quit drain has no record yet.
+    /// File its audio as a failed record so it is in the retry queue on the next
+    /// launch instead of becoming an orphan the sweep deletes. A finish that lands
+    /// before the process exits completes that record rather than adding another.
+    private func fileInFlightFinishesForRecovery() {
+        for (sessionID, pending) in inFlightFinishAudio {
+            let record = TranscriptRecord(
+                text: "",
+                audioFilePath: pending.url.path,
+                createdAt: Date(),
+                status: .failed(errorMessage: "WhiskerFlow quit before transcription finished. Retry this recording."),
+                model: pending.configuration.model.rawValue,
+                engine: pending.configuration.engine.rawValue,
+                language: pending.configuration.language
+            )
+            do {
+                try store.add(record)
+            } catch {
+                noteHistoryFailure(error)
+            }
+            recoveryRecordIDs[sessionID] = record.id
+            abandonedSessionIDs.insert(sessionID)
+        }
+        inFlightFinishAudio = [:]
+        records = store.records
     }
 
     func warmUpEngine() {
@@ -511,7 +601,13 @@ final class AppState {
         meetingWarmUpTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let ready = await transcription.prepareMeeting(language: language)
-            guard !Task.isCancelled, self.settings.resolvedLanguage == language else { return }
+            guard !Task.isCancelled else { return }
+            guard self.settings.resolvedLanguage == language else {
+                // The language changed mid-warm-up and nothing else restarts it;
+                // returning here would leave the state at `.preparing` for good.
+                self.warmUpMeetingEngine()
+                return
+            }
             meetingModelState = ready
                 ? .ready
                 : .failed("Could not load the local meeting model. Encrypted audio will be retained for repair.")
@@ -611,6 +707,8 @@ final class AppState {
         refreshAccessibilityPermission()
         refreshMicrophonePermission()
         refreshScreenRecordingPermission()
+        refreshAtlasAccountCache()
+        refreshMeetingStorageAvailability()
         meetingCapture.refreshConfiguration()
     }
 
@@ -638,6 +736,8 @@ final class AppState {
 
   func refreshMeetingConfiguration() {
         guard !UIPreview.isEnabled else { return }
+        refreshAtlasAccountCache()
+        refreshMeetingStorageAvailability()
         warmUpMeetingEngine()
         meetingCapture.refreshConfiguration()
   }
@@ -763,21 +863,40 @@ final class AppState {
     func retry(_ record: TranscriptRecord) {
         guard !UIPreview.isEnabled else { return }
         guard !activeTranscriptionIDs.contains(record.id) else { return }
-        let configuration = makeTranscriptionConfiguration()
-        Task {
-            await transcribeRecording(
-                record,
-                pasteTarget: nil,
-                configuration: configuration,
-                sessionID: nil
-            )
+        Task { await retryRecording(record) }
+    }
+
+    /// One record at a time: each retry is a full-file decode, and several at once
+    /// would contend for the Neural Engine and memory on an 8 GB Mac.
+    func retryAllFailed() {
+        guard !UIPreview.isEnabled, retryAllTask == nil else { return }
+        let queued = retryQueue.map(\.id)
+        retryAllTask = Task { @MainActor [weak self] in
+            for id in queued {
+                guard let self, !Task.isCancelled else { break }
+                // A record may have been retried, edited or deleted while earlier
+                // ones decoded.
+                guard let record = self.records.first(where: { $0.id == id }), record.status.isFailed,
+                      !self.activeTranscriptionIDs.contains(id) else { continue }
+                await self.retryRecording(record)
+            }
+            self?.retryAllTask = nil
         }
     }
 
-    func retryAllFailed() {
-        for record in retryQueue where !activeTranscriptionIDs.contains(record.id) {
-            retry(record)
-        }
+    /// Re-transcribes into History only. A retry runs long after its dictation,
+    /// so pasting at the cursor would drop an old transcript into whatever app is
+    /// frontmost when the decode happens to finish.
+    private func retryRecording(_ record: TranscriptRecord) async {
+        var configuration = makeTranscriptionConfiguration()
+        configuration.deliversText = false
+        configuration.purpose = .dictation
+        await transcribeRecording(
+            record,
+            pasteTarget: nil,
+            configuration: configuration,
+            sessionID: nil
+        )
     }
 
     // MARK: - Recording
@@ -1132,6 +1251,7 @@ final class AppState {
         finishWorkTokens[sessionID] = workToken
         defer {
             finishWorkTokens[sessionID] = nil
+            inFlightFinishAudio[sessionID] = nil
             pendingPersistWork.end(workToken)
         }
 
@@ -1156,6 +1276,9 @@ final class AppState {
         activeRecordingConfiguration = nil
         let pasteTarget = pasteTargetApplication
         pasteTargetApplication = nil
+        if let url = live.currentAudioURL {
+            inFlightFinishAudio[sessionID] = (url, configuration)
+        }
         let result = await live.finish(reason: reason)
         lifecycleLogger.info("Live decode returned", metadata: ["event": "decode_returned", "session": "\(sessionID)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - finishStarted) * 1000)", "samples": "\(result.totalSampleCount)"])
         watchdog.cancel()
@@ -1168,14 +1291,22 @@ final class AppState {
             // all belong to a newer session by now. File the transcript so it isn't
             // lost, but deliver nothing and touch no lifecycle UI.
             logger.error("Finish returned after the watchdog")
+            let recovered = !result.text.isEmpty && result.coversAllAudio
             DiagnosticsService.breadcrumb(
                 category: "recording",
                 metadata: [
                     "phase": "finish_late",
-                    "recovered": String(!result.text.isEmpty)
+                    "recovered": String(recovered)
                 ]
             )
-            if !result.text.isEmpty {
+            inFlightFinishAudio[sessionID] = nil
+            if let recordID = recoveryRecordIDs.removeValue(forKey: sessionID) {
+                // Shutdown already filed this audio for retry; complete it in place.
+                if recovered {
+                    completeRecoveryRecord(recordID, text: result.text, rawText: result.rawText,
+                                           totalSampleCount: result.totalSampleCount, configuration: configuration)
+                }
+            } else if recovered {
                 persistLiveRecording(
                     text: result.text,
                     rawText: result.rawText,
@@ -1184,6 +1315,11 @@ final class AppState {
                     configuration: configuration,
                     sessionID: sessionID
                 )
+            } else if let url = result.audioURL, result.totalSampleCount > 0 {
+                // No usable transcript (a superseded or incomplete live decode, or
+                // a file-based capture): the audio must still reach the retry queue.
+                fileTimedOutRecording(url: url, totalSampleCount: result.totalSampleCount,
+                                      configuration: configuration)
             }
             span.setAttribute(key: "error.type", value: "finish_timeout")
             span.status = .error(description: "Finish returned after timeout")
@@ -1193,7 +1329,7 @@ final class AppState {
         if configuration.playSounds { soundService.play(.recordingStopped) }
         liveText = ""
 
-        if wasStreaming, !result.text.isEmpty {
+        if wasStreaming, !result.text.isEmpty, result.coversAllAudio {
             // Streaming already produced the transcript — paste immediately, then
             // persist the audio + record off the critical path.
             let mayUpdateUI = canUpdateLifecycleUI(for: sessionID)
@@ -1209,17 +1345,27 @@ final class AppState {
                 accountIdentity: configuration.accountIdentity,
                 sessionID: sessionID
             )
-            persistLiveRecording(
-                text: result.text,
-                rawText: result.rawText,
-                capturedAudioURL: result.audioURL,
-                totalSampleCount: result.totalSampleCount,
-                configuration: configuration,
-                sessionID: sessionID
-            )
+            inFlightFinishAudio[sessionID] = nil
+            if let recordID = recoveryRecordIDs.removeValue(forKey: sessionID) {
+                abandonedSessionIDs.remove(sessionID)
+                completeRecoveryRecord(recordID, text: result.text, rawText: result.rawText,
+                                       totalSampleCount: result.totalSampleCount, configuration: configuration)
+            } else {
+                persistLiveRecording(
+                    text: result.text,
+                    rawText: result.rawText,
+                    capturedAudioURL: result.audioURL,
+                    totalSampleCount: result.totalSampleCount,
+                    configuration: configuration,
+                    sessionID: sessionID
+                )
+            }
         } else {
-            // Non-streaming engine, or streaming caught no speech: fall back to the
-            // standard file-based path (includes the Apple Speech fallback).
+            // Non-streaming engine, streaming caught no speech, or the live
+            // transcript is missing audio (its final pass failed or the tail left
+            // memory): transcribe the file (includes the Apple Speech fallback)
+            // rather than paste a transcript that silently drops the last words.
+            inFlightFinishAudio[sessionID] = nil
             if canUpdateLifecycleUI(for: sessionID) { status = .transcribing }
             await transcribeCapturedSamples(
                 result.samples,
@@ -1263,6 +1409,15 @@ final class AppState {
             } else {
                 status = .success("Microphone changed; partial transcript saved")
             }
+        }
+
+        if result.storageFailed, canUpdateLifecycleUI(for: sessionID) {
+            // The spool stopped taking audio mid-recording (usually a full disk):
+            // whatever was delivered covers only the audio before that point, and
+            // an empty capture is a storage problem, not a microphone one.
+            status = .failure(result.totalSampleCount == 0
+                ? "Couldn't save the recording — free up disk space and try again"
+                : "Disk full: the recording stopped early and later speech is missing")
         }
 
         if case .failure = status {
@@ -1448,6 +1603,50 @@ final class AppState {
         }
     }
 
+    /// Files a late finish that produced no usable transcript as a retryable
+    /// failure, so its audio stays in the retry queue instead of being orphaned.
+    private func fileTimedOutRecording(url: URL, totalSampleCount: Int, configuration: TranscriptionJobConfiguration) {
+        let record = TranscriptRecord(
+            text: "",
+            audioFilePath: url.path,
+            createdAt: Date(),
+            status: .failed(errorMessage: "Transcription timed out. Retry this recording."),
+            durationSeconds: Double(totalSampleCount) / 16_000,
+            model: configuration.model.rawValue,
+            engine: configuration.engine.rawValue,
+            language: configuration.language
+        )
+        do {
+            try store.add(record)
+        } catch {
+            noteHistoryFailure(error)
+        }
+        records = store.records
+    }
+
+    private func completeRecoveryRecord(
+        _ id: UUID,
+        text: String,
+        rawText: String,
+        totalSampleCount: Int,
+        configuration: TranscriptionJobConfiguration
+    ) {
+        do {
+            try store.markTranscribed(
+                id: id,
+                text: text,
+                durationSeconds: Double(totalSampleCount) / 16_000,
+                model: configuration.model.rawValue,
+                engine: configuration.engine.rawValue,
+                language: configuration.language,
+                rawRecognition: rawText
+            )
+        } catch {
+            noteHistoryFailure(error)
+        }
+        records = store.records
+    }
+
     /// Persist captured audio for interrupted-decode recovery, then let Parakeet
     /// use the existing samples without reading and converting the WAV again.
     private func transcribeCapturedSamples(
@@ -1508,35 +1707,49 @@ final class AppState {
                 ]
             )
             discardCapturedAudio(capturedAudioURL)
-            if canUpdateLifecycleUI(for: sessionID) { status = .idle }
+            if canUpdateLifecycleUI(for: sessionID) {
+                // A short, silent capture: say so, or the hotkey looks ignored.
+                status = discardReason == .silent ? .failure("No speech detected") : .idle
+            }
             return
         }
-        do {
-            guard let url = capturedAudioURL else { throw CocoaError(.fileNoSuchFile) }
-            let record = TranscriptRecord(
-                text: "",
-                audioFilePath: url.path,
-                createdAt: Date(),
-                status: .transcribing,
-                model: configuration.model.rawValue,
-                engine: configuration.engine.rawValue,
-                language: configuration.language
-            )
-            try store.add(record)
-            records = store.records
-            if canUpdateLifecycleUI(for: sessionID) {
-                selectedRecordID = record.id
-            }
-            await transcribeRecording(
-                record,
-                pasteTarget: pasteTarget,
-                configuration: configuration,
-                sessionID: sessionID,
-                capturedSamples: nil
-            )
-        } catch {
-            handleStorageError(error, message: "Recording failed")
+        guard let url = capturedAudioURL else {
+            handleStorageError(CocoaError(.fileNoSuchFile), message: "Recording failed")
+            return
         }
+        var configuration = configuration
+        configuration.discardsWithoutSpeech = conversionFailures == 0
+            && totalSampleCount == samples.count
+            && !BoundedDecodeWindowPolicy.containsAudibleActivity(samples)
+        let record = TranscriptRecord(
+            text: "",
+            audioFilePath: url.path,
+            createdAt: Date(),
+            status: .transcribing,
+            durationSeconds: Double(totalSampleCount) / 16_000,
+            model: configuration.model.rawValue,
+            engine: configuration.engine.rawValue,
+            language: configuration.language
+        )
+        // History is best-effort here: the audio is on disk and the recognizer
+        // does not need the record, so a full disk or an unwritable history must
+        // not stop the transcript from being delivered.
+        do {
+            try store.add(record)
+        } catch {
+            noteHistoryFailure(error)
+        }
+        records = store.records
+        if canUpdateLifecycleUI(for: sessionID) {
+            selectedRecordID = record.id
+        }
+        await transcribeRecording(
+            record,
+            pasteTarget: pasteTarget,
+            configuration: configuration,
+            sessionID: sessionID,
+            capturedSamples: nil
+        )
     }
 
     private func discardCapturedAudio(_ url: URL?) {
@@ -1599,15 +1812,10 @@ final class AppState {
         do {
             try store.markTranscribing(id: record.id)
         } catch {
-            span.setAttributes([
-                "error.type": .string("storage"),
-                "error.code": .int((error as NSError).code)
-            ])
-            span.status = .error(description: "Could not mark transcript as transcribing")
-            handleStorageError(error, message: "Could not update transcript")
-            activeTranscriptionIDs.remove(record.id)
-            isTranscribing = !activeTranscriptionIDs.isEmpty
-            return
+            // Best-effort, like every history write on this path: the decode only
+            // needs the audio file.
+            span.setAttribute(key: "history.error.code", value: (error as NSError).code)
+            noteHistoryFailure(error)
         }
         records = store.records
         if canUpdateLifecycleUI(for: sessionID) {
@@ -1622,15 +1830,35 @@ final class AppState {
         do {
             let recognitionStarted = ProcessInfo.processInfo.systemUptime
             lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "recognition", "session": "\(sessionID ?? record.id)"])
-            let outcome = try await transcription.transcribe(
-                audioURL: URL(fileURLWithPath: record.audioFilePath),
-                kind: configuration.engine,
-                model: configuration.model,
-                language: configuration.language,
-                cliConfiguration: configuration.cliConfiguration,
-                allowAppleFallback: configuration.allowAppleFallback,
-                capturedSamples: capturedSamples
+            let audioURL = URL(fileURLWithPath: record.audioFilePath)
+            let backstop = Self.recognitionBackstopSeconds(
+                forAudioSeconds: record.durationSeconds ?? Self.estimatedAudioSeconds(of: audioURL),
+                engine: configuration.engine,
+                allowAppleFallback: configuration.allowAppleFallback
             )
+            let transcription = transcription
+            let outcome: TranscriptionOutcome
+            do {
+                // The engines carry their own decode deadlines; this backstop sits
+                // well above them so that nothing on the path — model preparation,
+                // a decode that never returns, the Apple Speech fallback — can hold
+                // `isTranscribing` and the HUD forever. A timed-out record fails
+                // and stays retryable.
+                outcome = try await withAbandoningDeadline(seconds: backstop) {
+                    try await transcription.transcribe(
+                        audioURL: audioURL,
+                        kind: configuration.engine,
+                        model: configuration.model,
+                        language: configuration.language,
+                        cliConfiguration: configuration.cliConfiguration,
+                        allowAppleFallback: configuration.allowAppleFallback,
+                        capturedSamples: capturedSamples
+                    )
+                }
+            } catch AsyncTimeoutError.timedOut {
+                lifecycleLogger.warning("Recognition backstop fired", metadata: ["event": "recognition_timeout", "session": "\(sessionID ?? record.id)", "timeout.seconds": "\(Int(backstop))"])
+                throw TranscriptionError.timedOut(seconds: Int(backstop))
+            }
             lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "recognition", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - recognitionStarted) * 1000)"])
             let text_processingStarted = ProcessInfo.processInfo.systemUptime
             lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "text_processing", "session": "\(sessionID ?? record.id)"])
@@ -1647,15 +1875,22 @@ final class AppState {
             lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "text_processing", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((resumed - text_processingStarted) * 1000)", "worker_elapsed_ms": "\(processed.workSeconds * 1000)", "resume_delay_ms": "\(max(0, resumed - processed.completed) * 1000)"])
             let history_saveStarted = ProcessInfo.processInfo.systemUptime
             lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "history_save", "session": "\(sessionID ?? record.id)"])
-            try store.markTranscribed(
-                id: record.id,
-                text: finalText,
-                durationSeconds: outcome.result.duration,
-                model: configuration.model.rawValue,
-                engine: outcome.engine.rawValue,
-                language: outcome.result.language,
-                rawRecognition: outcome.result.text
-            )
+            var historySaved = true
+            do {
+                try store.markTranscribed(
+                    id: record.id,
+                    text: finalText,
+                    durationSeconds: outcome.result.duration,
+                    model: configuration.model.rawValue,
+                    engine: outcome.engine.rawValue,
+                    language: outcome.result.language,
+                    rawRecognition: outcome.result.text
+                )
+            } catch {
+                // A recognized transcript is still delivered; only History missed it.
+                historySaved = false
+                noteHistoryFailure(error)
+            }
             lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "history_save", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - history_saveStarted) * 1000)"])
             let ui_updateStarted = ProcessInfo.processInfo.systemUptime
             lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "ui_update", "session": "\(sessionID ?? record.id)"])
@@ -1685,6 +1920,12 @@ final class AppState {
             )
             activeTranscriptionIDs.remove(record.id)
             isTranscribing = !activeTranscriptionIDs.isEmpty
+            guard configuration.deliversText else {
+                if mayUpdateUI {
+                    status = historySaved ? .success("Retry saved to History") : .failure("Could not save transcript")
+                }
+                return
+            }
             await deliver(
                 finalText,
                 pasteTarget: pasteTarget,
@@ -1696,6 +1937,27 @@ final class AppState {
                 accountIdentity: configuration.accountIdentity,
                 sessionID: sessionID
             )
+        } catch let error where configuration.discardsWithoutSpeech && Self.isNoSpeechError(error) {
+            // A quiet capture the recognizer also found empty (a held hotkey with
+            // nothing said, a muted mic): nothing to recover, so no retry entry and
+            // no failure sound — the same outcome as the pre-recognition discard.
+            lifecycleLogger.info("Capture discarded after recognition", metadata: ["event": "capture_discarded", "reason": "silent", "session": "\(sessionID ?? record.id)"])
+            do {
+                try store.delete(id: record.id)
+            } catch {
+                noteHistoryFailure(error)
+            }
+            // The record may never have reached History; the audio still goes.
+            discardCapturedAudio(URL(fileURLWithPath: record.audioFilePath))
+            records = store.records
+            if selectedRecordID == record.id {
+                selectedRecordID = records.first?.id
+            }
+            telemetryOutcome = "discarded"
+            span.setAttribute(key: "outcome", value: telemetryOutcome)
+            if canUpdateLifecycleUI(for: sessionID) {
+                status = .failure("No speech detected")
+            }
         } catch {
             do {
                 try store.markFailed(id: record.id, message: error.localizedDescription)
@@ -1869,8 +2131,68 @@ final class AppState {
 
     private func canUpdateLifecycleUI(for sessionID: UUID?) -> Bool {
         guard recordingCoordinator.phase == .idle else { return false }
-        guard let sessionID else { return true }
+        // A background retry (no session) must not take the status over from a
+        // dictation that is still transcribing or pasting after its release.
+        guard let sessionID else { return finishWorkTokens.isEmpty }
         return latestRecordingSessionID == sessionID
+    }
+
+    /// Budget for one whole recognition call: the sum of every deadline the path
+    /// can legitimately spend — a cold model load, the engine's own decode budget,
+    /// and the Apple Speech fallback — so the backstop only ever catches a wait no
+    /// engine bounds. Every term is hardware-scaled and none is clamped, since the
+    /// long-form, windowed and CLI budgets grow with the recording.
+    nonisolated static func recognitionBackstopSeconds(
+        forAudioSeconds duration: Double?,
+        engine: TranscriptionEngineKind = .parakeetTDTv3,
+        allowAppleFallback: Bool = true
+    ) -> Double {
+        // Unknown length: size the budgets like the engines' own unknown-length
+        // ceiling rather than for a short clip.
+        let seconds = max(0, duration ?? DecodeTimeoutPolicy.baseMaximumTimeout)
+        let queuedDecode = DecodeTimeoutPolicy.gateQueueWait
+        let engineBudget: Double
+        switch engine {
+        case .parakeetTDTv3:
+            // The captured-samples decode can fail over to the file decode.
+            engineBudget = DecodeTimeoutPolicy.modelPreparationWait
+                + 2 * (queuedDecode + DecodeTimeoutPolicy.longFormTimeout(forAudioSeconds: seconds))
+        case .whisperKit:
+            let windowSeconds = BoundedDecodeWindowPolicy.windowSeconds
+            let windows = max(1, BoundedDecodeWindowPolicy.frameRanges(
+                totalFrames: Int64(seconds * 16_000), sampleRate: 16_000
+            ).count)
+            let perWindow = queuedDecode + DecodeTimeoutPolicy.timeout(forAudioSeconds: min(seconds, windowSeconds))
+            engineBudget = DecodeTimeoutPolicy.modelPreparationWait + Double(windows) * perWindow
+        case .appleSpeech:
+            engineBudget = DecodeTimeoutPolicy.appleSpeechTimeout(forAudioSeconds: seconds)
+        case .whisperCLI:
+            engineBudget = WhisperCLIEngine.effectiveTimeout(floor: 180, audioSeconds: seconds)
+        }
+        let fallbackBudget = allowAppleFallback && engine != .appleSpeech
+            ? DecodeTimeoutPolicy.appleSpeechTimeout(forAudioSeconds: seconds) : 0
+        let margin = 60 * DecodeTimeoutPolicy.hardwareScale
+        return engineBudget + fallbackBudget + margin
+    }
+
+    /// The recognizer ran and found no words — as opposed to failing to run.
+    nonisolated static func isNoSpeechError(_ error: any Error) -> Bool {
+        switch error {
+        case TranscriptionError.emptyTranscript, WhisperCLIError.emptyTranscript,
+             BoundedTranscriptAssemblyError.emptyTranscript:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Recordings are 16 kHz mono 16-bit WAV, so the size gives the duration
+    /// without opening the file.
+    nonisolated static func estimatedAudioSeconds(of url: URL) -> Double? {
+        guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber else {
+            return nil
+        }
+        return max(0, size.doubleValue - 44) / 32_000
     }
 
     private func normalizeInterruptedRecords() {
@@ -1884,6 +2206,21 @@ final class AppState {
                 handleStorageError(error, message: "Could not recover interrupted transcript")
             }
         }
+    }
+
+    /// Reports a history write that failed on the dictation path without failing
+    /// the dictation itself: the transcript is still delivered.
+    private func noteHistoryFailure(_ error: Error) {
+        logger.error(
+            "History write failed",
+            metadata: ["error.code": "\((error as NSError).code)"]
+        )
+        DiagnosticsService.capture(
+            error: error,
+            category: "storage",
+            code: String((error as NSError).code)
+        )
+        lastError = error.localizedDescription
     }
 
     private func handleStorageError(_ error: Error, message: String) {

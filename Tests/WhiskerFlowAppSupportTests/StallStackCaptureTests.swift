@@ -33,6 +33,14 @@ final class StallStackCaptureTests: XCTestCase {
         XCTAssertFalse(frames.joined().contains("backgroundSecret"))
     }
 
+    func testSamplingIsSkippedDuringAudioCaptureOrMemoryPressure() {
+        XCTAssertNil(StallStackCapture.skipReason(memoryPressure: "normal", audioCaptureActive: false))
+        XCTAssertNil(StallStackCapture.skipReason(memoryPressure: "unknown", audioCaptureActive: false))
+        XCTAssertEqual(StallStackCapture.skipReason(memoryPressure: "warning", audioCaptureActive: false), "memory_pressure")
+        XCTAssertEqual(StallStackCapture.skipReason(memoryPressure: "critical", audioCaptureActive: false), "memory_pressure")
+        XCTAssertEqual(StallStackCapture.skipReason(memoryPressure: "normal", audioCaptureActive: true), "audio_capture_active")
+    }
+
     func testBuiltInSamplerReturnsMainThreadSymbols() throws {
         let report = try StallStackCapture.sample(pid: ProcessInfo.processInfo.processIdentifier)
         XCTAssertFalse(StallStackCapture.mainThreadFrames(report).isEmpty)

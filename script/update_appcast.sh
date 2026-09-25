@@ -21,6 +21,10 @@ VERSION="${VERSION:?set VERSION=short version, e.g. 0.4.0}"
 BUILD="${BUILD:?set BUILD=CFBundleVersion, e.g. 4}"
 URL="${URL:?set URL=public download URL for the .zip}"
 MIN_SYSTEM="${MIN_SYSTEM:-14.0}"
+# The release binary is arm64-only (FluidAudio doesn't compile for x86_64), so
+# Intel Macs must never be offered an update they cannot launch. Set
+# HARDWARE_REQUIREMENTS= (empty) once the release is universal.
+HARDWARE_REQUIREMENTS="${HARDWARE_REQUIREMENTS-arm64}"
 NOTES="${NOTES:-}"
 # By default sign_update reads the private key from the login Keychain. Set
 # ED_KEY_FILE to sign from an exported key file instead (e.g. a CI secret).
@@ -46,6 +50,10 @@ else
 fi
 PUBDATE="$(date -u "+%a, %d %b %Y %H:%M:%S +0000")"
 
+HARDWARE=""
+[[ -n "$HARDWARE_REQUIREMENTS" ]] && HARDWARE="
+      <sparkle:hardwareRequirements>${HARDWARE_REQUIREMENTS}</sparkle:hardwareRequirements>"
+
 DESC=""
 [[ -n "$NOTES" ]] && DESC="
       <description><![CDATA[${NOTES}]]></description>"
@@ -55,7 +63,7 @@ cat > "$ITEM_FILE" <<ITEM
     <item>
       <title>${VERSION}</title>
       <pubDate>${PUBDATE}</pubDate>
-      <sparkle:minimumSystemVersion>${MIN_SYSTEM}</sparkle:minimumSystemVersion>${DESC}
+      <sparkle:minimumSystemVersion>${MIN_SYSTEM}</sparkle:minimumSystemVersion>${HARDWARE}${DESC}
       <enclosure url="${URL}" sparkle:version="${BUILD}" sparkle:shortVersionString="${VERSION}" ${SIGLEN} type="application/octet-stream"/>
     </item>
 ITEM

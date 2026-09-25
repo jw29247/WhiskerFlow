@@ -158,8 +158,10 @@ final class RecordingHUDController {
         case .recording, .transcribing:
             show()
         case .notification:
-            show()
-            scheduleHide()
+            // The hide is scheduled from inside the show task: cancelling that
+            // task here would leave a panel that was already ordered out hidden,
+            // and the message never shown.
+            show(thenHideAfter: Self.notificationDuration)
         case .hidden:
             scheduleHide()
         }
@@ -189,7 +191,9 @@ final class RecordingHUDController {
         return panel
     }
 
-    private func show() {
+    private static let notificationDuration: TimeInterval = 1.1
+
+    private func show(thenHideAfter hideDelay: TimeInterval? = nil) {
         hideWorkItem?.cancel()
         let panel = makePanelIfNeeded()
         panel.alphaValue = 1
@@ -201,17 +205,23 @@ final class RecordingHUDController {
             guard !Task.isCancelled, let self, let panel else { return }
             self.positionNearBottomCenter(panel)
             panel.orderFrontRegardless()
+            // Timed from when the message is actually on screen.
+            if let hideDelay { self.scheduleOrderOut(after: hideDelay) }
         }
     }
 
     private func scheduleHide() {
         showTask?.cancel()
+        scheduleOrderOut(after: Self.notificationDuration)
+    }
+
+    private func scheduleOrderOut(after delay: TimeInterval) {
         hideWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             self?.panel?.orderOut(nil)
         }
         hideWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     private func positionNearBottomCenter(_ panel: NSPanel) {

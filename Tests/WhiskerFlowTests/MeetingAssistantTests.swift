@@ -93,6 +93,50 @@ struct MeetingAssistantTests {
         #expect(controller.bookmarks.isEmpty)
     }
 
+    @Test func recoveredSessionWithUnknownDurationStillSyncsBookmarks() async throws {
+        let root = try temporaryRoot()
+        let sessionID = UUID()
+        var now = Date(timeIntervalSince1970: 100)
+        var controller = MeetingAssistantController(rootURL: root, now: { now })
+        controller.begin(sessionID: sessionID, title: "Crashed call")
+        now = Date(timeIntervalSince1970: 130)
+        let saved = try controller.addBookmark(label: nil)
+        var requests: [MeetingBookmarkSyncRequest] = []
+        // Recovery has no recorded manifest duration and reports 0.
+        await controller.finalize(sessionID: sessionID, meetingReference: "meeting", durationMilliseconds: 0) { request in
+            requests.append(request)
+            throw TestFailure.offline
+        }
+        #expect(requests.map(\.requestID) == [saved.id])
+        controller = MeetingAssistantController(rootURL: root, now: { now })
+        await controller.retryPendingBookmarks(sessionID: sessionID) { _ in "atlas-bookmark" }
+        #expect(controller.bookmarks.first?.syncState == .synced)
+    }
+
+    @Test func fullStorageDoesNotBlockOtherSessionsFromSyncing() async throws {
+        let root = try temporaryRoot()
+        let controller = MeetingAssistantController(rootURL: root)
+        var sessions: [UUID] = []
+        for index in 0..<MeetingAssistantController.maximumStoredSessions {
+            let id = UUID()
+            sessions.append(id)
+            controller.begin(sessionID: id, title: "Meeting \(index)")
+            _ = try controller.addBookmark(label: nil)
+            controller.end(sessionID: id)
+        }
+        let overflow = UUID()
+        controller.begin(sessionID: overflow, title: "Overflow")
+        #expect(controller.storageError != nil)
+        #expect(throws: MeetingAssistantError.storageUnavailable) {
+            _ = try controller.addBookmark(label: nil)
+        }
+        controller.end(sessionID: overflow)
+        await controller.finalize(sessionID: sessions[0], meetingReference: "meeting-0", durationMilliseconds: 60_000) { _ in "atlas-bookmark" }
+        #expect(controller.bookmarks.first { $0.sessionID == sessions[0] }?.syncState == .synced)
+        let reloaded = MeetingAssistantController(rootURL: root)
+        #expect(reloaded.bookmarks.first { $0.sessionID == sessions[0] }?.syncState == .synced)
+    }
+
     @Test func finalizedMeetingReferenceSurvivesRestart() async throws {
         let root = try temporaryRoot()
         let sessionID = UUID()

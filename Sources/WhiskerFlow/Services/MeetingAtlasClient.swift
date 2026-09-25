@@ -51,12 +51,21 @@ protocol MeetingAtlasClient: Sendable {
         modelVersion: String?
     ) async throws -> MeetingAtlasRecordingCompletion
     func appendSegments(meetingID: String, turns: [MeetingSpeakerTurn]) async throws
+    /// Idempotency is scoped to the recording artifact: several capture
+    /// sessions can map onto one Atlas meeting (same calendar event).
+    func appendSegments(meetingID: String, artifactID: String, turns: [MeetingSpeakerTurn]) async throws
     func finalize(
         meetingID: String,
         artifactID: String,
         transcriptionState: String,
         status: String
     ) async throws
+}
+
+extension MeetingAtlasClient {
+    func appendSegments(meetingID: String, artifactID: String, turns: [MeetingSpeakerTurn]) async throws {
+        try await appendSegments(meetingID: meetingID, turns: turns)
+    }
 }
 
 enum MeetingAtlasClientError: LocalizedError {
@@ -262,6 +271,14 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
     }
 
     func appendSegments(meetingID: String, turns: [MeetingSpeakerTurn]) async throws {
+        try await appendSegments(meetingID: meetingID, externalRefPrefix: "segments-\(meetingID)", turns: turns)
+    }
+
+    func appendSegments(meetingID: String, artifactID: String, turns: [MeetingSpeakerTurn]) async throws {
+        try await appendSegments(meetingID: meetingID, externalRefPrefix: "segments-\(artifactID)", turns: turns)
+    }
+
+    private func appendSegments(meetingID: String, externalRefPrefix: String, turns: [MeetingSpeakerTurn]) async throws {
         let segments = turns.map { turn in
             [
                 "speakerLabel": turn.speaker.displayName,
@@ -287,7 +304,7 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
             let response = try await call(
                 tool: "notetaker.appendSegments",
                 args: [
-                    "externalRef": "segments-\(meetingID)-\(batchIndex)",
+                    "externalRef": "\(externalRefPrefix)-\(batchIndex)",
                     "meetingId": meetingID,
                     "segments": batch,
                 ]

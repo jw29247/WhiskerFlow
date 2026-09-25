@@ -17,8 +17,9 @@ public enum AssistantTextProcessing {
         let options: FormattingOptions
         switch style {
         case .standard: options = formatting
-        case .conversational: options = .init(spokenLineCommands: true, removeFillerWords: true)
-        case .polished: options = .init(spokenLineCommands: true, capitalizeSentences: true, removeFillerWords: true)
+        case .conversational: options = .init(spokenLineCommands: true, removeFillerWords: true, language: formatting.language)
+        case .polished: options = .init(spokenLineCommands: true, capitalizeSentences: true, removeFillerWords: true,
+                                        language: formatting.language)
         case .literal: return raw
         }
         return TranscriptFormatter.format(vocabulary.apply(to: repaired), options: options)

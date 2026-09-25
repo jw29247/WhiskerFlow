@@ -21,6 +21,9 @@ actor TranscriptionService {
   private let whisperKit = WhisperKitEngine()
   private let appleSpeech = AppleSpeechEngine()
   private var meetingSpeakerKit: SpeakerKit?
+  /// The one in-flight SpeakerKit download/load; overlapping warm-ups and
+  /// diarization join it instead of fetching pyannote twice into one folder.
+  private var meetingSpeakerKitLoad: Task<SpeakerKit, Error>?
 
   @discardableResult
   func prepare(kind: TranscriptionEngineKind, model: WhisperModel, language: String?) async -> Bool {
@@ -83,13 +86,15 @@ actor TranscriptionService {
     )
   }
 
+  /// Warm-up waits for the meeting model however long a first-run download
+  /// and compile take, so a slow Mac reports ready instead of a false failure.
+  /// Cancelling the caller stops the wait; the load keeps going.
   func prepareMeeting(language: String?) async -> Bool {
     do {
-      try await whisperKit.prepareMeeting(language: language)
+      try await whisperKit.prepareMeeting(language: language, waitingUpTo: nil)
       _ = try await ensureMeetingSpeakerKit()
       return true
     } catch {
-      meetingSpeakerKit = nil
       return false
     }
   }
@@ -170,19 +175,45 @@ actor TranscriptionService {
   private static let meetingSpeakerCentroidDistanceThreshold: Float = 0.35
 
   private func ensureMeetingSpeakerKit() async throws -> SpeakerKit {
-    if meetingSpeakerKit == nil {
-      meetingSpeakerKit = try await SpeakerKit(
-        PyannoteConfig(
-          download: true,
-          load: true,
-          verbose: false,
-          fullRedundancy: false
-        )
-      )
+    let speakerKit: SpeakerKit
+    if let meetingSpeakerKit {
+      speakerKit = meetingSpeakerKit
+    } else {
+      let load: Task<SpeakerKit, Error>
+      if let pending = meetingSpeakerKitLoad {
+        load = pending
+      } else {
+        load = Task {
+          try await SpeakerKit(
+            PyannoteConfig(
+              download: true,
+              load: true,
+              verbose: false,
+              fullRedundancy: false
+            )
+          )
+        }
+        meetingSpeakerKitLoad = load
+      }
+      do {
+        let loaded = try await withAbandoningCancellation { try await load.value }
+        if meetingSpeakerKitLoad == load { meetingSpeakerKitLoad = nil }
+        speakerKit = meetingSpeakerKit ?? loaded
+        meetingSpeakerKit = speakerKit
+      } catch {
+        // A cancelled caller only stopped waiting; the load stays joinable.
+        if !(error is CancellationError), meetingSpeakerKitLoad == load { meetingSpeakerKitLoad = nil }
+        throw error
+      }
     }
-    guard let meetingSpeakerKit else { throw TranscriptionError.modelUnavailable("SpeakerKit") }
-    try await meetingSpeakerKit.ensureModelsLoaded()
-    return meetingSpeakerKit
+    do {
+      try await speakerKit.ensureModelsLoaded()
+    } catch {
+      // Rebuild SpeakerKit on the next attempt rather than retrying a broken one.
+      if meetingSpeakerKit === speakerKit { meetingSpeakerKit = nil }
+      throw error
+    }
+    return speakerKit
   }
 
   private func cosineDistance(_ lhs: [Float], _ rhs: [Float]) -> Float {
@@ -225,6 +256,10 @@ actor TranscriptionService {
           return TranscriptionOutcome(result: result, engine: kind)
         } catch {
           if Task.isCancelled { throw error }
+          // A deadline or a still-busy model would fail the file decode the same
+          // way after another full wait; go straight to the Apple fallback.
+          if case TranscriptionError.timedOut = error { throw error }
+          if await parakeetTDTv3.isDecodeWedged { throw error }
           // Audio and a retryable record are already durable. Retain the file
           // decoder and Apple fallback if the direct sample path fails.
         }
@@ -250,7 +285,8 @@ actor TranscriptionService {
     let windowFrames = AVAudioFrameCount(rate * 30)
     var assembler = BoundedTranscriptAssembler()
     let ranges = BoundedDecodeWindowPolicy.frameRanges(totalFrames: file.length, sampleRate: rate)
-    for range in ranges {
+    let ownership = BoundedDecodeWindowPolicy.ownership(of: ranges, sampleRate: rate)
+    for (range, owned) in zip(ranges, ownership) {
       try Task.checkCancellation()
       let start = range.lowerBound
       file.framePosition = start
@@ -271,11 +307,7 @@ actor TranscriptionService {
           "Audible recording audio was not transcribed. The recording is saved and will retry.")
       }
       if file.length <= AVAudioFramePosition(windowFrames) { return decoded }
-      let offset = Double(start) / rate
-      let lower = start == 0 ? offset : offset + 0.5
-      let isLast = range.upperBound >= file.length
-      let upper = isLast ? Double.infinity : offset + Double(count) / rate - 0.5
-      try assembler.append(decoded, offsetSeconds: offset, ownership: lower..<upper,
+      try assembler.append(decoded, offsetSeconds: Double(start) / rate, ownership: owned,
                            requiresTimings: true)
     }
     return try assembler.finish(language: request.language, duration: Double(file.length) / rate)

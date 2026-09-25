@@ -37,3 +37,41 @@ public enum MeetingSpeakerEvidenceMatcher {
         return best.0
     }
 }
+
+/// Coalesces contiguous timeline rows and releases them in batches, so a long
+/// call writes a few encrypted files per minute instead of one per probe cycle.
+/// The matcher unions intervals per participant, so merging is lossless.
+public struct MeetingSpeakerEvidenceBuffer: Sendable {
+    public static let flushIntervalMs: Int64 = 15_000
+    public static let maximumPendingRows = 256
+    private var rows: [MeetingSpeakerEvidence] = []
+    private var firstPendingAtMs: Int64?
+    public init() {}
+
+    public var isEmpty: Bool { rows.isEmpty }
+    public var pendingCount: Int { rows.count }
+
+    public mutating func append(_ evidence: [MeetingSpeakerEvidence], atMs: Int64) {
+        for row in evidence {
+            if let index = rows.lastIndex(where: { $0.participantID == row.participantID }),
+               rows[index].displayName == row.displayName,
+               row.startMs <= rows[index].endMs, row.endMs >= rows[index].startMs {
+                let last = rows[index]
+                rows[index] = .init(startMs: min(last.startMs, row.startMs), endMs: max(last.endMs, row.endMs),
+                                    participantID: row.participantID, displayName: row.displayName)
+            } else {
+                rows.append(row)
+            }
+        }
+        if !rows.isEmpty, firstPendingAtMs == nil { firstPendingAtMs = atMs }
+    }
+
+    /// Returns rows due for saving and clears them; `force` flushes at stop.
+    public mutating func drain(atMs: Int64, force: Bool = false) -> [MeetingSpeakerEvidence] {
+        guard !rows.isEmpty,
+              force || rows.count >= Self.maximumPendingRows
+                || atMs - (firstPendingAtMs ?? atMs) >= Self.flushIntervalMs else { return [] }
+        defer { rows = []; firstPendingAtMs = nil }
+        return rows
+    }
+}

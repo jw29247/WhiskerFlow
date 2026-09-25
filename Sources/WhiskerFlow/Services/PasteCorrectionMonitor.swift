@@ -40,6 +40,13 @@ final class PasteCorrectionMonitor {
         onCorrections(changes, sessionID, application)
     }
 
+    /// The session is ending (field sent or cleared, focus moved, next paste or
+    /// deadline), so the last observed edit is final even inside the debounce.
+    private func flush(_ changes: [VocabularyCorrection], sessionID: UUID, application: String) {
+        guard isEnabled(), !changes.isEmpty else { return }
+        onCorrections(changes, sessionID, application)
+    }
+
     func observe(_ target: Target?) {
         guard let target else { return }
         let token = generation
@@ -65,18 +72,40 @@ final class PasteCorrectionMonitor {
             var latest = target.scope.original
             var changedAt = Date()
             var lastSaved = latest
+            // Only an edit seen unchanged on two consecutive polls is final;
+            // a single sample may catch a word mid-typing.
+            var latestIsStable = false
+            func corrections(_ edited: String) -> [VocabularyCorrection] {
+                VocabularyCorrectionDetector.corrections(original: target.scope.original, edited: edited, maxSuggestions: 20, allowShortCorrections: true)
+            }
+            // Fixing a name and pressing Enter usually happens inside the
+            // debounce, so every exit keeps the last settled edit.
+            defer {
+                if latest != lastSaved, latestIsStable {
+                    let changes = corrections(latest)
+                    Task { @MainActor in self?.flush(changes, sessionID: sessionID, application: applicationName) }
+                }
+            }
             while !Task.isCancelled, Date() < deadline {
-                try? await Task.sleep(for: .milliseconds(500))
+                // Poll faster while an edit is unsaved to narrow the window
+                // between the last observed text and an Enter that clears it.
+                try? await Task.sleep(for: .milliseconds(latest != lastSaved ? 200 : 500))
                 guard !Task.isCancelled, await self?.isActive(token) == true, probe.isFocusedTextInput(),
                       let value = probe.value(),
                       let edited = target.scope.editedText(in: value) else { return }
+                // A chat composer that sends on Enter clears to its old
+                // surroundings and keeps focus; the dictation is gone, so the
+                // session ends with the last edit rather than overwriting it.
+                guard !edited.allSatisfy(\.isWhitespace) else { return }
                 if edited != latest {
                     latest = edited
                     changedAt = Date()
+                    latestIsStable = false
+                } else {
+                    latestIsStable = true
                 }
                 if latest != lastSaved, Date().timeIntervalSince(changedAt) >= 1.5 {
-                    let changes = VocabularyCorrectionDetector.corrections(original: target.scope.original, edited: latest, maxSuggestions: 20, allowShortCorrections: true)
-                    await self?.report(changes, sessionID: sessionID, application: applicationName, token: token)
+                    await self?.report(corrections(latest), sessionID: sessionID, application: applicationName, token: token)
                     lastSaved = latest
                 }
             }

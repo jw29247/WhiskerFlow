@@ -14,6 +14,13 @@ final class MainThreadHealthMonitor: @unchecked Sendable {
     private let stacks = StallStackCapture()
     private var pressureSource: DispatchSourceMemoryPressure?
     private var pressure = "unknown"
+    private var audioCaptureSources: Set<String> = []
+    /// Called by audio capture owners so stall diagnosis never pauses the process mid-capture.
+    func setAudioCaptureActive(_ active: Bool, source: String) {
+        queue.async { [self] in
+            if active { audioCaptureSources.insert(source) } else { audioCaptureSources.remove(source) }
+        }
+    }
     func start() {
         queue.async { [self] in
             guard timer == nil else { return }
@@ -41,7 +48,7 @@ final class MainThreadHealthMonitor: @unchecked Sendable {
         if let since = pendingSince {
             if now - since >= 3, !reported {
                 reported = true
-                stacks.captureIfNeeded()
+                stacks.captureIfNeeded(memoryPressure: pressure, audioCaptureActive: !audioCaptureSources.isEmpty)
                 logResources()
                 logger.warning("Main thread response delayed", metadata: ["event": "main_thread_stalled", "elapsed_ms": "\((now - since) * 1000)"])
             }

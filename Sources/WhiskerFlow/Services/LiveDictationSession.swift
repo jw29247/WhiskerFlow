@@ -36,8 +36,16 @@ final class LiveDictationSession {
     private var confirmedText = ""
     private var confirmedSampleCount = 0
     private var windowText = ""
-    /// Absolute position in the capture buffer that the transcript reaches.
+    /// Absolute position in the capture buffer where the latest decode pass
+    /// started. Paces the loop only: it moves before the pass succeeds.
     private var lastDecodedSampleCount = 0
+    /// Absolute end of the audio `windowText` was actually decoded from. Only a
+    /// successful decode moves it, so `finish()` can tell exactly what the
+    /// transcript is missing.
+    private var windowEndSampleCount = 0
+    /// Spool of the session in progress, known from `start()` so the caller can
+    /// file the audio for recovery before the release-time decode runs.
+    private(set) var currentAudioURL: URL?
     private var isRunning = false
     private var isStreaming = false
     private var reportedDecodeFailure = false
@@ -53,9 +61,11 @@ final class LiveDictationSession {
     /// Live preview decodes only the recent tail: the HUD shows the latest words,
     /// and a window under Parakeet's 15 s model input stays a single pass.
     private static let previewWindowSamples = Int(sampleRate * 12)
-    /// On release, if more than this much audio went undecoded (only happens when
-    /// decoding fell behind real time on a long hold), do one final clean pass.
-    private static let staleSampleThreshold = Int(sampleRate * 1.5)
+    /// Undecoded audio on release gets one final pass when any 100 ms frame of it
+    /// reaches this RMS (about -46 dBFS). It sits below both the live cut's speech
+    /// line and the HUD's "too quiet" warning: a skipped pass loses the last
+    /// words, while an unneeded one costs only a short decode.
+    private static let finalPassSpeechRMS: Float = LiveDecodeWindowPolicy.silenceRMS / 2
 
     init(transcription: TranscriptionService) {
         self.transcription = transcription
@@ -88,9 +98,11 @@ final class LiveDictationSession {
         resetTranscript()
         reportedDecodeFailure = false
         isStreaming = streaming
+        currentAudioURL = nil
         do {
             let audioURL = try AudioFileWriter.makeRecordingURL()
             try audioCapture.start(selection: selection, spoolTo: audioURL)
+            currentAudioURL = audioURL
             isRunning = true
         } catch {
             isRunning = false
@@ -106,56 +118,79 @@ final class LiveDictationSession {
     }
 
     /// Stop capture and return the freshest transcript plus the captured samples.
+    ///
+    /// `coversAllAudio` is true only when `text` was decoded from every audible
+    /// sample of the capture. When it is false — the final pass failed or timed
+    /// out, the tail rolled out of memory, or the session never streamed — the
+    /// caller must transcribe the file rather than trust `text`.
+    /// `storageFailed` means the recording file stopped accepting audio (for
+    /// example a full disk), so everything after that point is missing.
+    ///
+    /// Everything the result depends on is snapshotted before the first await, so
+    /// a `start()` during the teardown (the finish watchdog releases the
+    /// coordinator without waiting for us) cannot erase this session's transcript
+    /// — and this finish never touches the newer session's state.
     func finish(
         reason: CaptureStopReason = .userReleased
     ) async -> (text: String, samples: [Float], conversionFailures: Int, rawText: String,
-                audioURL: URL?, totalSampleCount: Int) {
+                audioURL: URL?, totalSampleCount: Int, coversAllAudio: Bool, storageFailed: Bool) {
         let myGeneration = generation
+        let streaming = isStreaming
+        let options = (language: language, model: model, style: style, vocabulary: vocabulary,
+                       formatting: formatting, recognizeCorrections: recognizeCorrections)
         isRunning = false
         // Not awaited: the release-time decode waits only for a preview already
         // inside the model, never for the loop to wind down.
         previewLoop?.cancel()
         previewLoop = nil
+        currentAudioURL = nil
         let loop = decodeLoop
         decodeLoop = nil
-        let completeTailWasResident = audioCapture.hasResidentSamples(from: confirmedSampleCount)
         let captured = audioCapture.stop(reason: reason)
+        var transcript = (confirmedText: confirmedText, confirmedSampleCount: confirmedSampleCount,
+                          windowText: windowText, windowEnd: windowEndSampleCount)
         await loop?.value
+        if generation == myGeneration {
+            // The pass that was in flight at release may have landed a fresher window.
+            transcript = (confirmedText, confirmedSampleCount, windowText, windowEndSampleCount)
+        }
         let samples = captured.samples
-
-        if isStreaming, generation == myGeneration {
-            // A confirm pass throws away the window text it had already decoded past
-            // the cut, so an empty window with audio still after it always needs one
-            // more pass — otherwise a release right after the final phrase loses it.
-            // The other case is decoding having lagged badly on a long hold.
-            if let finalSamples = Self.finalDecodeSamples(
-                captured: captured,
-                confirmedSampleCount: confirmedSampleCount,
-                lastDecodedSampleCount: lastDecodedSampleCount,
-                windowIsEmpty: windowText.isEmpty
-            ) {
-                await decodeWindow(finalSamples, generation: myGeneration)
+        defer {
+            if generation == myGeneration {
+                resetTranscript()
+                onLevel?(0, 0)
             }
         }
 
-        // A `start()` during the teardown (the finish watchdog releases the
-        // coordinator without waiting for us) means the state now belongs to a newer
-        // session: hand back nothing rather than wiping its transcript.
-        guard generation == myGeneration else {
-            return ("", samples, captured.conversionFailureCount, "", captured.audioURL, captured.totalSampleCount)
+        // The live transcript can only be completed from resident audio. When the
+        // unconfirmed tail already rolled out of memory, a final decode would be
+        // thrown away, so skip it and let the caller transcribe the file.
+        guard streaming, transcript.confirmedSampleCount >= captured.residentStartSample else {
+            return ("", samples, captured.conversionFailureCount, "", captured.audioURL,
+                    captured.totalSampleCount, false, captured.storageFailed)
         }
 
-        guard completeTailWasResident else {
-            resetTranscript()
-            onLevel?(0, 0)
-            return ("", samples, captured.conversionFailureCount, "", captured.audioURL, captured.totalSampleCount)
+        var coversAllAudio = true
+        if let finalSamples = Self.finalDecodeSamples(
+            captured: captured,
+            confirmedSampleCount: transcript.confirmedSampleCount,
+            lastDecodedSampleCount: transcript.windowEnd,
+            windowIsEmpty: transcript.windowText.isEmpty
+        ) {
+            if let text = await decodedText(for: finalSamples, language: options.language, model: options.model) {
+                // The pass saw the whole unconfirmed tail; an empty result means it
+                // held no further words, not that the earlier window was wrong.
+                if !text.isEmpty { transcript.windowText = text }
+            } else {
+                coversAllAudio = false
+            }
         }
 
-        let rawText = LiveDecodeWindowPolicy.join(confirmedText, windowText)
-        let finalText = emittedText()
-        resetTranscript()
-        onLevel?(0, 0)
-        return (finalText, samples, captured.conversionFailureCount, rawText, captured.audioURL, captured.totalSampleCount)
+        let rawText = LiveDecodeWindowPolicy.join(transcript.confirmedText, transcript.windowText)
+        let finalText = AssistantTextProcessing.process(rawText, style: options.style, vocabulary: options.vocabulary,
+            formatting: options.formatting, recognizeCorrections: options.recognizeCorrections)
+        return (finalText, samples, captured.conversionFailureCount, rawText, captured.audioURL,
+                captured.totalSampleCount, coversAllAudio && !captured.storageFailed, captured.storageFailed)
     }
 
     /// Echo cancellation for engines built from now on; see `AudioCaptureService.voiceProcessing`.
@@ -183,6 +218,7 @@ final class LiveDictationSession {
         previewLoop?.cancel()
         previewLoop = nil
         audioCapture.cancel()
+        currentAudioURL = nil
         resetTranscript()
         onLevel?(0, 0)
     }
@@ -195,8 +231,13 @@ final class LiveDictationSession {
                 let total = self.audioCapture.sampleCount()
                 if total - self.lastDecodedSampleCount >= Self.minNewSamples {
                     self.lastDecodedSampleCount = total
-                    let window = self.audioCapture.snapshotTail(from: self.confirmedSampleCount)
-                    await self.decodeWindow(window, generation: myGeneration)
+                    let windowStart = self.confirmedSampleCount
+                    let window = self.audioCapture.snapshotTail(from: windowStart)
+                    await self.decodeWindow(window, startingAt: windowStart, generation: myGeneration)
+                    // Released mid-pass: a confirm pass now would only re-decode the
+                    // prefix and empty the window, forcing `finish()` into yet another
+                    // decode before the paste. `finish()` covers the tail itself.
+                    guard self.isRunning, self.generation == myGeneration else { break }
                     await self.confirmSettledPrefix(of: window, generation: myGeneration)
                 } else {
                     try? await Task.sleep(nanoseconds: 80_000_000) // 80 ms
@@ -229,10 +270,11 @@ final class LiveDictationSession {
         }
     }
 
-    private func decodeWindow(_ window: [Float], generation myGeneration: Int) async {
+    private func decodeWindow(_ window: [Float], startingAt windowStart: Int, generation myGeneration: Int) async {
         guard let text = await decodedText(for: window), !text.isEmpty else { return }
         guard generation == myGeneration else { return }
         windowText = text
+        windowEndSampleCount = windowStart + window.count
         onPartial?(emittedText())
     }
 
@@ -266,10 +308,15 @@ final class LiveDictationSession {
         confirmedText = LiveDecodeWindowPolicy.join(confirmedText, text)
         confirmedSampleCount += cut
         windowText = ""
+        windowEndSampleCount = confirmedSampleCount
         lastDecodedSampleCount = confirmedSampleCount
     }
 
     private func decodedText(for samples: [Float]) async -> String? {
+        await decodedText(for: samples, language: language, model: model)
+    }
+
+    private func decodedText(for samples: [Float], language: String?, model: WhisperModel) async -> String? {
         guard !samples.isEmpty else { return nil }
         do {
             let result = try await transcription.transcribeSamples(samples, language: language, model: model)
@@ -293,19 +340,30 @@ final class LiveDictationSession {
         confirmedText = ""
         confirmedSampleCount = 0
         windowText = ""
+        windowEndSampleCount = 0
         lastDecodedSampleCount = 0
     }
 
+    /// The samples a final pass must decode on release, or nil when the transcript
+    /// already covers every audible sample. `lastDecodedSampleCount` is the
+    /// absolute end of the audio the current window text was decoded from (not
+    /// where a pass merely started). An empty window covers nothing past the
+    /// confirmed prefix. Any audible audio beyond that coverage — even the last
+    /// word spoken a fraction of a second before release — gets one pass over the
+    /// whole unconfirmed tail, so the window never splits a word.
     nonisolated static func finalDecodeSamples(
         captured: CapturedAudio,
         confirmedSampleCount: Int,
         lastDecodedSampleCount: Int,
         windowIsEmpty: Bool
     ) -> [Float]? {
-        let undecoded = captured.totalSampleCount - lastDecodedSampleCount
-        guard windowIsEmpty || undecoded > staleSampleThreshold else { return nil }
+        let covered = windowIsEmpty ? confirmedSampleCount : max(confirmedSampleCount, lastDecodedSampleCount)
+        guard captured.totalSampleCount > covered else { return nil }
         let localStart = max(0, confirmedSampleCount - captured.residentStartSample)
-        guard localStart <= captured.samples.count else { return nil }
+        guard localStart < captured.samples.count else { return nil }
+        let uncoveredStart = min(captured.samples.count, max(localStart, covered - captured.residentStartSample))
+        let uncovered = Array(captured.samples[uncoveredStart...])
+        guard LiveDecodeWindowPolicy.frameRMS(uncovered).contains(where: { $0 >= finalPassSpeechRMS }) else { return nil }
         return Array(captured.samples[localStart...])
     }
 

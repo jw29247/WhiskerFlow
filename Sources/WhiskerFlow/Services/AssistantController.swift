@@ -224,14 +224,18 @@ final class AssistantController {
     func refreshClients() async {
         guard !busy else { return }; busy = true; defer { busy = false }
         do {
-            var profiles: [AssistantClientProfile] = []; var cursor: String?
+            var profiles: [AssistantClientProfile] = []; var cursor: String?; var seenCursors: Set<String> = []; var pages = 0
             repeat {
                 var args: [String: Any] = ["limit": 50]; if let cursor { args["cursor"] = cursor }
                 let row = try await call("listClientProfiles", args)
                 guard let data = row["profiles"] else { throw AssistantError.message("Atlas returned invalid client profiles.") }
-                profiles += try JSONDecoder().decode([AssistantClientProfile].self, from: JSONSerialization.data(withJSONObject: data))
+                let page = try JSONDecoder().decode([AssistantClientProfile].self, from: JSONSerialization.data(withJSONObject: data))
+                profiles += page; pages += 1
+                // A repeated cursor or an empty page can never reach the 500-profile cap,
+                // so stop instead of holding `busy` for every other Assistant action.
                 cursor = row["nextCursor"] as? String
-            } while cursor != nil && profiles.count < 500
+                if let next = cursor, page.isEmpty || !seenCursors.insert(next).inserted { cursor = nil }
+            } while cursor != nil && profiles.count < 500 && pages < 20
             update { $0.clients = Array(profiles.prefix(500)) }
             if let client = saved.selectedClient { try await refreshVocabulary(client) }
             message = "Client profiles refreshed."

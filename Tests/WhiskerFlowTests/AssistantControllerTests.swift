@@ -21,6 +21,19 @@ private actor AssistantFixtureTransport: AssistantAtlasTransport {
     func recordedCalls() -> [(String, Data)] { calls }
 }
 
+/// Simulates an Atlas pagination bug: every page is empty or repeats its cursor.
+private actor LoopingClientTransport: AssistantAtlasTransport {
+    var count = 0
+    let emptyPages: Bool
+    init(emptyPages: Bool) { self.emptyPages = emptyPages }
+    func call(operation: String, arguments: Data) async throws -> Data {
+        count += 1
+        let profiles: [[String: String]] = emptyPages ? [] : [["reference": "client_\(count)", "name": "Client \(count)"]]
+        return try JSONSerialization.data(withJSONObject: ["contractVersion": 1, "profiles": profiles, "nextCursor": "same"] as [String: Any])
+    }
+    func calls() -> Int { count }
+}
+
 final class AssistantControllerTests: XCTestCase {
     private func location() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("assistant.json") }
 
@@ -208,5 +221,18 @@ final class AssistantControllerTests: XCTestCase {
                           formatting: .init(removeFillerWords: true), recognizeCorrections: true), raw)
         XCTAssertEqual(AssistantTextProcessing.process(raw, style: .polished, vocabulary: vocabulary,
                           formatting: .init(), recognizeCorrections: true), "Send it to Marco.")
+    }
+
+    @MainActor func testClientPaginationStopsOnEmptyPagesAndRepeatedCursors() async throws {
+        for emptyPages in [true, false] {
+            let url = location(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+            let controller = AssistantController(fileURL: url)
+            let transport = LoopingClientTransport(emptyPages: emptyPages)
+            controller.requestTransport = { transport }
+            await controller.refreshClients()
+            let calls = await transport.calls()
+            XCTAssertLessThanOrEqual(calls, 2)
+            XCTAssertFalse(controller.busy)
+        }
     }
 }

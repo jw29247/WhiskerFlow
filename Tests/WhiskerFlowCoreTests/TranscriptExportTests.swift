@@ -61,6 +61,24 @@ final class TranscriptExportTests: XCTestCase {
         XCTAssertFalse(csv.contains("half"))
     }
 
+    func testCSVNeutralisesLeadingFormulaCharacters() {
+        let records = [
+            record("=HYPERLINK(\"http://x\")", secondsAgo: 0),
+            record("- buy milk", secondsAgo: 10),
+            record("+1 for that", secondsAgo: 20),
+            record("@channel hi", secondsAgo: 30),
+            record("a - b = c", secondsAgo: 40)
+        ]
+
+        let lines = TranscriptExporter.csv(records).components(separatedBy: "\n")
+
+        XCTAssertTrue(lines[1].hasSuffix(",\"'=HYPERLINK(\"\"http://x\"\")\""))
+        XCTAssertTrue(lines[2].hasSuffix(",'- buy milk"))
+        XCTAssertTrue(lines[3].hasSuffix(",'+1 for that"))
+        XCTAssertTrue(lines[4].hasSuffix(",'@channel hi"))
+        XCTAssertTrue(lines[5].hasSuffix(",a - b = c"), "only a leading trigger is escaped")
+    }
+
     func testCSVQuotesCommasQuotesAndNewlines() {
         let records = [
             record("plain text", secondsAgo: 0),

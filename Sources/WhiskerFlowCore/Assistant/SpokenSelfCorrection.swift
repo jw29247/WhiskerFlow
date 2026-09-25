@@ -47,17 +47,44 @@ public enum SpokenSelfCorrection {
     private static func resolveSentence(_ text: String) -> String {
         if let scratched = resolveScratchThat(text) { return scratched }
         let range = NSRange(text.startIndex..., in: text)
-        guard let match = repair.firstMatch(in: text, range: range), match.numberOfRanges == 4,
+        guard let match = repair.firstMatch(in: text, range: range), match.numberOfRanges == 5,
               let prefixRange = Range(match.range(at: 1), in: text),
-              let replacementRange = Range(match.range(at: 2), in: text),
-              let punctuationRange = Range(match.range(at: 3), in: text)
+              let discardedRange = Range(match.range(at: 2), in: text),
+              let replacementRange = Range(match.range(at: 3), in: text),
+              let punctuationRange = Range(match.range(at: 4), in: text)
         else { return text }
 
         let prefix = String(text[prefixRange])
         let replacement = String(text[replacementRange])
-        guard !prefix.contains(","), !containsNegation(text) else { return text }
+        let discarded = text[discardedRange].lowercased()
+        // "Thank you so much, I mean it." and "Hey, sorry, Tom." share the repair
+        // shape, but a pronoun or intensifier cannot stand in for a different kind
+        // of word, and an opening interjection is not a slip to repair.
+        guard !prefix.contains(","), !containsNegation(text),
+              !(prefix.isEmpty && interjections.contains(discarded)),
+              !nonSubstitutes.contains(replacement.lowercased())
+                || substitutableClasses.contains(where: { $0.contains(discarded) && $0.contains(replacement.lowercased()) })
+        else { return text }
         return prefix + replacement + text[punctuationRange]
     }
+
+    /// Swaps within one class ("him, sorry, her", "here, I mean there") are real repairs.
+    private static let substitutableClasses: [Set<String>] = [
+        ["me", "you", "him", "her", "us", "them"],
+        ["this", "that", "these", "those"],
+        ["here", "there"],
+        ["now", "then"]
+    ]
+
+    private static let nonSubstitutes: Set<String> = [
+        "it", "that", "this", "these", "those", "them", "him", "her", "me", "you", "us",
+        "so", "too", "really", "truly", "well", "though", "anyway", "seriously", "honestly",
+        "literally", "actually", "sincerely", "then", "there", "here", "yes", "yeah", "ok", "okay"
+    ]
+    private static let interjections: Set<String> = [
+        "hey", "hi", "hello", "oh", "ah", "um", "uh", "yes", "yeah", "yep", "ok", "okay",
+        "well", "so", "thanks", "sorry", "please", "right", "sure"
+    ]
 
     private static func resolveScratchThat(_ text: String) -> String? {
         let range = NSRange(text.startIndex..., in: text)
@@ -76,7 +103,7 @@ public enum SpokenSelfCorrection {
     }
 
     private static let repair = try! NSRegularExpression(
-        pattern: #"^(.*?\b)(?:[\p{L}\p{N}'-]+),\s*(?:sorry,\s*|I mean,?\s+)([\p{L}\p{N}'-]+)([.!?])$"#,
+        pattern: #"^(.*?\b)([\p{L}\p{N}'-]+),\s*(?:sorry,\s*|I mean,?\s+)([\p{L}\p{N}'-]+)([.!?])$"#,
         options: [.caseInsensitive]
     )
     private static let scratchThat = try! NSRegularExpression(

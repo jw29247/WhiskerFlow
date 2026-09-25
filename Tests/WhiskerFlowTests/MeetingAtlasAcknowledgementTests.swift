@@ -21,6 +21,13 @@ final class MeetingAtlasAcknowledgementTests: XCTestCase {
             MeetingSpeakerTurn(startMs: 1000, endMs: 2000, text: "Other fixture", speaker: .manual(key: "manual-fixture", displayName: "Other Person")),
         ])
     }
+    func testSegmentIdempotencyIsScopedToTheRecordingArtifact() async throws {
+        AcknowledgementStub.externalRefs = []
+        let turn = MeetingSpeakerTurn(startMs: 0, endMs: 1000, text: "Fixture speech", speaker: .microphone)
+        try await client(host: "segmentref.test").appendSegments(meetingID: "shared-meeting", artifactID: "artifact-a", turns: [turn])
+        try await client(host: "segmentref.test").appendSegments(meetingID: "shared-meeting", artifactID: "artifact-b", turns: [turn])
+        XCTAssertEqual(AcknowledgementStub.externalRefs, ["segments-artifact-a-0", "segments-artifact-b-0"])
+    }
     private func client(host: String) -> URLSessionMeetingAtlasClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [AcknowledgementStub.self]
@@ -28,10 +35,11 @@ final class MeetingAtlasAcknowledgementTests: XCTestCase {
     }
 }
 private final class AcknowledgementStub: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var externalRefs: [String] = []
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        if request.url?.host == "provenance.test" {
+        if request.url?.host == "provenance.test" || request.url?.host == "segmentref.test" {
             var body = request.httpBody ?? Data()
             if body.isEmpty, let stream = request.httpBodyStream {
                 stream.open()
@@ -46,8 +54,12 @@ private final class AcknowledgementStub: URLProtocol, @unchecked Sendable {
             let envelope = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
             let args = envelope?["args"] as? [String: Any]
             let segments = args?["segments"] as? [[String: Any]] ?? []
-            XCTAssertEqual(segments.compactMap { $0["speakerResolution"] as? String }, ["unknown", "manual"])
-            XCTAssertEqual(segments.compactMap { $0["speakerProvider"] as? String }, ["google_meet", "manual"])
+            if request.url?.host == "segmentref.test" {
+                Self.externalRefs.append(args?["externalRef"] as? String ?? "")
+            } else {
+                XCTAssertEqual(segments.compactMap { $0["speakerResolution"] as? String }, ["unknown", "manual"])
+                XCTAssertEqual(segments.compactMap { $0["speakerProvider"] as? String }, ["google_meet", "manual"])
+            }
             let bytes = try! JSONSerialization.data(withJSONObject: ["ok": true, "value": ["appended": segments.count]])
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: bytes)

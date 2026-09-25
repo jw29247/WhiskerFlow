@@ -257,6 +257,48 @@ final class TranscriptStoreCleanupTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), original)
     }
 
+    func testUnreadableHistoryBlocksWritesAndOrphanSweep() throws {
+        let now = Date(timeIntervalSince1970: 100_000_000)
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WhiskerFlowUnreadable-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let referencedWav = directory.appendingPathComponent("referenced.wav")
+        try Data("audio".utf8).write(to: referencedWav)
+        try FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-31 * 24 * 60 * 60)],
+            ofItemAtPath: referencedWav.path
+        )
+        let url = directory.appendingPathComponent("transcripts.json")
+        let record = TranscriptRecord(
+            text: "kept",
+            audioFilePath: referencedWav.path,
+            createdAt: now,
+            status: .transcribed
+        )
+        let original = try JSONEncoder.whiskerFlow.encode([record])
+        try original.write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
+        guard (try? Data(contentsOf: url)) == nil else {
+            throw XCTSkip("Permissions are not enforced for this user.")
+        }
+
+        let store = TranscriptStore(fileURL: url, now: { now }, recordingsDirectory: directory)
+        XCTAssertThrowsError(try store.load())
+        XCTAssertTrue(store.records.isEmpty)
+
+        XCTAssertThrowsError(try store.add(TranscriptRecord(text: "new", audioFilePath: "", status: .transcribed)))
+        XCTAssertThrowsError(try store.pruneExpired())
+        XCTAssertTrue(FileManager.default.fileExists(atPath: referencedWav.path), "sweep must not treat history audio as orphaned")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        XCTAssertEqual(try Data(contentsOf: url), original, "the unreadable history must survive")
+        try store.load()
+        XCTAssertEqual(store.records.map(\.id), [record.id])
+    }
+
     func testBackupIsNotClaimedWhenAnEntryAlreadyOccupiesTheBackupPath() throws {
         let url = tempURL()
         try FileManager.default.createDirectory(

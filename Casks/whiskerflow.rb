@@ -8,6 +8,8 @@ cask "whiskerflow" do
   homepage "https://github.com/jw29247/WhiskerFlow"
 
   depends_on macos: :sonoma
+  # FluidAudio (the default Parakeet engine) does not build for x86_64 yet.
+  depends_on arch: :arm64
 
   app "WhiskerFlow.app"
 

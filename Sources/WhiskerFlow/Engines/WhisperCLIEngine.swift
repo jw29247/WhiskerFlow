@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import Foundation
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
@@ -6,6 +7,9 @@ import WhiskerFlowCore
 /// Fixes the original deadlock (concurrent pipe drain) and adds a timeout.
 struct WhisperCLIEngine: Sendable {
     let configuration: WhisperConfiguration
+    /// Floor for the process deadline. The effective deadline grows with the
+    /// recording: openai-whisper runs on the CPU and may download its model on
+    /// first use, so a fixed budget kills long or first-run transcriptions.
     var timeout: TimeInterval = 180
 
     func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
@@ -33,7 +37,7 @@ struct WhisperCLIEngine: Sendable {
                 "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
                 "HOME": FileManager.default.homeDirectoryForCurrentUser.path
             ],
-            timeout: timeout
+            timeout: Self.effectiveTimeout(floor: timeout, audioSeconds: Self.audioSeconds(at: request.audioURL))
         )
 
         guard output.exitCode == 0 else {
@@ -47,6 +51,17 @@ struct WhisperCLIEngine: Sendable {
         guard !text.isEmpty else { throw WhisperCLIError.emptyTranscript }
 
         return TranscriptionResult(text: text.plainTranscriptText, language: request.language)
+    }
+
+    static func effectiveTimeout(floor: TimeInterval, audioSeconds: Double?) -> TimeInterval {
+        max(floor, DecodeTimeoutPolicy.cliTimeout(forAudioSeconds: audioSeconds ?? 0))
+    }
+
+    private static func audioSeconds(at url: URL) -> Double? {
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        let sampleRate = file.fileFormat.sampleRate
+        guard sampleRate > 0 else { return nil }
+        return Double(file.length) / sampleRate
     }
 
     private static func readTranscript(in directory: URL) throws -> String {

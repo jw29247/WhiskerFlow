@@ -48,11 +48,15 @@ public enum MeetingCoachMetrics {
         let windowStart = max(0, windowEnd - windowSeconds)
         var ownIntervals: [Range<TimeInterval>] = []
         var systemIntervals: [Range<TimeInterval>] = []
+        // The window reports the span actually observed, not the nominal 60 s:
+        // resuming or enabling the coach mid-meeting starts with few samples.
+        var observedIntervals: [Range<TimeInterval>] = []
         var missingOwn = false, missingSystem = false
         for input in valid {
             let start = max(input.elapsedSeconds, windowStart)
             let end = min(input.elapsedSeconds + input.durationSeconds, windowEnd)
             guard end > start else { continue }
+            observedIntervals.append(start..<end)
             missingOwn = missingOwn || input.ownMicActivity == nil
             missingSystem = missingSystem || input.systemActivity == nil
             if input.ownMicActivity == true { ownIntervals.append(start..<end) }
@@ -63,13 +67,14 @@ public enum MeetingCoachMetrics {
         let own = duration(of: mergedOwn)
         let system = duration(of: mergedSystem)
         let overlap = intersectionDuration(mergedOwn, mergedSystem)
+        let observed = duration(of: merge(observedIntervals))
         let certainty: MeetingActivityCertainty
         if missingOwn && missingSystem { certainty = .missingBothTracks }
         else if missingOwn { certainty = .missingOwnMicTrack }
         else if missingSystem { certainty = .missingSystemTrack }
         else if overlap > 0 { certainty = .uncertainOverlap }
         else { certainty = .reliable }
-        return .init(windowDurationSeconds: min(windowSeconds, windowEnd), ownMicActiveSeconds: min(windowSeconds, own), systemActiveSeconds: min(windowSeconds, system), overlapSeconds: min(windowSeconds, overlap), certainty: certainty)
+        return .init(windowDurationSeconds: min(windowSeconds, observed), ownMicActiveSeconds: min(windowSeconds, own), systemActiveSeconds: min(windowSeconds, system), overlapSeconds: min(windowSeconds, overlap), certainty: certainty)
     }
 
     private static func merge(_ intervals: [Range<TimeInterval>]) -> [Range<TimeInterval>] {

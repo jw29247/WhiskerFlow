@@ -96,7 +96,11 @@ fi
 # only bundles (e.g. swift-transformers_Hub.bundle) are sealed by the app
 # signature and cannot be code-signed standalone.
 has_macho() {
-  find "$1" -type f -print0 2>/dev/null | xargs -0 file 2>/dev/null | grep -q "Mach-O"
+  # Count instead of `grep -q`: an early exit would SIGPIPE `file`, and under
+  # pipefail that failure would read as "no Mach-O" and skip signing.
+  local count
+  count="$(find "$1" -type f -exec file {} + 2>/dev/null | grep -c "Mach-O" || true)"
+  [[ "${count:-0}" -gt 0 ]]
 }
 
 # Sign one nested item with the active identity: Developer ID + hardened runtime

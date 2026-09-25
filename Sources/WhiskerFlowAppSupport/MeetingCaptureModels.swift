@@ -107,6 +107,11 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
     public var durationMs: Int64?
     public var sourceGapDetected: Bool
     public var chunks: [MeetingRecordingChunkDescriptor]
+    /// Failed delivery attempts that count toward the automatic retry limit.
+    /// Persisted so an app relaunch does not restart the budget.
+    public var deliveryFailureCount: Int
+    /// Automatic recovery skips this session until the user presses Retry.
+    public var awaitingManualRetry: Bool
 
     public init(
         sessionID: UUID,
@@ -121,7 +126,9 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
         state: MeetingLocalRecordingState = .recording,
         durationMs: Int64? = nil,
         sourceGapDetected: Bool = false,
-        chunks: [MeetingRecordingChunkDescriptor] = []
+        chunks: [MeetingRecordingChunkDescriptor] = [],
+        deliveryFailureCount: Int = 0,
+        awaitingManualRetry: Bool = false
     ) {
         self.sessionID = sessionID
         self.meetingID = meetingID
@@ -136,12 +143,15 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
         self.durationMs = durationMs
         self.sourceGapDetected = sourceGapDetected
         self.chunks = chunks
+        self.deliveryFailureCount = deliveryFailureCount
+        self.awaitingManualRetry = awaitingManualRetry
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionID, meetingID, createdAt, expectedChunkCounts, title, calendarEventID, occurredAtMs
         case atlasMeetingID, atlasArtifactID
         case state, durationMs, sourceGapDetected, chunks
+        case deliveryFailureCount, awaitingManualRetry
     }
 
     public init(from decoder: Decoder) throws {
@@ -159,6 +169,8 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
         self.durationMs = try container.decodeIfPresent(Int64.self, forKey: .durationMs)
         self.sourceGapDetected = try container.decodeIfPresent(Bool.self, forKey: .sourceGapDetected) ?? false
         self.chunks = try container.decodeIfPresent([MeetingRecordingChunkDescriptor].self, forKey: .chunks) ?? []
+        self.deliveryFailureCount = try container.decodeIfPresent(Int.self, forKey: .deliveryFailureCount) ?? 0
+        self.awaitingManualRetry = try container.decodeIfPresent(Bool.self, forKey: .awaitingManualRetry) ?? false
     }
 
     public var pendingChunks: [MeetingRecordingChunkDescriptor] {

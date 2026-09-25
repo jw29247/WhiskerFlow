@@ -13,7 +13,21 @@ final class StallStackCapture: @unchecked Sendable {
     init(directory: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/WhiskerFlow/stacks")) {
         self.directory = directory
     }
-    func captureIfNeeded() {
+    /// `sample` suspends the whole process at every interval (audio threads
+    /// included) and symbolicates in a separate, memory-hungry process. That is
+    /// the wrong trade while audio is being captured or the Mac is already
+    /// under memory pressure — the usual cause of a stall on an 8 GB Mac.
+    static func skipReason(memoryPressure: String, audioCaptureActive: Bool) -> String? {
+        if audioCaptureActive { return "audio_capture_active" }
+        if memoryPressure == "warning" || memoryPressure == "critical" { return "memory_pressure" }
+        return nil
+    }
+
+    func captureIfNeeded(memoryPressure: String = "normal", audioCaptureActive: Bool = false) {
+        if let reason = Self.skipReason(memoryPressure: memoryPressure, audioCaptureActive: audioCaptureActive) {
+            logger.info("Stall stack capture skipped", metadata: ["event": "stack_capture_skipped", "capture_skip_reason": "\(reason)"])
+            return
+        }
         let now = ProcessInfo.processInfo.systemUptime
         lock.lock()
         guard now - lastCapture >= 300 else { lock.unlock(); return }
@@ -64,7 +78,8 @@ final class StallStackCapture: @unchecked Sendable {
     static func sample(pid: Int32) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
-        process.arguments = [String(pid), "1", "10", "-file", "/dev/stdout"]
+        // 1 s at 20 ms: 50 suspensions instead of 100 still resolves a stalled main thread.
+        process.arguments = [String(pid), "1", "20", "-file", "/dev/stdout"]
         let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice

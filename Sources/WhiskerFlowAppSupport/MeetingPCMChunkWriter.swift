@@ -13,7 +13,14 @@ public final class MeetingPCMChunkWriter: @unchecked Sendable {
     private let lock = NSLock()
     private var buffers: [MeetingAudioTrack: [Float]] = [:]
     private var nextSequences: [MeetingAudioTrack: Int] = [:]
+    /// After a failed write, wait for another chunk's worth of audio before
+    /// retrying so a full disk is not re-encrypted on every audio callback.
+    private var retryAtBufferedCount: [MeetingAudioTrack: Int] = [:]
     private var hasSourceGap = false
+    /// Chunks retained in memory while writes fail. Beyond this the oldest
+    /// chunk is dropped and its sequence skipped, so later audio keeps its
+    /// true timeline and the recording is marked with a source gap.
+    public static let maximumBufferedChunks = 6
 
     public init(store: EncryptedMeetingChunkStore, sessionID: UUID) {
         self.store = store
@@ -24,6 +31,14 @@ public final class MeetingPCMChunkWriter: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return hasSourceGap
+    }
+
+    /// Marks audio that the capture pipeline knows is missing, for example a
+    /// silence-padded microphone re-arm or ScreenCaptureKit restart.
+    public func markSourceGap() {
+        lock.lock()
+        hasSourceGap = true
+        lock.unlock()
     }
 
     @discardableResult
@@ -40,6 +55,9 @@ public final class MeetingPCMChunkWriter: @unchecked Sendable {
                 hasSourceGap = true
             }
             buffers[track, default: []].append(contentsOf: samples)
+            if let retryAt = retryAtBufferedCount[track], (buffers[track]?.count ?? 0) < retryAt {
+                return []
+            }
             return try flushReadyLocked(track: track)
         }
     }
@@ -47,11 +65,20 @@ public final class MeetingPCMChunkWriter: @unchecked Sendable {
     public func finish() throws -> [MeetingRecordingChunkDescriptor] {
         try withLock {
             var descriptors: [MeetingRecordingChunkDescriptor] = []
+            var firstError: Error?
+            // Attempt every track even if one fails, so one bad write does not
+            // discard the other sources' final seconds.
             for track in MeetingAudioTrack.allCases {
-                guard let samples = buffers[track], !samples.isEmpty else { continue }
-                descriptors.append(try writeLocked(track: track, samples: samples))
-                buffers[track] = []
+                do {
+                    descriptors.append(contentsOf: try flushReadyLocked(track: track))
+                    guard let samples = buffers[track], !samples.isEmpty else { continue }
+                    descriptors.append(try writeLocked(track: track, samples: samples))
+                    buffers[track] = []
+                } catch {
+                    firstError = firstError ?? error
+                }
             }
+            if let firstError { throw firstError }
             return descriptors
         }
     }
@@ -68,8 +95,23 @@ public final class MeetingPCMChunkWriter: @unchecked Sendable {
         var descriptors: [MeetingRecordingChunkDescriptor] = []
         while let samples = buffers[track], samples.count >= Self.chunkSampleCount {
             let chunkSamples = Array(samples.prefix(Self.chunkSampleCount))
-            buffers[track] = Array(samples.dropFirst(Self.chunkSampleCount))
-            descriptors.append(try writeLocked(track: track, samples: chunkSamples))
+            do {
+                descriptors.append(try writeLocked(track: track, samples: chunkSamples))
+            } catch {
+                // Keep the samples: the store may recover (for example after
+                // space is freed). Only a sustained failure drops audio, and
+                // then with its sequence skipped rather than reused.
+                if samples.count >= Self.maximumBufferedChunks * Self.chunkSampleCount {
+                    buffers[track]?.removeFirst(Self.chunkSampleCount)
+                    nextSequences[track] = (nextSequences[track] ?? 0) + 1
+                    hasSourceGap = true
+                }
+                retryAtBufferedCount[track] = (buffers[track]?.count ?? 0) + Self.chunkSampleCount
+                throw error
+            }
+            // Drop the samples only after the chunk is durable.
+            buffers[track]?.removeFirst(Self.chunkSampleCount)
+            retryAtBufferedCount[track] = nil
         }
         return descriptors
     }

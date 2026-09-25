@@ -107,8 +107,31 @@ enum CoreAudioDeviceCatalog {
             guard let id = defaultInputDeviceID() else { return nil }
             return descriptor(id)
         case .device(let uid):
-            return availableInputs().first { $0.uid == uid }
+            // Translate the UID directly: a full catalog scan on every start
+            // is avoidable main-actor CoreAudio work.
+            guard let id = deviceID(forUID: uid),
+                  let descriptor = descriptor(id), descriptor.uid == uid else { return nil }
+            return descriptor
         }
+    }
+
+    private static func deviceID(forUID uid: String) -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var qualifier = uid as CFString
+        var id = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = withUnsafePointer(to: &qualifier) { pointer in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject), &address,
+                UInt32(MemoryLayout<CFString>.size), pointer, &size, &id
+            )
+        }
+        guard status == noErr, id != kAudioObjectUnknown else { return nil }
+        return id
     }
 
     private static func descriptor(_ id: AudioDeviceID) -> AudioInputDescriptor? {
@@ -132,7 +155,8 @@ enum CoreAudioDeviceCatalog {
         guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value) == noErr else {
             return nil
         }
-        return value?.takeUnretainedValue() as String?
+        // CoreAudio hands back a +1 CFString for these properties.
+        return value?.takeRetainedValue() as String?
     }
 
     private static func inputChannelCount(_ id: AudioObjectID) -> Int {
@@ -277,9 +301,12 @@ private final class CaptureSink: @unchecked Sendable {
         let retainSamples: Bool
         let failures: ConversionFailureBox
         let sampleCount: CaptureSampleCountBox
+        /// Tap callbacks received, converted or not; the stall watchdog's clock.
+        let deliveredBuffers: CaptureSampleCountBox
         /// Converted samples, RMS level and peak for the main actor.
         let deliver: @Sendable ([Float], Float, Float) -> Void
         let reportFailure: @Sendable (Error, _ isFirst: Bool) -> Void
+        let reportStorageFailure: @Sendable (Error) -> Void
     }
 
     private let lock = NSLock()
@@ -324,14 +351,18 @@ final class AudioCaptureService {
     )
     private let samples = LockedAudioBuffer()
     private let capturedSampleCount = CaptureSampleCountBox()
+    private let deliveredBufferCount = CaptureSampleCountBox()
     private var spool: OrdinaryAudioSpool?
     private let conversionFailures = ConversionFailureBox()
     private var active: PreparedCapture?
+    /// Dictation and the meeting microphone each own an instance, so the stall
+    /// sampler's "audio is live" set needs a per-instance key.
+    private let captureActivitySource = "microphone-\(UUID().uuidString)"
     private var ready: PreparedCapture?
     private var readyObserver: NSObjectProtocol?
     private var readyGeneration = 0
     private var configurationObserver: NSObjectProtocol?
-    private var configurationArmTask: Task<Void, Never>?
+    private var interruptionWatchdog: Task<Void, Never>?
     private var configurationObservationGate = AudioConfigurationObservationGate()
 
     /// Keep a prepared engine for the next capture. Dictation opts in; the
@@ -347,6 +378,11 @@ final class AudioCaptureService {
     /// Normalized 16 kHz mono samples for Meeting Mode's durable writer.
     var onSamples: (([Float]) -> Void)?
     var onConfigurationChange: (() -> Void)?
+    /// The capture's recording file stopped accepting audio. Reported once per
+    /// capture; audio captured before the failure is still returned by `stop`.
+    /// When unset, a failure after some audio was kept ends the capture through
+    /// `onConfigurationChange`, so recording stops where its audio does.
+    var onStorageFailure: ((Error) -> Void)?
 
     func start(
         selection: AudioInputSelection,
@@ -356,6 +392,7 @@ final class AudioCaptureService {
         stopEngine()
         samples.reset()
         capturedSampleCount.reset()
+        deliveredBufferCount.reset()
         spool = try audioURL.map(OrdinaryAudioSpool.init)
         conversionFailures.reset()
         var started = false
@@ -386,12 +423,16 @@ final class AudioCaptureService {
             }
         }
 
+        // Observe before starting: a change posted while the engine starts
+        // must not be missed.
+        let observation = observeConfigurationChanges(for: capture.engine)
         capture.sink.begin(CaptureSink.Session(
             spool: spool,
             store: samples,
             retainSamples: retainSamples,
             failures: conversionFailures,
             sampleCount: capturedSampleCount,
+            deliveredBuffers: deliveredBufferCount,
             deliver: { [weak self] converted, level, peak in
                 // One main-actor hop per buffer carries both consumers.
                 Task { @MainActor [weak self] in
@@ -415,14 +456,28 @@ final class AudioCaptureService {
                         )
                     }
                 }
+            },
+            reportStorageFailure: { [weak self] error in
+                Task { @MainActor [weak self] in
+                    self?.logger.error(
+                        "Recording file stopped accepting audio",
+                        metadata: ["error.code": "\((error as NSError).code)"]
+                    )
+                    DiagnosticsService.breadcrumb(
+                        category: "audio",
+                        metadata: ["error_code": "capture_storage_failed"]
+                    )
+                    self?.handleStorageFailure(error, generation: observation)
+                }
             }
         ))
 
         do {
             try capture.engine.start()
             active = capture
+            Observability.setAudioCaptureActive(true, source: captureActivitySource)
             started = true
-            armConfigurationObservation(for: capture.engine)
+            startInterruptionWatchdog(for: capture.engine, generation: observation)
             logger.info(
                 "Capture started",
                 metadata: [
@@ -431,6 +486,7 @@ final class AudioCaptureService {
                 ]
             )
         } catch {
+            stopObservingConfigurationChanges()
             capture.sink.end()
             Self.retire(capture)
             throw error
@@ -590,6 +646,12 @@ final class AudioCaptureService {
         // MacBook Pro array) but carries the processed voice on the first;
         // downmixing would blend it with the unprocessed channels.
         let usesFirstChannel = enableVoiceProcessing && inputFormat.channelCount > 1
+        // Any other multichannel float input is mixed to mono in the tap; see `mixDown`.
+        let mixFormat: AVAudioFormat? = !usesFirstChannel && inputFormat.channelCount > 1
+            && inputFormat.commonFormat == .pcmFormatFloat32 && !inputFormat.isInterleaved
+            ? AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: inputFormat.sampleRate,
+                            channels: 1, interleaved: false)
+            : nil
         let converterInput: AVAudioFormat
         if usesFirstChannel {
             guard let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: inputFormat.sampleRate,
@@ -598,7 +660,7 @@ final class AudioCaptureService {
             }
             converterInput = mono
         } else {
-            converterInput = inputFormat
+            converterInput = mixFormat ?? inputFormat
         }
         let converter: AVAudioConverter?
         if converterInput.sampleRate == targetFormat.sampleRate,
@@ -606,7 +668,7 @@ final class AudioCaptureService {
            converterInput.commonFormat == targetFormat.commonFormat {
             converter = nil
         } else {
-            converter = AVAudioConverter(from: converterInput, to: targetFormat)
+            converter = makeConverter(from: converterInput, to: targetFormat)
             guard converter != nil else { throw AudioCaptureServiceError.converterUnavailable }
         }
         let converterBox = AudioConverterBox(converter: converter)
@@ -614,15 +676,26 @@ final class AudioCaptureService {
 
         inputNode.installTap(onBus: 0, bufferSize: 1_600, format: inputFormat) { buffer, _ in
             guard let session = sink.current else { return }
+            session.deliveredBuffers.add(1)
             do {
-                let source = usesFirstChannel ? try Self.firstChannel(of: buffer, format: converterInput) : buffer
+                let source = usesFirstChannel
+                    ? try Self.firstChannel(of: buffer, format: converterInput)
+                    : try mixFormat.map { try Self.mixDown(buffer, to: $0) } ?? buffer
                 let converted = try Self.convert(
                     source,
                     converter: converterBox.converter,
                     targetFormat: targetFormat
                 )
                 if let spool = session.spool {
-                    guard spool.append(converted) else { throw spool.failure ?? CocoaError(.fileWriteUnknown) }
+                    let alreadyFailed = spool.failure != nil
+                    guard spool.append(converted) else {
+                        // A failed spool stays failed; report the storage
+                        // error once instead of ten times a second.
+                        if !alreadyFailed {
+                            session.reportStorageFailure(spool.failure ?? CocoaError(.fileWriteUnknown))
+                        }
+                        return
+                    }
                 } else if session.retainSamples {
                     session.store.append(converted)
                 }
@@ -637,6 +710,61 @@ final class AudioCaptureService {
             engine: engine, selection: selection, deviceID: descriptor.transientID,
             inputFormat: inputFormat, sink: sink, requestedVoiceProcessing: requested
         )
+    }
+
+    /// Without `downmix`, AVAudioConverter keeps only channel 0 of a
+    /// multichannel input. `downmix` only helps layouts it understands, so
+    /// the tap mixes float input itself and this covers other formats.
+    nonisolated static func makeConverter(
+        from inputFormat: AVAudioFormat,
+        to targetFormat: AVAudioFormat
+    ) -> AVAudioConverter? {
+        let converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        if inputFormat.channelCount > targetFormat.channelCount {
+            converter?.downmix = true
+        }
+        return converter
+    }
+
+    /// Channels quieter than this (-60 dBFS) are idle inputs, not a mic.
+    nonisolated static let mixDownNoiseFloorRMS: Float = 0.001
+    /// Channels more than 12 dB below the loudest are left out of the mix.
+    nonisolated static let mixDownRelativeFloor: Float = 0.25
+
+    /// Mixes deinterleaved float input to mono by averaging only the channels
+    /// that carry signal, so a mic on any input keeps its full level instead
+    /// of being diluted by idle channels. The converter's `downmix` outputs
+    /// silence for the discrete layouts that interfaces and aggregate devices
+    /// report, losing a mic on any input but the first.
+    nonisolated static func mixDown(
+        _ input: AVAudioPCMBuffer,
+        to monoFormat: AVAudioFormat
+    ) throws -> AVAudioPCMBuffer {
+        let frames = input.frameLength
+        let channelCount = Int(input.format.channelCount)
+        guard let source = input.floatChannelData, !input.format.isInterleaved,
+              let output = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: max(frames, 1)),
+              let destination = output.floatChannelData?[0]
+        else { throw AudioCaptureServiceError.converterUnavailable }
+        output.frameLength = frames
+        guard frames > 0 else { return output }
+        let count = vDSP_Length(frames)
+        let levels = (0..<channelCount).map { channel -> Float in
+            var rms: Float = 0
+            vDSP_rmsqv(source[channel], 1, &rms, count)
+            return rms
+        }
+        let loudest = levels.indices.max { levels[$0] < levels[$1] } ?? 0
+        let floor = max(mixDownNoiseFloorRMS, levels[loudest] * mixDownRelativeFloor)
+        let active = levels.indices.filter { $0 != loudest && levels[$0] >= floor }
+        destination.update(from: source[loudest], count: Int(frames))
+        guard !active.isEmpty else { return output }
+        for channel in active {
+            vDSP_vadd(destination, 1, source[channel], 1, destination, 1, count)
+        }
+        var scale = 1 / Float(active.count + 1)
+        vDSP_vsmul(destination, 1, &scale, destination, 1, count)
+        return output
     }
 
     /// Engine teardown and deallocation take ~10–15 ms; keep them off the caller.
@@ -665,13 +793,20 @@ final class AudioCaptureService {
         onLevel?(0, 0)
         var completedSpool = spool
         spool = nil
-        if completedSpool?.failure != nil {
+        let storageFailed = completedSpool?.failure != nil
+        if storageFailed, completedSpool?.totalSampleCount == 0 {
+            // Nothing reached the file. Until callers can tell a storage
+            // failure apart, a non-zero failure count keeps this from being
+            // dismissed as silence.
             try? completedSpool?.discard()
             return CapturedAudio(
                 samples: [], stopReason: reason,
-                conversionFailureCount: max(1, conversionFailures.value)
+                conversionFailureCount: max(1, conversionFailures.value),
+                storageFailed: true
             )
         }
+        // After a write failure the file still holds every sample before it,
+        // and its header is finalized on release like any other capture.
         let residentSamples = completedSpool?.residentSamples ?? samples.drain()
         let audioURL = completedSpool?.url
         let totalSampleCount = completedSpool?.totalSampleCount
@@ -685,7 +820,8 @@ final class AudioCaptureService {
             conversionFailureCount: conversionFailures.value,
             audioURL: audioURL,
             totalSampleCount: totalSampleCount,
-            residentStartSample: residentStartSample
+            residentStartSample: residentStartSample,
+            storageFailed: storageFailed
         )
     }
 
@@ -696,16 +832,15 @@ final class AudioCaptureService {
         spool = nil
         conversionFailures.reset()
         capturedSampleCount.reset()
+        deliveredBufferCount.reset()
         onLevel?(0, 0)
     }
 
     private func stopEngine() {
-        configurationArmTask?.cancel()
-        configurationArmTask = nil
-        configurationObservationGate.captureStopped()
-        removeConfigurationObserver()
+        stopObservingConfigurationChanges()
         guard let active else { return }
         self.active = nil
+        Observability.setAudioCaptureActive(false, source: captureActivitySource)
         // Stop synchronously so every delivered buffer is in the spool before the
         // caller reads it; only deallocation is deferred.
         active.engine.inputNode.removeTap(onBus: 0)
@@ -714,35 +849,80 @@ final class AudioCaptureService {
         Self.engineQueue.async { _ = active }
     }
 
-    private func armConfigurationObservation(for engine: AVAudioEngine) {
+    /// AVAudioEngine stops itself when a hardware change really affects it,
+    /// and absorbs the changes it posts while building its device aggregate.
+    /// Acting on the engine's running state — not on a fixed startup delay —
+    /// holds on slow Macs whose startup changes arrive late, and never leaves
+    /// a stopped engine recording silence.
+    private func observeConfigurationChanges(for engine: AVAudioEngine) -> UInt64 {
+        stopObservingConfigurationChanges()
         let generation = configurationObservationGate.captureStarted()
-        configurationArmTask?.cancel()
-        configurationArmTask = Task { @MainActor [weak self] in
-            // AVAudioEngine emits configuration changes while constructing its
-            // default-device aggregate. Those are startup mechanics, not a hot-plug.
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled,
-                  let self,
-                  self.active?.engine === engine,
-                  self.configurationObservationGate.arm(generation) else { return }
+        _ = configurationObservationGate.arm(generation)
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.active?.engine === engine,
+                      self.configurationObservationGate.shouldHandleChange(for: generation),
+                      CaptureInterruptionDetector.configurationChangeInterrupts(
+                          engineIsRunning: engine.isRunning
+                      )
+                else { return }
+                self.reportInterruption(generation, cause: "configuration_change")
+            }
+        }
+        return generation
+    }
 
-            self.configurationObserver = NotificationCenter.default.addObserver(
-                forName: .AVAudioEngineConfigurationChange,
-                object: engine,
-                queue: nil
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self,
-                          self.configurationObservationGate.shouldHandleChange(for: generation)
-                    else { return }
-                    self.onConfigurationChange?()
+    /// Catches an engine that stops without a notification we saw, and a tap
+    /// that stops firing while the engine still claims to run.
+    private func startInterruptionWatchdog(for engine: AVAudioEngine, generation: UInt64) {
+        interruptionWatchdog?.cancel()
+        interruptionWatchdog = Task { @MainActor [weak self] in
+            var detector = CaptureInterruptionDetector()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled, let self, self.active?.engine === engine,
+                      self.configurationObservationGate.shouldHandleChange(for: generation)
+                else { return }
+                let running = engine.isRunning
+                if detector.isInterrupted(
+                    deliveredBufferCount: self.deliveredBufferCount.value,
+                    engineIsRunning: running,
+                    now: ProcessInfo.processInfo.systemUptime
+                ) {
+                    self.reportInterruption(generation, cause: running ? "buffers_stalled" : "engine_stopped")
+                    return
                 }
             }
-            self.configurationArmTask = nil
         }
     }
 
-    private func removeConfigurationObserver() {
+    private func handleStorageFailure(_ error: Error, generation: UInt64) {
+        guard configurationObservationGate.shouldHandleChange(for: generation) else { return }
+        if let onStorageFailure {
+            onStorageFailure(error)
+        } else if capturedSampleCount.value > 0 {
+            // Nothing past this point is kept. End the capture as a lost
+            // microphone would, so the user learns the transcript is partial
+            // instead of speaking into a recording that no longer grows.
+            reportInterruption(generation, cause: "storage_failed")
+        }
+    }
+
+    private func reportInterruption(_ generation: UInt64, cause: String) {
+        guard configurationObservationGate.claimInterruption(for: generation) else { return }
+        logger.warning("Capture interrupted", metadata: ["cause": "\(cause)"])
+        onConfigurationChange?()
+    }
+
+    private func stopObservingConfigurationChanges() {
+        interruptionWatchdog?.cancel()
+        interruptionWatchdog = nil
+        configurationObservationGate.captureStopped()
         if let configurationObserver {
             NotificationCenter.default.removeObserver(configurationObserver)
             self.configurationObserver = nil

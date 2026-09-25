@@ -80,4 +80,17 @@ final class MeetingVisualActivityTests: XCTestCase {
       MeetingVisualActivity.isSpeaking(
         image: image, tile: CGRect(x: 10, y: 10, width: 30, height: 20)))
   }
+  func testSpeakingTilesLocatesOutlineOnceAndIgnoresLargeFilledRegions() {
+    let tiles = MeetingVisualActivity.speakingTiles(image: frame(border: true, badge: true), nameHeight: 13)
+    XCTAssertEqual(tiles.count, 1)
+    XCTAssertEqual(tiles.first.map { MeetingVisualActivity.isSpeaking(image: frame(border: true, badge: true), tile: $0) }, true)
+    XCTAssertTrue(MeetingVisualActivity.speakingTiles(image: frame(border: true, badge: false), nameHeight: 13).isEmpty)
+    // A full-frame light-blue slide is one large component, filled without a per-pixel stack.
+    let c = CGContext(
+      data: nil, width: 1024, height: 640, bitsPerComponent: 8, bytesPerRow: 1024 * 4,
+      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    c.setFillColor(CGColor(red: 0.65, green: 0.78, blue: 0.97, alpha: 1))
+    c.fill(CGRect(x: 0, y: 0, width: 1024, height: 640))
+    XCTAssertTrue(MeetingVisualActivity.speakingTiles(image: c.makeImage()!, nameHeight: 13).isEmpty)
+  }
 }

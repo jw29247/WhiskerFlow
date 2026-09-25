@@ -19,14 +19,30 @@ actor ParakeetTDTv3Engine: Sendable {
     /// One second of silence: enough to run the encoder, decoder and joint once.
     private static let warmUpSamples = [Float](repeating: 0, count: 16_000)
     private let loadManager: @Sendable () async throws -> AsrManager
+    /// A Core ML prediction that wedges never returns, and `AsrManager` is an
+    /// actor, so every later decode would queue behind it. Decodes are
+    /// time-boxed and admitted one at a time; while an abandoned one is still
+    /// running, new decodes fail fast so the caller can fall back.
+    private let decodeGate = ModelDecodeGate()
+    private let preparationWait: TimeInterval
 
-    init(loadManager: @escaping @Sendable () async throws -> AsrManager = {
-        let models = try await AsrModels.downloadAndLoad(version: .v3, encoderPrecision: .int8)
-        let manager = AsrManager(config: .default)
-        try await manager.loadModels(models)
-        return manager
-    }) {
+    init(
+        preparationWait: TimeInterval = DecodeTimeoutPolicy.modelPreparationWait,
+        loadManager: @escaping @Sendable () async throws -> AsrManager = {
+            let models = try await AsrModels.downloadAndLoad(version: .v3, encoderPrecision: .int8)
+            let manager = AsrManager(config: .default)
+            try await manager.loadModels(models)
+            return manager
+        }
+    ) {
+        self.preparationWait = preparationWait
         self.loadManager = loadManager
+    }
+
+    /// True while a timed-out (possibly wedged) decode still holds the model,
+    /// so any further decode would fail the same way.
+    var isDecodeWedged: Bool {
+        get async { await decodeGate.isHeldByAbandonedOperation }
     }
 
     func prepare() async throws {
@@ -65,9 +81,13 @@ actor ParakeetTDTv3Engine: Sendable {
     func warmUpInference() {
         guard let manager, backgroundInference == nil, activeDecodes == 0 else { return }
         let id = UUID()
+        let gate = decodeGate
         let task = Task { [weak self] in
-            if var state = try? TdtDecoderState() {
-                _ = try? await manager.transcribe(Self.warmUpSamples, decoderState: &state)
+            // Gated and time-boxed like a real decode, so a wedged warm-up cannot
+            // hold up the decode that waits for it in `beginDecode()`.
+            _ = try? await gate.run(seconds: DecodeTimeoutPolicy.timeout(forAudioSeconds: 1)) {
+                var state = try TdtDecoderState()
+                return try await manager.transcribe(Self.warmUpSamples, decoderState: &state)
             }
             await self?.finishBackgroundInference(id)
         }
@@ -80,9 +100,16 @@ actor ParakeetTDTv3Engine: Sendable {
     func previewTranscription(samples: [Float], language: String?) async -> String? {
         guard let manager, backgroundInference == nil, activeDecodes == 0 else { return nil }
         let id = UUID()
+        let gate = decodeGate
+        let seconds = DecodeTimeoutPolicy.timeout(forAudioSeconds: Double(samples.count) / 16_000)
         let decode = Task<String?, Never> {
-            guard var state = try? TdtDecoderState(),
-                  let decoded = try? await manager.transcribe(samples, decoderState: &state) else { return nil }
+            // Time-boxed so a wedged preview cannot block the real decode queued
+            // behind it in `beginDecode()`.
+            let decoded = try? await gate.run(seconds: seconds, operation: {
+                var state = try TdtDecoderState()
+                return try await manager.transcribe(samples, decoderState: &state)
+            })
+            guard let decoded else { return nil }
             return try? Self.result(decoded, language: language).text
         }
         backgroundInference = (id, Task { _ = await decode.value })
@@ -105,21 +132,22 @@ actor ParakeetTDTv3Engine: Sendable {
     private func endDecode() { activeDecodes -= 1 }
 
     func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
-        try await prepare()
+        let manager = try await preparedManager()
         await beginDecode()
         defer { endDecode() }
-        guard let manager else {
-            throw TranscriptionError.modelUnavailable("Parakeet TDT v3")
-        }
+        let audioURL = request.audioURL
+        let seconds = Self.audioSeconds(at: audioURL)
+            .map { DecodeTimeoutPolicy.longFormTimeout(forAudioSeconds: $0) } ?? DecodeTimeoutPolicy.maximumTimeout
 
         do {
             // Let FluidAudio preserve decoder context across its bounded,
             // disk-backed chunks. Independent 30-second decodes can return an
             // empty window and discard speech recovered from the rest of a file.
             try Task.checkCancellation()
-            var decoderState = try TdtDecoderState()
-            let decoded = try await manager.transcribeDiskBacked(
-                request.audioURL, decoderState: &decoderState)
+            let decoded = try await decode(seconds: seconds) {
+                var decoderState = try TdtDecoderState()
+                return try await manager.transcribeDiskBacked(audioURL, decoderState: &decoderState)
+            }
             try Task.checkCancellation()
             return try Self.result(decoded, language: request.language)
         } catch let error as TranscriptionError {
@@ -131,17 +159,60 @@ actor ParakeetTDTv3Engine: Sendable {
         }
     }
 
+    /// Bounded wait for the model. A first-run download
+    /// can outlast it; the load keeps going and the caller falls back meanwhile.
+    private func preparedManager() async throws -> AsrManager {
+        if manager == nil {
+            do {
+                try await withAbandoningDeadline(seconds: preparationWait) { try await self.prepare() }
+            } catch AsyncTimeoutError.timedOut {
+                throw TranscriptionError.timedOut(seconds: Int(preparationWait))
+            } catch is CancellationError {
+                throw TranscriptionError.cancelled
+            }
+        }
+        guard let manager else { throw TranscriptionError.modelUnavailable("Parakeet TDT v3") }
+        return manager
+    }
+
+    private func decode<T: Sendable>(
+        seconds: Double,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        do {
+            // Back-to-back dictations and retries wait their turn; only a wedged
+            // (abandoned) decode makes them fail fast.
+            return try await decodeGate.run(
+                seconds: seconds, waitingUpTo: DecodeTimeoutPolicy.gateQueueWait, operation: operation)
+        } catch AsyncTimeoutError.timedOut {
+            throw TranscriptionError.timedOut(seconds: Int(seconds))
+        } catch ModelDecodeGateError.occupied {
+            throw TranscriptionError.underlying(
+                "The previous local transcription is still finishing. The recording is saved and will retry."
+            )
+        }
+    }
+
+    private static func audioSeconds(at url: URL) -> Double? {
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        let sampleRate = file.fileFormat.sampleRate
+        guard sampleRate > 0 else { return nil }
+        return Double(file.length) / sampleRate
+    }
+
     /// Capture already produces mono 16 kHz samples. Decode those directly,
     /// leaving WAV encoding and history persistence off the delivery path.
     func transcribe(samples: [Float], model: WhisperModel, language: String?) async throws -> TranscriptionResult {
-        try await prepare()
+        let manager = try await preparedManager()
         await beginDecode()
         defer { endDecode() }
-        guard let manager else { throw TranscriptionError.modelUnavailable("Parakeet TDT v3") }
+        let seconds = DecodeTimeoutPolicy.longFormTimeout(forAudioSeconds: Double(samples.count) / 16_000)
         do {
             try Task.checkCancellation()
-            var decoderState = try TdtDecoderState()
-            let result = try await manager.transcribe(samples, decoderState: &decoderState)
+            let result = try await decode(seconds: seconds) {
+                var decoderState = try TdtDecoderState()
+                return try await manager.transcribe(samples, decoderState: &decoderState)
+            }
             try Task.checkCancellation()
             return try Self.result(result, language: language)
         } catch let error as TranscriptionError {

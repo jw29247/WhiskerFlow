@@ -42,7 +42,7 @@ final class MeetingLocalReplayTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: replayRoot) }
         let result: MeetingLocalProcessingResult
         do {
-            result = try await MeetingLocalProcessor(transcription: TranscriptionService(), processingRoot: replayRoot).process(manifest: manifest, store: store, language: "en")
+            result = try await MeetingLocalProcessor(transcription: TranscriptionService(), processingRoot: replayRoot).process(manifest: manifest, store: store, language: "en", resumable: false)
         } catch let error as MeetingWindowTranscriptionFailure {
             print("LOCAL_REPLAY_FAILED_WINDOW: track=\(error.track.rawValue), start_ms=\(error.startMs), end_ms=\(error.endMs)")
             throw error

@@ -35,6 +35,10 @@ public struct CapturedAudio: Equatable, Sendable {
     /// Buffers the capture tap failed to convert. Non-zero with no samples means
     /// the mic delivered audio we could not use — not that the user stayed silent.
     public let conversionFailureCount: Int
+    /// The durable recording stopped accepting audio (for example, a full
+    /// disk). Everything before the failure is still in the capture, but
+    /// later speech is missing; this is a storage problem, not a microphone one.
+    public let storageFailed: Bool
 
     public init(
         samples: [Float],
@@ -42,7 +46,8 @@ public struct CapturedAudio: Equatable, Sendable {
         conversionFailureCount: Int = 0,
         audioURL: URL? = nil,
         totalSampleCount: Int? = nil,
-        residentStartSample: Int = 0
+        residentStartSample: Int = 0,
+        storageFailed: Bool = false
     ) {
         self.samples = samples
         self.stopReason = stopReason
@@ -50,6 +55,7 @@ public struct CapturedAudio: Equatable, Sendable {
         self.audioURL = audioURL
         self.totalSampleCount = totalSampleCount ?? samples.count
         self.residentStartSample = residentStartSample
+        self.storageFailed = storageFailed
     }
 
     public var reportsUnusableInput: Bool {

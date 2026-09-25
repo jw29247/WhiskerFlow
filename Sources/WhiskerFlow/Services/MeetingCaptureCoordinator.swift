@@ -33,6 +33,12 @@ final class MeetingCaptureCoordinator {
   private static let preArmWindowMs: Int64 = 2 * 60 * 1_000
   private static let stopGraceMs: Int64 = 5 * 60 * 1_000
   private static let forecastChunkCount = 720  // two hours at ten seconds/chunk
+  /// Stopping ScreenCaptureKit and flushing the final chunks can take several
+  /// seconds on a slow Mac. Quitting waits this long for that phase only.
+  private static let shutdownCaptureDrainSeconds: UInt64 = 8
+  private static let retryPollSeconds: TimeInterval = 60
+  private static let microphonePendingDetail =
+    "Recording Mac audio. The microphone is not delivering audio yet."
   #if arch(arm64)
     private static let isSupportedMac = true
   #else
@@ -52,7 +58,15 @@ final class MeetingCaptureCoordinator {
   private var uploadTask: Task<Void, Never>?
   private var uploadTaskID: UUID?
   private var retryTask: Task<Void, Never>?
+  private var retryTaskID: UUID?
+  private var retryTaskSleepsForBackoff = false
+  private var releaseManualRetryHoldsOnNextScan = false
   private var retryBackoff = MeetingRetryBackoff()
+  /// Events the user stopped by hand; the schedule poll must not restart them.
+  private var suppressedEvents = MeetingCaptureSuppression()
+  /// Stream stop + final chunk flush for the capture being finished. Kept
+  /// separate from delivery so shutdown can await it without transcription.
+  private var finishingCaptureTask: Task<Void, Error>?
   private var activeIntent: AtlasCaptureScheduleIntent?
   private var activeSessionID: UUID?
   /// The newest capture owns user-visible delivery status even after its audio
@@ -63,6 +77,11 @@ final class MeetingCaptureCoordinator {
   private var audioCapture: MeetingAudioCaptureService?
   private var stopTask: Task<Void, Never>?
   private var activeCaptureStopAtMs: Int64?
+  private var boundaryUnobservableChecks = 0
+  private var boundaryCheckInProgress = false
+  /// Retained recordings that stopped retrying automatically and wait for
+  /// the user to choose Retry. Kept visible so idle status cannot hide them.
+  private var heldSessionIDs: Set<UUID> = []
   private var activeOverlapDetected = false
   private var captureTransitionInProgress = false
   private var heartbeatTask: Task<Void, Never>?
@@ -118,6 +137,9 @@ final class MeetingCaptureCoordinator {
     captureTransitionInProgress || activeSessionID != nil || uploadTask != nil || retryTask != nil || !deliveringSessions.isEmpty
   }
 
+  /// Recordings saved on this Mac that wait for a manual Retry.
+  var heldRecordingCount: Int { heldSessionIDs.count }
+
   var isCapturing: Bool { activeSessionID != nil }
   var isCaptureTransitioning: Bool { captureTransitionInProgress }
   var hasScheduledUploadRetry: Bool { retryTask != nil }
@@ -152,13 +174,15 @@ final class MeetingCaptureCoordinator {
   func shutdown() async {
     stopMonitoring()
     stopTask?.cancel()
-    if activeSessionID != nil {
-      let drain = Task { @MainActor [weak self] () in
-        guard let self else { return }
-        await self.stopCapture()
-      }
-      let completed = await waitForShutdownTask(drain, timeout: 3)
-      if !completed { drain.cancel() }
+    if let sessionID = activeSessionID, let capture = audioCapture, !captureTransitionInProgress {
+      // Quitting: make the recording durable now; delivery resumes on the
+      // next launch instead of racing process exit.
+      beginFinishingCapture(sessionID: sessionID, capture: capture)
+    }
+    // Also covers a user Stop that is still flushing when Quit arrives.
+    if let finishing = finishingCaptureTask {
+      let drain = Task { _ = await finishing.result }
+      _ = await waitForShutdownTask(drain, timeout: Self.shutdownCaptureDrainSeconds)
     }
     uploadTask?.cancel()
     retryTask?.cancel()
@@ -167,14 +191,16 @@ final class MeetingCaptureCoordinator {
   func toggleManualCapture() {
     guard !captureTransitionInProgress else { return }
     if activeSessionID != nil {
-      Task { @MainActor [weak self] in await self?.stopCapture() }
+      Task { @MainActor [weak self] in await self?.stopCapture(userInitiated: true) }
     } else {
+      suppressedEvents.removeAll()
       Task { @MainActor [weak self] in await self?.startCapture(intent: nil) }
     }
   }
 
   func startScheduledCapture(_ intent: AtlasCaptureScheduleIntent) {
     guard activeSessionID == nil, !captureTransitionInProgress else { return }
+    suppressedEvents.release(eventID: intent.eventID)
     Task { @MainActor [weak self] in await self?.startCapture(intent: intent) }
   }
 
@@ -185,7 +211,16 @@ final class MeetingCaptureCoordinator {
   func retryPendingRecordings() {
     guard uploadTask == nil, deliveringSessions.isEmpty else { return }
     retryBackoff.reset()
-    recoveryTask = Task { @MainActor [weak self] in await self?.recoverLocalSessions() }
+    guard activeSessionID == nil, !captureTransitionInProgress else {
+      // Scanning retained audio now would contend with the live recording's
+      // chunk writes. Release held sessions once this capture has finished.
+      releaseManualRetryHoldsOnNextScan = true
+      scheduleUploadRetry()
+      return
+    }
+    recoveryTask = Task { @MainActor [weak self] in
+      await self?.recoverLocalSessions(releasingManualRetryHolds: true)
+    }
   }
 
   func refreshConfiguration() {
@@ -201,6 +236,13 @@ final class MeetingCaptureCoordinator {
 
   func pollSchedule() async {
     let now = Int64(Date().timeIntervalSince1970 * 1_000)
+    suppressedEvents.prune(nowMs: now)
+    // A timer can fire late after system sleep. Re-check the calendar stop
+    // boundary against the wall clock on every poll.
+    if activeSessionID != nil, !captureTransitionInProgress, !boundaryCheckInProgress,
+       let stopAt = activeCaptureStopAtMs, now >= stopAt {
+      scheduleCaptureStop(atMs: now)
+    }
     let intents: [AtlasCaptureScheduleIntent]
     var scheduleFetchFailed = false
     if let client = await atlasClient() {
@@ -244,8 +286,7 @@ final class MeetingCaptureCoordinator {
     // The calendar is useful in manual mode too. Only auto-start is opt-in.
     guard settings.meetingModeEnabled else {
       if !isBusy && !scheduleFetchFailed {
-        status = .covered
-        statusDetail = "Ready to record. Automatic recording is off."
+        publishIdleStatus("Ready to record. Automatic recording is off.")
       }
       return
     }
@@ -260,12 +301,12 @@ final class MeetingCaptureCoordinator {
     guard
       let next = automaticIntents.first(where: {
         $0.startMs - Self.preArmWindowMs <= now && now <= $0.endMs + Self.stopGraceMs
+          && !suppressedEvents.isSuppressed($0.eventID, nowMs: now)
       })
     else {
       if !isBusy && !scheduleFetchFailed {
         guard await atlasClient() != nil, !isBusy else { return }
-        status = .covered
-        statusDetail = "Ready for the next scheduled meeting."
+        publishIdleStatus("Ready for the next scheduled meeting.")
       }
       return
     }
@@ -297,6 +338,10 @@ final class MeetingCaptureCoordinator {
       $0.bundleIdentifier == "com.google.Chrome" ||
       $0.bundleIdentifier == "com.google.Chrome.app.kjgfgldnnfoeklkmfkjfagphfepbbdan"
     }.map(\.processIdentifier)
+    // Speaker capture only supports Chrome, so with no Chrome process the call
+    // cannot still be open there; reporting it as unreadable instead would keep
+    // a scheduled recording running after the user quits the browser.
+    guard !pids.isEmpty else { return .noMeeting }
     let result = await Task.detached(priority: .utility) {
       MeetingAccessibilityReader.read(pids: pids)
     }.value
@@ -339,7 +384,9 @@ final class MeetingCaptureCoordinator {
     activeCaptureStopAtMs = atMs
     let delay = max(0, atMs - Int64(Date().timeIntervalSince1970 * 1_000))
     stopTask = Task { @MainActor [weak self] in
-      try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
+      // The continuous clock keeps counting while the Mac sleeps, so a lid
+      // closed past the boundary stops promptly on wake.
+      try? await Task.sleep(for: .milliseconds(delay), clock: .continuous)
       guard !Task.isCancelled else { return }
       self?.stopTask = nil
       await self?.stopCaptureAtCalendarBoundary()
@@ -351,8 +398,19 @@ final class MeetingCaptureCoordinator {
       await stopCapture()
       return
     }
+    // The AX read below can be slow; a schedule poll during it must not start
+    // a second, concurrent check that counts the same interval twice.
+    guard !boundaryCheckInProgress, let sessionID = activeSessionID else { return }
+    boundaryCheckInProgress = true
+    defer { boundaryCheckInProgress = false }
     let availability = await meetingAccessibilityAvailability(for: intent.meetingURL)
-    guard MeetingCaptureStopPolicy.shouldStopAtCalendarBoundary(availability) else {
+    guard activeSessionID == sessionID, !captureTransitionInProgress else { return }
+    boundaryUnobservableChecks = MeetingCaptureStopPolicy.nextUnobservableBoundaryCount(
+      after: boundaryUnobservableChecks, availability: availability
+    )
+    guard MeetingCaptureStopPolicy.shouldStopAtCalendarBoundary(
+      availability, unobservableChecks: boundaryUnobservableChecks
+    ) else {
       status = .recording
       statusDetail = "The meeting is still open; recording continues."
       scheduleCaptureStop(atMs: Int64(Date().timeIntervalSince1970 * 1_000) + Self.stopGraceMs)
@@ -384,6 +442,20 @@ final class MeetingCaptureCoordinator {
     guard authorization == .authorized else {
       status = .uncovered
       statusDetail = "Microphone permission is required for Meeting Mode."
+      return
+    }
+
+    // Load the encryption key off the main actor before recording, so a
+    // locked keychain or a pending prompt fails the start instead of every
+    // chunk write later.
+    let store = self.store
+    do {
+      try await Task.detached(priority: .userInitiated) { try store.prepareEncryptionKey() }.value
+    } catch {
+      lastFailureCode = "encryption_key"
+      status = .uncovered
+      statusDetail = "The meeting recording encryption key is unavailable. Unlock the login keychain and try again."
+      DiagnosticsService.capture(error: error, category: "storage", code: "meeting_key")
       return
     }
 
@@ -420,6 +492,12 @@ final class MeetingCaptureCoordinator {
           DiagnosticsService.capture(error: error, category: "audio", code: "meeting_capture")
         }
       }
+      capture.onMicrophoneConfirmed = { [weak self] in
+        guard let self, self.activeSessionID == sessionID,
+              self.statusDetail == Self.microphonePendingDetail else { return }
+        self.status = .recording
+        self.statusDetail = self.activeIntent == nil ? "Recording ad hoc meeting." : "Recording scheduled meeting."
+      }
       try await capture.start(selection: settings.selectedInput)
       speakerCapture.onStatus = { [weak self] detail in
         guard let self, self.speakerDetectionDetail != detail else { return }
@@ -438,6 +516,9 @@ final class MeetingCaptureCoordinator {
       if activeOverlapDetected {
         status = .attention
         statusDetail = "Overlapping meetings share one physical audio capture."
+      } else if !capture.isMicrophoneConfirmed {
+        status = .attention
+        statusDetail = Self.microphonePendingDetail
       } else {
         status = .recording
         statusDetail = intent == nil ? "Recording ad hoc meeting." : "Recording scheduled meeting."
@@ -450,14 +531,16 @@ final class MeetingCaptureCoordinator {
       }
     } catch {
       lastFailureCode = "capture_start"
-      // A microphone callback can write a chunk before Screen Recording
-      // authorization or stream startup fails. Keep every written chunk
-      // encrypted and recoverable instead of deleting evidence of a
-      // partial/uncovered meeting.
+      // Keep any written chunk encrypted and recoverable instead of deleting
+      // evidence of a partial/uncovered meeting. A start that captured
+      // nothing leaves no directory behind; the schedule poll may retry
+      // every minute for the whole meeting window.
       retryBackoff.failed(sessionID, now: ProcessInfo.processInfo.systemUptime)
-      try? store.markState(sessionID: sessionID, state: .failed)
       if let manifest = try? store.loadManifest(sessionID: sessionID), !manifest.chunks.isEmpty {
+        try? store.markState(sessionID: sessionID, state: .failed)
         scheduleUploadRetry()
+      } else {
+        try? store.removeSession(sessionID: sessionID)
       }
       status = .uncovered
       statusDetail = error.localizedDescription
@@ -465,14 +548,66 @@ final class MeetingCaptureCoordinator {
     }
   }
 
-  private func stopCapture() async {
+  private func stopCapture(userInitiated: Bool = false) async {
     guard let sessionID = activeSessionID,
           let capture = audioCapture,
           !captureTransitionInProgress else { return }
+    if userInitiated {
+      suppressAutomaticRestart(nowMs: Int64(Date().timeIntervalSince1970 * 1_000))
+    }
+    let finishing = beginFinishingCapture(sessionID: sessionID, capture: capture)
+
+    do {
+      try await finishing.value
+      await deliver(sessionID: sessionID)
+    } catch {
+      lastFailureCode = "local_processing"
+      if canPublishStatus(for: sessionID) {
+        status = .attention
+        statusDetail = "Audio is retained locally for repair after processing failed."
+      }
+      retryBackoff.failed(sessionID, now: ProcessInfo.processInfo.systemUptime)
+      scheduleUploadRetry()
+      DiagnosticsService.capture(error: error, category: "storage", code: "meeting_process")
+    }
+  }
+
+  /// A manual stop means "off the record": the schedule poll must not start
+  /// a new capture for the stopped event, or an overlapping one, while its
+  /// window is still open. A different call that has not started yet (for
+  /// example the next back-to-back meeting in its pre-arm window) is not
+  /// suppressed.
+  private func suppressAutomaticRestart(nowMs: Int64) {
+    var stopped = scheduleIntents.filter { intent in
+      guard intent.startMs - Self.preArmWindowMs <= nowMs,
+            nowMs <= intent.endMs + Self.stopGraceMs else { return false }
+      guard let activeIntent else {
+        // An ad hoc capture covered whatever call was already in progress.
+        return intent.startMs <= nowMs
+      }
+      if let url = activeIntent.meetingURL, intent.meetingURL == url { return true }
+      return intent.startMs <= nowMs
+        && intent.startMs < activeIntent.endMs && intent.endMs > activeIntent.startMs
+    }
+    if let activeIntent { stopped.append(activeIntent) }
+    for intent in stopped {
+      suppressedEvents.suppress(eventID: intent.eventID, untilMs: intent.endMs + Self.stopGraceMs)
+    }
+  }
+
+  /// Stops the audio stream and makes the session durable for delivery. It
+  /// runs as its own task so app shutdown can await it (bounded) without
+  /// waiting for, or cancelling into, transcription and upload.
+  @discardableResult
+  private func beginFinishingCapture(
+    sessionID: UUID,
+    capture: MeetingAudioCaptureService
+  ) -> Task<Void, Error> {
     captureTransitionInProgress = true
     stopTask?.cancel()
     stopTask = nil
     activeCaptureStopAtMs = nil
+    boundaryUnobservableChecks = 0
     activeOverlapDetected = false
     activeSessionID = nil
     audioCapture = nil
@@ -481,35 +616,42 @@ final class MeetingCaptureCoordinator {
     statusDetail = "Finishing local recording and transcription."
     assistant.end(sessionID: sessionID)
 
-    do {
-      _ = try await capture.stop()
-      await speakerCapture.stop()
+    let store = self.store
+    let speakerCapture = self.speakerCapture
+    let task = Task { @MainActor [weak self] in
       // Release the capture transition only after the stream has stopped. A
-      // schedule poll can now start a genuinely separate meeting while the
-      // finished session is transcribed/uploaded below.
-      captureTransitionInProgress = false
-      let manifest = try store.loadManifest(sessionID: sessionID)
-      let durationMs = manifest.chunks.map(\.endMs).max() ?? 0
-      let sourceGapDetected = capture.sourceGapDetected
-      try store.markState(
-        sessionID: sessionID,
-        state: .awaitingTranscription,
-        durationMs: durationMs,
-        sourceGapDetected: sourceGapDetected
-      )
-      await deliver(sessionID: sessionID)
-    } catch {
-      captureTransitionInProgress = false
-      lastFailureCode = "local_processing"
-      if canPublishStatus(for: sessionID) {
-        status = .attention
-        statusDetail = "Audio is retained locally for repair after processing failed."
+      // schedule poll can then start a genuinely separate meeting while the
+      // finished session is transcribed/uploaded.
+      defer {
+        self?.captureTransitionInProgress = false
+        self?.finishingCaptureTask = nil
       }
-      retryBackoff.failed(sessionID, now: ProcessInfo.processInfo.systemUptime)
-      try? store.markState(sessionID: sessionID, state: .failed)
-      scheduleUploadRetry()
-      DiagnosticsService.capture(error: error, category: "storage", code: "meeting_process")
+      do {
+        _ = try await capture.stop()
+      } catch {
+        // The speaker poller must stop even when the final flush fails, or
+        // it keeps reading Chrome's AX tree for a dead session.
+        await speakerCapture.stop()
+        try? store.markState(sessionID: sessionID, state: .failed)
+        throw error
+      }
+      await speakerCapture.stop()
+      do {
+        let manifest = try store.loadManifest(sessionID: sessionID)
+        let durationMs = manifest.chunks.map(\.endMs).max() ?? 0
+        try store.markState(
+          sessionID: sessionID,
+          state: .awaitingTranscription,
+          durationMs: durationMs,
+          sourceGapDetected: capture.sourceGapDetected
+        )
+      } catch {
+        try? store.markState(sessionID: sessionID, state: .failed)
+        throw error
+      }
     }
+    finishingCaptureTask = task
+    return task
   }
 
   private var deliveringSessions: Set<UUID> = []
@@ -556,6 +698,7 @@ final class MeetingCaptureCoordinator {
         )
       }
       try store.removeSession(sessionID: sessionID)
+      heldSessionIDs.remove(sessionID)
       retryBackoff.succeeded(sessionID)
     } catch {
       if Task.isCancelled || error is CancellationError {
@@ -564,11 +707,20 @@ final class MeetingCaptureCoordinator {
         return
       }
       retryBackoff.failed(sessionID, now: ProcessInfo.processInfo.systemUptime)
-      try? store.markState(sessionID: sessionID, state: .failed)
+      let failure = MeetingDeliveryFailurePolicy.classify(error)
+      let held = (try? store.recordDeliveryFailure(
+        sessionID: sessionID,
+        countsTowardLimit: failure != .transient,
+        holdImmediately: failure == .permanent,
+        maximumAttempts: MeetingDeliveryFailurePolicy.maximumAutomaticAttempts
+      )) ?? false
+      if held { heldSessionIDs.insert(sessionID) }
       if canPublishStatus(for: sessionID) {
         lastFailureCode = "meeting_delivery"
         status = .attention
-        statusDetail = "Meeting saved locally. \(error.localizedDescription) Will retry automatically."
+        statusDetail = held
+          ? "Meeting saved locally but could not be processed. \(error.localizedDescription) Choose Retry to try again."
+          : "Meeting saved locally. \(error.localizedDescription) Will retry automatically."
       }
       DiagnosticsService.capture(error: error, category: "network", code: "meeting_delivery")
       scheduleUploadRetry()
@@ -583,21 +735,53 @@ final class MeetingCaptureCoordinator {
   }
 
   func scheduleUploadRetry() {
-    guard retryTask == nil else { return }
+    if retryTask != nil {
+      // A long cooldown sleep must not delay a newly failed recording's
+      // first retry; restart the scheduler. Never interrupt a running batch.
+      guard retryTaskSleepsForBackoff else { return }
+      retryTask?.cancel()
+      retryTask = nil
+    }
+    let taskID = UUID()
+    retryTaskID = taskID
+    retryTaskSleepsForBackoff = false
     retryTask = Task { @MainActor [weak self] in
-      defer { self?.retryTask = nil }
+      defer {
+        if let self, self.retryTaskID == taskID {
+          self.retryTask = nil
+          self.retryTaskID = nil
+          self.retryTaskSleepsForBackoff = false
+        }
+      }
+      var delaySeconds = Self.retryPollSeconds
       while !Task.isCancelled {
-        try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+        self?.retryTaskSleepsForBackoff = delaySeconds > Self.retryPollSeconds
+        try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+        delaySeconds = Self.retryPollSeconds
         guard !Task.isCancelled, let self else { return }
-        guard self.activeSessionID == nil, self.deliveringSessions.isEmpty else { continue }
+        self.retryTaskSleepsForBackoff = false
+        guard self.canRunBackgroundRecovery else { continue }
+        // Nothing can be delivered while unpaired; do not rescan retained
+        // audio every minute for it.
+        guard await self.atlasClient() != nil, self.canRunBackgroundRecovery else { continue }
         do {
-          let pending = try await self.scanRecoverySessions().filter { $0.state != .recording && !$0.chunks.isEmpty }
+          let releasing = self.releaseManualRetryHoldsOnNextScan
+          let pending = try await self.scanRecoverySessions(releasingManualRetryHolds: releasing)
+            .filter(self.isAutomaticallyRetryable)
+          if releasing { self.releaseManualRetryHoldsOnNextScan = false }
           guard !Task.isCancelled else { return }
-          guard self.activeSessionID == nil, self.deliveringSessions.isEmpty else { continue }
+          guard self.canRunBackgroundRecovery else { continue }
           guard !pending.isEmpty else { return }
+          // Every pending recording is cooling down: sleep until the first is
+          // ready instead of rescanning each minute.
+          let now = ProcessInfo.processInfo.systemUptime
+          if let readyAt = self.retryBackoff.nextReadyTime(among: pending.map(\.sessionID), now: now) {
+            delaySeconds = max(Self.retryPollSeconds, readyAt - now)
+            continue
+          }
           guard let batch = self.startRecoveryBatch(pending) else { continue }
           await batch.value
-          let stillPending = try await self.scanRecoverySessions().contains { $0.state != .recording && !$0.chunks.isEmpty }
+          let stillPending = try await self.scanRecoverySessions().contains(where: self.isAutomaticallyRetryable)
           if !stillPending { return }
         } catch is CancellationError {
           return
@@ -613,37 +797,58 @@ final class MeetingCaptureCoordinator {
     }
   }
 
-  func scanRecoverySessions() async throws -> [MeetingRecordingSessionManifest] {
+  /// Background recovery waits while a capture starts, runs, or flushes: a
+  /// scan would contend with its chunk writes, and a `.recording` session
+  /// that is being stopped must not be delivered twice.
+  private var canRunBackgroundRecovery: Bool {
+    activeSessionID == nil && !captureTransitionInProgress && deliveringSessions.isEmpty
+  }
+
+  /// Any retained session other than the live one can be retried, including
+  /// one left in `.recording` by a crash. Sessions held for a manual retry
+  /// are skipped until the user asks.
+  private func isAutomaticallyRetryable(_ session: MeetingRecordingSessionManifest) -> Bool {
+    !session.chunks.isEmpty && !session.awaitingManualRetry && session.sessionID != activeSessionID
+  }
+
+  func scanRecoverySessions(releasingManualRetryHolds: Bool = false) async throws -> [MeetingRecordingSessionManifest] {
     try Task.checkCancellation()
-    // Recovery reads and checksums every retained chunk. Keep that synchronous
-    // disk work off the main actor even when a retry wakes during dictation.
+    // Recovery stats retained chunks and hashes unknown ones. Keep that
+    // synchronous disk work off the main actor even when a retry wakes
+    // during dictation.
     let store = self.store
     let worker = Task.detached(priority: .utility) {
       try Task.checkCancellation()
-      return try store.recoverSessions()
+      return try store.recoverSessions(releasingManualRetryHolds: releasingManualRetryHolds)
     }
-    return try await withTaskCancellationHandler {
+    let sessions = try await withTaskCancellationHandler {
       let sessions = try await worker.value
       try Task.checkCancellation()
       return sessions
     } onCancel: {
       worker.cancel()
     }
+    heldSessionIDs = Set(sessions.filter { !$0.chunks.isEmpty && $0.awaitingManualRetry }.map(\.sessionID))
+    return sessions
   }
 
-  private func recoverLocalSessions() async {
+  private func recoverLocalSessions(releasingManualRetryHolds: Bool = false) async {
     guard uploadTask == nil else { return }
     do {
       let sessions = MeetingRecordingSessionManifest.orderedForRecovery(
-        try await scanRecoverySessions())
+        try await scanRecoverySessions(releasingManualRetryHolds: releasingManualRetryHolds))
       guard !Task.isCancelled else { return }
       guard activeSessionID == nil else {
         scheduleUploadRetry()
         return
       }
-      let pending = sessions
+      let pending = sessions.filter(isAutomaticallyRetryable)
       if !pending.isEmpty {
         _ = startRecoveryBatch(pending)
+      } else if !isBusy {
+        // After a relaunch, recordings held for a manual Retry are otherwise
+        // invisible: nothing retries them automatically.
+        publishHeldRecordingsStatus()
       }
     } catch is CancellationError {
       return
@@ -660,7 +865,7 @@ final class MeetingCaptureCoordinator {
       guard !Task.isCancelled else { return }
       // Empty abandoned starts contain no recoverable audio. Keep them on disk,
       // but do not make them block or continually restart the recovery queue.
-      guard !session.chunks.isEmpty else { continue }
+      guard !session.chunks.isEmpty, !session.awaitingManualRetry else { continue }
       guard session.sessionID != activeSessionID,
             retryBackoff.isReady(session.sessionID, now: ProcessInfo.processInfo.systemUptime) else { continue }
       await deliver(sessionID: session.sessionID)
@@ -714,8 +919,20 @@ final class MeetingCaptureCoordinator {
   private func heartbeatLoop() async {
     while !Task.isCancelled {
       await sendHeartbeat()
+      await stopCaptureIfStorageExhausted()
       try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
     }
+  }
+
+  /// Free space is checked only at start, but a long meeting writes about
+  /// 0.7 GB per hour. Stop cleanly, keeping every written chunk, before
+  /// writes begin to fail.
+  private func stopCaptureIfStorageExhausted() async {
+    guard activeSessionID != nil else { return }
+    let diskState = await localDiskState()
+    guard diskState == "full", activeSessionID != nil, !captureTransitionInProgress else { return }
+    lastFailureCode = "disk_full"
+    Task { @MainActor [weak self] in await self?.stopCapture() }
   }
 
   private func sendHeartbeat() async {
@@ -796,9 +1013,27 @@ final class MeetingCaptureCoordinator {
       return
     }
     if activeSessionID == nil {
-      status = .covered
-      statusDetail = "Ready for the next scheduled meeting."
+      publishIdleStatus("Ready for the next scheduled meeting.")
     }
+  }
+
+  /// Idle "ready" status. Recordings held for a manual Retry stay visible
+  /// instead of being replaced by a ready message on the next poll.
+  private func publishIdleStatus(_ readyDetail: String) {
+    guard !publishHeldRecordingsStatus() else { return }
+    status = .covered
+    statusDetail = readyDetail
+  }
+
+  @discardableResult
+  private func publishHeldRecordingsStatus() -> Bool {
+    let held = heldSessionIDs.count
+    guard held > 0 else { return false }
+    status = .attention
+    statusDetail = held == 1
+      ? "1 recording saved on this Mac could not be processed. Choose Retry to try again."
+      : "\(held) recordings saved on this Mac could not be processed. Choose Retry to try again."
+    return true
   }
 
   private func canPublishStatus(for sessionID: UUID) -> Bool {
@@ -824,6 +1059,33 @@ final class MeetingCaptureCoordinator {
         gate.resolve(false)
       }
     }
+  }
+}
+
+enum MeetingDeliveryFailure: Equatable {
+  /// Network or Atlas availability. Cheap to retry: audio upload is resumable
+  /// and a finished transcript is checkpointed.
+  case transient
+  /// May repeat full local transcription; counts toward the attempt limit.
+  case counted
+  /// Deterministic for this recording; retrying cannot succeed on its own.
+  case permanent
+}
+
+enum MeetingDeliveryFailurePolicy {
+  static let maximumAutomaticAttempts = 4
+
+  static func classify(_ error: Error) -> MeetingDeliveryFailure {
+    if case TranscriptionError.emptyTranscript = error { return .permanent }
+    if let storeError = error as? MeetingChunkStoreError {
+      switch storeError {
+      case .encryptionFailed, .keychain: return .transient
+      case .invalidSession, .invalidChunk, .missingManifest, .missingChunk, .checksumMismatch:
+        return .permanent
+      }
+    }
+    if error is URLError || error is MeetingAtlasClientError { return .transient }
+    return .counted
   }
 }
 

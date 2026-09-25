@@ -107,8 +107,11 @@ public enum TranscriptExporter {
     }
 
     /// RFC 4180: any field carrying a delimiter, quote, or line break must be
-    /// wrapped, and quotes inside it doubled.
-    private static func quoted(_ field: String) -> String {
+    /// wrapped, and quotes inside it doubled. Quoting alone doesn't stop Excel or
+    /// Numbers evaluating a leading = + - @ (or tab/CR) as a formula, so such a
+    /// field gets a leading apostrophe first (OWASP CSV injection guidance).
+    private static func quoted(_ raw: String) -> String {
+        let field = raw.first.map(formulaTriggers.contains) == true ? "'" + raw : raw
         let needsQuoting = field.contains(",")
             || field.contains("\"")
             || field.contains("\n")
@@ -116,4 +119,6 @@ public enum TranscriptExporter {
         guard needsQuoting else { return field }
         return "\"" + field.replacingOccurrences(of: "\"", with: "\"\"") + "\""
     }
+
+    private static let formulaTriggers: Set<Character> = ["=", "+", "-", "@", "\t", "\r", "\r\n"]
 }

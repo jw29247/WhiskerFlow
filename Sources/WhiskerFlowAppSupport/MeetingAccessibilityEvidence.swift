@@ -46,6 +46,38 @@ public enum MeetingCaptureStopPolicy {
     ) -> Bool {
         availability == .noMeeting || availability == .notJoined
     }
+
+    /// Consecutive boundary checks that could not observe the call before the
+    /// recording stops anyway. Checks run every five minutes, so a call that
+    /// stays unreadable (Accessibility revoked, reads timing out on a slow Mac)
+    /// ends about fifteen minutes after the grace period instead of recording
+    /// indefinitely.
+    public static let maximumUnobservableBoundaryChecks = 3
+
+    /// Consecutive-unobservable count after a boundary check. Only
+    /// `.unavailable` extends the run; any check that saw the call (including
+    /// an ambiguous `.multipleMeetings`) resets it, so one transient unreadable
+    /// check after ambiguous ones cannot trip the backstop.
+    public static func nextUnobservableBoundaryCount(
+        after previous: Int,
+        availability: MeetingAccessibilityAvailability
+    ) -> Int {
+        availability == .unavailable ? previous + 1 : 0
+    }
+
+    /// `unobservableChecks` counts this check too when it could not see the call;
+    /// derive it with `nextUnobservableBoundaryCount(after:availability:)`.
+    /// Only `.unavailable` counts toward the backstop: `.multipleMeetings`
+    /// means the calls are visible but ambiguous (for example a leftover
+    /// "Rejoin" tab from the previous meeting), not that the call is unreadable.
+    public static func shouldStopAtCalendarBoundary(
+        _ availability: MeetingAccessibilityAvailability,
+        unobservableChecks: Int
+    ) -> Bool {
+        if shouldStopAtCalendarBoundary(availability) { return true }
+        guard availability == .unavailable else { return false }
+        return unobservableChecks >= maximumUnobservableBoundaryChecks
+    }
 }
 
 public struct MeetingAccessibilityAssessment: Sendable {
@@ -54,8 +86,37 @@ public struct MeetingAccessibilityAssessment: Sendable {
 }
 
 public enum MeetingAccessibilityEvidence {
+    /// Meet's in-call leave control in its common UI languages. Only the exact
+    /// button label counts; a missing match still reads as not joined.
+    static let leaveCallLabels: Set<String> = [
+        "leave call", "leave meeting",
+        "quitter l'appel", "anruf verlassen", "salir de la llamada", "sair da chamada",
+        "abbandona la chiamata", "gesprek verlaten", "opuść rozmowę", "lämna samtalet",
+        "forlad opkaldet", "forlat samtalen", "poistu puhelusta", "görüşmeden ayrıl",
+        "покинуть звонок", "通話から退出", "통화에서 나가기", "退出通话", "退出通話"
+    ]
+
+    static func isLeaveCallLabel(_ label: String) -> Bool {
+        let normalized = label.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\u{2019}", with: "'")
+            .lowercased()
+        return leaveCallLabels.contains(normalized)
+    }
+
+    /// Canonical Meet call path for an expected calendar URL, matching the
+    /// lower-case `/abc-defg-hij` path read from Chrome's web area. Tolerates
+    /// surrounding whitespace, host/path case and a trailing slash.
+    public static func expectedMeetingPath(_ rawURL: String) -> String? {
+        let trimmed = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
+              url.host?.lowercased() == "meet.google.com" else { return nil }
+        var path = url.path.lowercased()
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
+
     public static func isJoined(_ node: MeetingAccessibilityNode) -> Bool {
-        if node.role == "AXButton", ["Leave call", "Leave meeting"].contains(node.label) { return true }
+        if node.role == "AXButton", isLeaveCallLabel(node.label) { return true }
         guard !["AXTextArea", "AXTextField", "AXStaticText"].contains(node.role), node.label.lowercased() != "captions" else { return false }
         return node.children.contains(where: isJoined)
     }
@@ -146,15 +207,52 @@ public struct MeetingAccessibilityTimeline: Sendable {
     private var meetingID: String?
     private var previous: (Int64, MeetingAccessibilitySnapshot)?
     public init() {}
-    public mutating func observe(_ snapshot: MeetingAccessibilitySnapshot?, atMs: Int64) -> [MeetingSpeakerEvidence] {
+    /// `maximumGapMs` is the longest interval two observations may bridge. The
+    /// probe widens it (bounded) only when the host's measured cycle is slower.
+    public mutating func observe(_ snapshot: MeetingAccessibilitySnapshot?, atMs: Int64,
+                                 maximumGapMs: Int64 = MeetingSpeakerPollingPolicy.minimumGapMs) -> [MeetingSpeakerEvidence] {
         guard let snapshot, atMs >= 0 else { previous = nil; return [] }
         if meetingID == nil { meetingID = snapshot.meetingID }
         guard meetingID == snapshot.meetingID else { previous = nil; return [] }
         defer { previous = (atMs, snapshot) }
-        guard let (before, prior) = previous, atMs > before, atMs - before <= 1500 else { return [] }
+        guard let (before, prior) = previous, atMs > before, atMs - before <= maximumGapMs else { return [] }
         return snapshot.speakers.compactMap { id, name in
             guard prior.speakers[id] == name else { return nil }
             return .init(startMs: before, endMs: atMs, participantID: "ax:" + snapshot.meetingID + ":" + id, displayName: name)
         }
+    }
+}
+
+/// Probe pacing scaled to the host rather than fixed to the development Mac.
+/// Idle states back off; the continuity gap tracks the measured cycle so a
+/// slower Mac still produces evidence, but is capped so a stall never bridges.
+public struct MeetingSpeakerPollingPolicy: Sendable {
+    public static let activeIntervalMs: Int64 = 750
+    public static let maximumIdleIntervalMs: Int64 = 8_000
+    public static let minimumGapMs: Int64 = 1_500
+    public static let maximumGapMs: Int64 = 3_500
+    public private(set) var idleStreak = 0
+    public private(set) var averageWorkMs: Int64 = 0
+    public init() {}
+
+    /// Record one probe cycle's read/capture time. `active` means a joined,
+    /// matching Meet call was readable; anything else counts toward backoff.
+    public mutating func record(workMs: Int64, active: Bool) {
+        let work = max(0, workMs)
+        if active {
+            idleStreak = 0
+            averageWorkMs = averageWorkMs == 0 ? work : (averageWorkMs * 3 + work) / 4
+        } else {
+            idleStreak = min(idleStreak + 1, 16)
+        }
+    }
+
+    public var sleepMs: Int64 {
+        guard idleStreak > 0 else { return Self.activeIntervalMs }
+        return min(Self.maximumIdleIntervalMs, Self.activeIntervalMs << Int64(min(idleStreak, 4)))
+    }
+
+    public var continuityGapMs: Int64 {
+        min(Self.maximumGapMs, max(Self.minimumGapMs, (averageWorkMs + Self.activeIntervalMs) * 3 / 2))
     }
 }

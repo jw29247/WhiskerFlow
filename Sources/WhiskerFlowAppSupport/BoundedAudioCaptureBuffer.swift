@@ -5,10 +5,17 @@ import Foundation
 public final class BoundedAudioCaptureBuffer: @unchecked Sendable {
     public typealias DurableAppend = @Sendable ([Float]) throws -> Void
 
+    /// Guards the counters and resident tail that readers snapshot.
     private let lock = NSLock()
+    /// Serialises durable writes so disk I/O never holds `lock`.
+    private let writeLock = NSLock()
     private let maximumResidentSamples: Int
     private let durableAppend: DurableAppend
-    private var resident: [Float] = []
+    /// Live tail is `residentStorage[residentHead...]`. Dropping old samples
+    /// only advances the head; storage is compacted once the dead prefix is
+    /// large, so trimming a 30 s tail is not a full memmove on every buffer.
+    private var residentStorage: [Float] = []
+    private var residentHead = 0
     private var storedSampleCount = 0
     private var appendError: Error?
 
@@ -20,21 +27,28 @@ public final class BoundedAudioCaptureBuffer: @unchecked Sendable {
     @discardableResult
     public func append(_ samples: [Float]) -> Bool {
         guard !samples.isEmpty else { return true }
-        lock.lock()
-        defer { lock.unlock() }
-        guard appendError == nil else { return false }
+        writeLock.lock()
+        defer { writeLock.unlock() }
+        guard failure == nil else { return false }
         do {
             try durableAppend(samples)
-            storedSampleCount += samples.count
-            resident.append(contentsOf: samples)
-            if resident.count > maximumResidentSamples {
-                resident.removeFirst(resident.count - maximumResidentSamples)
-            }
-            return true
         } catch {
-            appendError = error
+            lock.withLock { appendError = error }
             return false
         }
+        lock.lock()
+        defer { lock.unlock() }
+        storedSampleCount += samples.count
+        residentStorage.append(contentsOf: samples)
+        let residentCount = residentStorage.count - residentHead
+        if residentCount > maximumResidentSamples {
+            residentHead += residentCount - maximumResidentSamples
+        }
+        if residentHead >= max(1, maximumResidentSamples / 2) {
+            residentStorage.removeFirst(residentHead)
+            residentHead = 0
+        }
+        return true
     }
 
     public var totalSampleCount: Int {
@@ -46,13 +60,13 @@ public final class BoundedAudioCaptureBuffer: @unchecked Sendable {
     public var residentSampleCount: Int {
         lock.lock()
         defer { lock.unlock() }
-        return resident.count
+        return residentStorage.count - residentHead
     }
 
     public var residentStartSample: Int {
         lock.lock()
         defer { lock.unlock() }
-        return storedSampleCount - resident.count
+        return storedSampleCount - (residentStorage.count - residentHead)
     }
 
     /// Returns nil when the requested position has already been spooled out of
@@ -60,10 +74,11 @@ public final class BoundedAudioCaptureBuffer: @unchecked Sendable {
     public func residentSuffix(fromAbsoluteSample index: Int) -> [Float]? {
         lock.lock()
         defer { lock.unlock() }
-        let start = storedSampleCount - resident.count
+        let residentCount = residentStorage.count - residentHead
+        let start = storedSampleCount - residentCount
         guard index >= start else { return nil }
-        let local = max(0, min(index - start, resident.count))
-        return Array(resident[local...])
+        let local = max(0, min(index - start, residentCount))
+        return Array(residentStorage[(residentHead + local)...])
     }
 
     public var failure: Error? {

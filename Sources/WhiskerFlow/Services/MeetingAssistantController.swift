@@ -139,8 +139,9 @@ final class MeetingAssistantController {
         } else {
             pruneStoredHistory(keepingAtMost: Self.maximumStoredSessions - 1)
             guard storage.sessions.count < Self.maximumStoredSessions else {
+                // Only this session is unrecorded. Other sessions must still
+                // persist and sync, since syncing is what frees space.
                 storageError = "Private meeting storage is full because unsynced bookmarks must be preserved."
-                storageFailure = .storageUnavailable
                 return
             }
             storage.sessions.append(.init(id: sessionID, title: title, startedAt: startedAt,
@@ -154,7 +155,11 @@ final class MeetingAssistantController {
         guard let sessionID = activeSessionID, let startedAt = activeStartedAt else {
             throw MeetingAssistantError.noActiveMeeting
         }
-        if let storageFailure { throw storageFailure }
+        if storageFailure == .corruptStore { throw MeetingAssistantError.corruptStore }
+        guard storage.sessions.contains(where: { $0.id == sessionID }) else {
+            storageError = "Private meeting storage is full because unsynced bookmarks must be preserved."
+            throw MeetingAssistantError.storageUnavailable
+        }
         guard storage.bookmarks.lazy.filter({ $0.sessionID == sessionID }).count < Self.maximumBookmarksPerSession else {
             throw MeetingAssistantError.bookmarkLimitReached
         }
@@ -244,8 +249,11 @@ final class MeetingAssistantController {
               let index = storage.sessions.firstIndex(where: { $0.id == sessionID }) else { return }
         let previousSession = storage.sessions[index]
         let previousLatestReference = latestFinalizedMeetingReference
+        // A recovered session can arrive without a recorded duration (0). That
+        // is unknown, not a zero-length meeting: it must not fail every bookmark.
+        let knownDuration = durationMilliseconds > 0 ? durationMilliseconds : previousSession.durationMilliseconds
         storage.sessions[index].meetingReference = meetingReference
-        storage.sessions[index].durationMilliseconds = durationMilliseconds
+        storage.sessions[index].durationMilliseconds = knownDuration
         latestFinalizedMeetingReference = Self.latestReference(in: storage.sessions)
         do { try persist() } catch {
             storage.sessions[index] = previousSession
@@ -257,14 +265,13 @@ final class MeetingAssistantController {
             return
         }
         guard let sync = sync ?? bookmarkSync else { return }
-        await syncPending(sessionID: sessionID, meetingReference: meetingReference, durationMilliseconds: durationMilliseconds, sync: sync)
+        await syncPending(sessionID: sessionID, meetingReference: meetingReference, durationMilliseconds: knownDuration, sync: sync)
     }
 
     func retryPendingBookmarks(sessionID: UUID, sync: MeetingBookmarkSync) async {
         guard let session = storage.sessions.first(where: { $0.id == sessionID }),
-              let meetingReference = session.meetingReference,
-              let duration = session.durationMilliseconds else { return }
-        await syncPending(sessionID: sessionID, meetingReference: meetingReference, durationMilliseconds: duration, sync: sync)
+              let meetingReference = session.meetingReference else { return }
+        await syncPending(sessionID: sessionID, meetingReference: meetingReference, durationMilliseconds: session.durationMilliseconds, sync: sync)
     }
 
     func retryPendingBookmarks(sessionID: UUID) async {
@@ -272,7 +279,7 @@ final class MeetingAssistantController {
         await retryPendingBookmarks(sessionID: sessionID, sync: bookmarkSync)
     }
 
-    private func syncPending(sessionID: UUID, meetingReference: String, durationMilliseconds: Int64, sync: MeetingBookmarkSync) async {
+    private func syncPending(sessionID: UUID, meetingReference: String, durationMilliseconds: Int64?, sync: MeetingBookmarkSync) async {
         guard !syncingSessions.contains(sessionID) else { return }
         syncingSessions.insert(sessionID)
         defer { syncingSessions.remove(sessionID) }
@@ -280,7 +287,9 @@ final class MeetingAssistantController {
         for id in ids {
             guard let index = storage.bookmarks.firstIndex(where: { $0.id == id }) else { continue }
             let bookmark = storage.bookmarks[index]
-            guard bookmark.elapsedMilliseconds >= 0, bookmark.elapsedMilliseconds <= durationMilliseconds else {
+            // Durations stored as 0 by earlier builds are unknown, not limits.
+            let limit = durationMilliseconds.flatMap { $0 > 0 ? $0 : nil } ?? .max
+            guard bookmark.elapsedMilliseconds >= 0, bookmark.elapsedMilliseconds <= limit else {
                 storage.bookmarks[index].syncState = .failed
                 storage.bookmarks[index].updatedAt = now()
                 persistBookmarkChange(id: id, previous: bookmark)
@@ -337,11 +346,17 @@ final class MeetingAssistantController {
     }
 
     private func persist() throws {
-        if let storageFailure { throw storageFailure }
+        // Never overwrite an unreadable original. A transient write failure is
+        // retried on the next change and cleared once a write succeeds.
+        if storageFailure == .corruptStore { throw MeetingAssistantError.corruptStore }
         Self.secureDirectory(rootURL)
         let data = try JSONEncoder().encode(storage)
         try data.write(to: storageURL, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: storageURL.path)
+        if storageFailure == .storageUnavailable {
+            storageFailure = nil
+            storageError = nil
+        }
     }
 
     private func persistOrRecordError() {

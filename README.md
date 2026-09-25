@@ -13,7 +13,8 @@ transcribes locally and pastes the text wherever your cursor is.
 
 ## Requirements
 
-- macOS 14 (Sonoma) or later — Apple Silicon recommended for WhisperKit.
+- macOS 14 (Sonoma) or later on an Apple Silicon Mac. The release is arm64-only:
+  FluidAudio, which runs the default Parakeet engine, does not build for Intel yet.
 
 ## Install
 
