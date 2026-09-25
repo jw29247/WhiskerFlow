@@ -61,6 +61,11 @@ final class AppSettings {
     var historyRetention: HistoryRetention {
         didSet { defaults.set(historyRetention.rawValue, forKey: Keys.historyRetention) }
     }
+    /// Opt-in: keep the audio of every dictation from the last 14 days, for
+    /// playback and re-transcription. Off keeps only the newest 25 recordings.
+    var keepRecentRecordings: Bool {
+        didSet { defaults.set(keepRecentRecordings, forKey: Keys.keepRecentRecordings) }
+    }
     /// The user's own typing speed, for Insights' time-saved estimate.
     var typingWordsPerMinute: Int {
         didSet { defaults.set(typingWordsPerMinute, forKey: Keys.typingWordsPerMinute) }
@@ -194,6 +199,7 @@ final class AppSettings {
         initialFormatting.language = initialLanguage
         formatting = initialFormatting
         historyRetention = Self.migratedHistoryRetention(from: defaults)
+        keepRecentRecordings = defaults.object(forKey: Keys.keepRecentRecordings) as? Bool ?? false
         let storedTypingSpeed = defaults.object(forKey: Keys.typingWordsPerMinute) as? Int
         typingWordsPerMinute = storedTypingSpeed.map {
             min(max($0, InsightsSummary.typingWordsPerMinuteRange.lowerBound), InsightsSummary.typingWordsPerMinuteRange.upperBound)
@@ -365,6 +371,7 @@ final class AppSettings {
         static let formatting = "formattingOptions"
         static let historyRetention = "historyRetention"
         static let typingWordsPerMinute = "typingWordsPerMinute"
+        static let keepRecentRecordings = "keepRecentRecordings"
         static let sharedVocabularyURL = "sharedVocabularyURL"
         static let launchAtLogin = "launchAtLogin"
         static let atlasBaseURL = "atlasBaseURL"

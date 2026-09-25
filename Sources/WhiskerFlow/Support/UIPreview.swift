@@ -121,8 +121,9 @@ enum UIPreview {
                 "The best tools get out of your way. A shortcut, a thought, and the words are there."
             ]
             if mode != "empty" && mode != "setup" {
+                let sampleAudio = silentRecording(in: root)
                 for (index, text) in samples.enumerated() {
-                    try? store.add(TranscriptRecord(text: text, audioFilePath: "", createdAt: Date().addingTimeInterval(-Double(index) * 86400 - 3600),
+                    try? store.add(TranscriptRecord(text: text, audioFilePath: index == 0 ? sampleAudio : "", createdAt: Date().addingTimeInterval(-Double(index) * 86400 - 3600),
                                                     status: .transcribed, durationSeconds: Double(8 + index * 12), engine: "parakeetTDTv3", language: "en"))
                 }
                 try? store.add(TranscriptRecord(text: "", audioFilePath: "", createdAt: Date().addingTimeInterval(-260000),
@@ -195,6 +196,20 @@ enum UIPreview {
         let store = DictionaryStore()
         store.update { $0 = dictionary }
         return (store, corrections)
+    }
+
+    /// One second of silence, so the detail view shows its recording controls.
+    private static func silentRecording(in root: URL) -> String {
+        let url = root.appendingPathComponent("preview.wav")
+        let samples = 16_000
+        var header = Data("RIFF".utf8)
+        func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.littleEndian) { header.append(contentsOf: $0) } }
+        append(UInt32(36 + samples * 2)); header.append(Data("WAVEfmt ".utf8))
+        append(UInt32(16)); append(UInt16(1)); append(UInt16(1)); append(UInt32(16_000)); append(UInt32(32_000))
+        append(UInt16(2)); append(UInt16(16)); header.append(Data("data".utf8)); append(UInt32(samples * 2))
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try? (header + Data(count: samples * 2)).write(to: url)
+        return url.path
     }
 
     /// Six weeks of made-up counts (no text) so Insights has something to show.

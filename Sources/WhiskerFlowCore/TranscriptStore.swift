@@ -170,8 +170,9 @@ public final class TranscriptStore {
 
     public func update(_ record: TranscriptRecord) throws {
         guard let index = records.firstIndex(where: { $0.id == record.id }) else { return }
+        let moved = records[index].createdAt != record.createdAt
         records[index] = record
-        if records[index].createdAt != record.createdAt { records = records.sortedNewestFirst() }
+        if moved { records = records.sortedNewestFirst() }
         try write { try Self.upsert(record, into: $0) }
     }
 

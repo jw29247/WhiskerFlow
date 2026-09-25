@@ -83,6 +83,7 @@ struct ContentView: View {
             UIPreview.scheduleSnapshotIfRequested()
             if UIPreview.settingsCategory != nil { openSettings() }
             UIPreview.writeSettingsSnapshotIfRequested()
+            if destination == .history && draft.recordID == nil { select(appState.records.first) }
             DispatchQueue.main.async {
                 appState.start()
                 appState.applyActivationPolicy()

@@ -455,6 +455,7 @@ final class AppState {
         // leave the app running with no hotkey monitor and no HUD — no way to
         // dictate at all — and `hasStarted` blocks any retry.
         store.retention = settings.historyRetention
+        store.audioRetention = audioRetention
         do {
             try store.load()
             normalizeInterruptedRecords()
@@ -1014,6 +1015,71 @@ final class AppState {
             self.selectedRecordID = records.first?.id
         }
         if retention.savesTranscripts { clearEphemeralTranscript() }
+    }
+
+    private var audioRetention: TranscriptAudioRetention {
+        settings.keepRecentRecordings ? .fourteenDays : .standard
+    }
+
+    func setKeepRecentRecordings(_ keep: Bool) {
+        settings.keepRecentRecordings = keep
+        do {
+            try store.applyRetention(settings.historyRetention, audio: audioRetention)
+        } catch {
+            handleStorageError(error, message: "Could not apply the recordings setting")
+        }
+        records = store.records
+    }
+
+    /// Whether a saved transcript still has its recording on disk.
+    func hasRecording(_ record: TranscriptRecord) -> Bool {
+        !record.audioFilePath.isEmpty && FileManager.default.fileExists(atPath: record.audioFilePath)
+    }
+
+    /// Re-transcribes a saved recording with `engine` and replaces the transcript
+    /// only if that succeeds; a failure leaves the existing text untouched. Never
+    /// pastes, and is not a new dictation, so Insights don't count it.
+    func retranscribe(_ record: TranscriptRecord, with engine: TranscriptionEngineKind) {
+        guard !UIPreview.isEnabled, record.status == .transcribed, hasRecording(record), !isRecording,
+              !activeTranscriptionIDs.contains(record.id) else { return }
+        let configuration = makeTranscriptionConfiguration()
+        let audioURL = URL(fileURLWithPath: record.audioFilePath)
+        activeTranscriptionIDs.insert(record.id)
+        isTranscribing = true
+        status = .transcribing
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.activeTranscriptionIDs.remove(record.id)
+                self.isTranscribing = !self.activeTranscriptionIDs.isEmpty
+            }
+            let transcription = self.transcription
+            let backstop = Self.recognitionBackstopSeconds(forAudioSeconds: record.durationSeconds, engine: engine,
+                                                           allowAppleFallback: false)
+            do {
+                let outcome = try await withAbandoningDeadline(seconds: backstop) {
+                    try await transcription.transcribe(audioURL: audioURL, kind: engine, model: configuration.model,
+                                                       language: configuration.language,
+                                                       cliConfiguration: configuration.cliConfiguration,
+                                                       allowAppleFallback: false)
+                }
+                let text = await Task.detached(priority: .userInitiated) {
+                    AssistantTextProcessing.process(outcome.result.text, tone: configuration.writing.tone,
+                                                    vocabulary: configuration.vocabulary, formatting: configuration.formatting,
+                                                    recognizeCorrections: configuration.recognizeCorrections)
+                }.value
+                try self.store.markTranscribed(id: record.id, text: text, durationSeconds: outcome.result.duration,
+                                               model: configuration.model.rawValue, engine: outcome.engine.rawValue,
+                                               language: outcome.result.language, rawRecognition: outcome.result.text)
+                self.records = self.store.records
+                self.status = .success("Transcribed again with \(engine.displayName)")
+            } catch {
+                self.logger.warning("Re-transcription failed", metadata: [
+                    "error.code": "\((error as NSError).code)", "transcription.engine": "\(engine.rawValue)"
+                ])
+                self.status = .failure("\(engine.displayName) couldn’t transcribe this recording. Your transcript is unchanged.")
+            }
+        }
     }
 
     func setTypingSpeed(_ wordsPerMinute: Int) {

@@ -152,6 +152,15 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section("Recordings") {
+                Toggle("Keep recordings for 14 days", isOn: Binding(get: { appState.settings.keepRecentRecordings },
+                                                                    set: { appState.setKeepRecentRecordings($0) }))
+                Text(appState.settings.keepRecentRecordings
+                     ? "The audio of every dictation from the last 14 days stays on this Mac, so you can play it back or transcribe it again with another engine in History."
+                     : "Only the audio of your 25 most recent dictations is kept, for up to 30 days. Turn this on to keep every recording from the last 14 days.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Section("Insights") {
                 Stepper(value: Binding(get: { appState.settings.typingWordsPerMinute }, set: { appState.setTypingSpeed($0) }),
                         in: InsightsSummary.typingWordsPerMinuteRange, step: 5) {

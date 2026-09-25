@@ -66,16 +66,25 @@ public enum HistoryRetention: String, CaseIterable, Codable, Identifiable, Senda
 /// How long the audio behind a successful transcript is kept. Failed and
 /// in-progress recordings always keep their audio (it is what Retry decodes)
 /// until the record itself leaves History.
-public enum TranscriptAudioRetention: Equatable, Sendable {
-    /// The disk bound WhiskerFlow has always had: audio for only the newest
-    /// `limit` successful dictations, and none older than `maximumAge`. Before
-    /// transcripts outlived their audio, this was the 25-record history cap.
-    case newest(limit: Int, maximumAge: TimeInterval)
-    /// Opt-in: keep every successful dictation's audio for `maximumAge`.
-    case recent(maximumAge: TimeInterval)
+public struct TranscriptAudioRetention: Equatable, Sendable {
+    /// Audio is kept for the newest `newestLimit` successful dictations no older
+    /// than `newestMaximumAge` — the disk bound WhiskerFlow has always had, which
+    /// before transcripts outlived their audio was the 25-record history cap.
+    public var newestLimit: Int
+    public var newestMaximumAge: TimeInterval
+    /// Opt-in: additionally keep every successful dictation younger than this.
+    public var keepAllYoungerThan: TimeInterval?
 
-    public static let standard = TranscriptAudioRetention.newest(limit: 25, maximumAge: 30 * 24 * 60 * 60)
-    public static let fourteenDays = TranscriptAudioRetention.recent(maximumAge: 14 * 24 * 60 * 60)
+    public init(newestLimit: Int, newestMaximumAge: TimeInterval, keepAllYoungerThan: TimeInterval? = nil) {
+        self.newestLimit = newestLimit
+        self.newestMaximumAge = newestMaximumAge
+        self.keepAllYoungerThan = keepAllYoungerThan
+    }
+
+    public static let standard = TranscriptAudioRetention(newestLimit: 25, newestMaximumAge: 30 * 24 * 60 * 60)
+    /// "Keep recordings for 14 days" in Settings.
+    public static let fourteenDays = TranscriptAudioRetention(newestLimit: 25, newestMaximumAge: 30 * 24 * 60 * 60,
+                                                              keepAllYoungerThan: 14 * 24 * 60 * 60)
 
     /// Unreferenced WAVs younger than this survive the startup sweep: an
     /// interrupted session may still be filing them.
@@ -116,14 +125,10 @@ public struct HistoryRetentionPlan: Equatable, Sendable {
                 continue
             }
             guard record.status == .transcribed, !record.audioFilePath.isEmpty else { continue }
-            let keepsAudio: Bool
-            switch audio {
-            case let .newest(limit, maximumAge):
-                keepsAudio = transcribedWithAudio < limit && record.createdAt >= now.addingTimeInterval(-maximumAge)
-            case let .recent(maximumAge):
-                keepsAudio = record.createdAt >= now.addingTimeInterval(-maximumAge)
-            }
-            if keepsAudio { transcribedWithAudio += 1 } else { released.insert(record.id) }
+            let isNewest = transcribedWithAudio < audio.newestLimit
+                && record.createdAt >= now.addingTimeInterval(-audio.newestMaximumAge)
+            let isRecent = audio.keepAllYoungerThan.map { record.createdAt >= now.addingTimeInterval(-$0) } ?? false
+            if isNewest || isRecent { transcribedWithAudio += 1 } else { released.insert(record.id) }
         }
         expiredIDs = expired
         releasedAudioIDs = released

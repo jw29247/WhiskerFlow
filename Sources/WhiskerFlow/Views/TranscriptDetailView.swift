@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import WhiskerFlowCore
 
@@ -8,6 +9,8 @@ struct TranscriptDetailView: View {
     var saveDraft: () -> Bool
     @State private var confirmDelete = false
     @State private var saveError = false
+    @State private var player = RecordingPlayer()
+    @State private var pendingEngine: TranscriptionEngineKind?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -70,6 +73,9 @@ struct TranscriptDetailView: View {
                 Spacer()
             }
 
+            if record.status == .transcribed, appState.hasRecording(record) {
+                recordingControls
+            }
             if let raw = record.rawRecognition, raw != record.text {
                 DisclosureGroup("Original recognition") {
                     ScrollView { Text(raw).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 150)
@@ -100,9 +106,41 @@ struct TranscriptDetailView: View {
                  ? "The recording, transcript and your unsaved changes will be permanently deleted."
                  : "The recording and transcript will be permanently deleted.")
         }
+        .alert("Transcribe again with \(pendingEngine?.displayName ?? "")?",
+               isPresented: Binding(get: { pendingEngine != nil }, set: { if !$0 { pendingEngine = nil } })) {
+            Button("Transcribe again") {
+                if let pendingEngine { appState.retranscribe(record, with: pendingEngine) }
+                pendingEngine = nil
+            }
+            Button("Cancel", role: .cancel) { pendingEngine = nil }
+        } message: {
+            Text("If it succeeds, the new transcript replaces this one. Nothing is pasted.")
+        }
+        .onDisappear { player.stop() }
         .alert("Changes couldn’t be saved", isPresented: $saveError) {
             Button("OK", role: .cancel) {}
         } message: { Text("Your edits are still here. Please try again before leaving this transcript.") }
+    }
+
+    private var recordingControls: some View {
+        HStack(spacing: 10) {
+            Button { player.toggle(URL(fileURLWithPath: record.audioFilePath)) } label: {
+                Label(player.isPlaying ? "Stop" : "Play recording", systemImage: player.isPlaying ? "stop.fill" : "play.fill")
+            }
+            Menu {
+                ForEach(TranscriptionEngineKind.allCases.filter { $0.rawValue != record.engine }) { engine in
+                    Button(engine.displayName) { pendingEngine = engine }
+                }
+            } label: {
+                Label("Retry with another engine", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .fixedSize()
+            .disabled(draft.isDirty || appState.isTranscribing || appState.isRecording)
+            .help(draft.isDirty ? "Save or discard your changes first" : "Transcribe this recording again with a different engine")
+            Spacer()
+        }
+        .font(.system(size: 12))
+        .padding(.top, 14)
     }
 
     @ViewBuilder
@@ -124,5 +162,31 @@ struct TranscriptDetailView: View {
 
     private func save() {
         if !saveDraft() { saveError = true }
+    }
+}
+
+/// Plays a saved dictation recording.
+@MainActor
+@Observable
+private final class RecordingPlayer: NSObject, AVAudioPlayerDelegate {
+    private(set) var isPlaying = false
+    @ObservationIgnored private var player: AVAudioPlayer?
+
+    func toggle(_ url: URL) {
+        if isPlaying { stop(); return }
+        guard let player = try? AVAudioPlayer(contentsOf: url) else { return }
+        player.delegate = self
+        self.player = player
+        isPlaying = player.play()
+    }
+
+    func stop() {
+        player?.stop()
+        player = nil
+        isPlaying = false
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in self.stop() }
     }
 }

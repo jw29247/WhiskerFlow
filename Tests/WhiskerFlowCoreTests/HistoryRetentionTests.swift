@@ -81,6 +81,15 @@ final class HistoryRetentionTests: XCTestCase {
         XCTAssertEqual(plan.releasedAudioIDs.count, records.filter { now.timeIntervalSince($0.createdAt) > 14 * day }.count)
     }
 
+    func testFourteenDayAudioNeverKeepsLessThanTheStandardBound() {
+        // A light user: a handful of recordings spread over three weeks.
+        let records = [1.0, 5, 16, 20, 29].map { record(ageDays: $0, audio: "/tmp/\($0).wav") }
+        let standard = HistoryRetentionPlan(records: records, retention: .forever, audio: .standard, now: now)
+        let extended = HistoryRetentionPlan(records: records, retention: .forever, audio: .fourteenDays, now: now)
+        XCTAssertTrue(standard.releasedAudioIDs.isEmpty)
+        XCTAssertTrue(extended.releasedAudioIDs.isEmpty)
+    }
+
     // MARK: - Store
 
     private func storeURL() -> URL {

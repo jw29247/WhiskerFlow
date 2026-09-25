@@ -102,4 +102,43 @@ final class HistoryRetentionAppTests: XCTestCase {
         XCTAssertEqual(state.records.count, 2)
         XCTAssertEqual(settings.historyRetention, .thirtyDays)
     }
+
+    @MainActor
+    func testRetryWithAnotherEngineReplacesOnlyOnSuccess() async throws {
+        let name = "WhiskerFlow.retention-tests.\(UUID().uuidString)"
+        defer { UserDefaults().removePersistentDomain(forName: name) }
+        let (settings, _) = try makeSettings(name)
+        settings.whisperCommand = "/bin/echo"
+        settings.whisperArguments = "From the other engine"
+        settings.playSounds = false
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let audio = root.appendingPathComponent("saved.wav")
+        try Data(count: 44 + 32_000).write(to: audio)
+        let store = TranscriptStore(fileURL: root.appendingPathComponent("transcripts.json"))
+        let original = TranscriptRecord(text: "Original words", audioFilePath: audio.path, status: .transcribed,
+                                        durationSeconds: 1, engine: TranscriptionEngineKind.appleSpeech.rawValue)
+        try store.add(original)
+        let insights = InsightsStore(databaseURL: root.appendingPathComponent("insights.sqlite"))
+        let state = AppState(settings: settings, store: store, insightsStore: insights, pasteService: RecordingDeliveryService())
+        state.records = store.records
+        XCTAssertTrue(state.hasRecording(original))
+
+        settings.whisperCommand = root.appendingPathComponent("missing-whisper").path
+        state.retranscribe(original, with: .whisperCLI)
+        var deadline = Date().addingTimeInterval(20)
+        while state.isTranscribing || state.status == .transcribing, Date() < deadline { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertEqual(state.records.first?.text, "Original words", "a failed retry keeps the transcript")
+        XCTAssertEqual(state.records.first?.status, .transcribed)
+
+        settings.whisperCommand = "/bin/echo"
+        state.retranscribe(original, with: .whisperCLI)
+        deadline = Date().addingTimeInterval(20)
+        while state.records.first?.text == "Original words", Date() < deadline { try await Task.sleep(nanoseconds: 50_000_000) }
+        // The writing tone may add end punctuation; the words come from the other engine.
+        XCTAssertTrue(state.records.first?.text.hasPrefix("From the other engine") == true)
+        XCTAssertEqual(state.records.first?.engine, TranscriptionEngineKind.whisperCLI.rawValue)
+        XCTAssertTrue(state.insightsSummary.isEmpty, "a re-transcription is not a new dictation")
+    }
 }
