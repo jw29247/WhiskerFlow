@@ -31,7 +31,7 @@ enum UIPreview {
     /// `--ui-snapshot=<path.png>` writes the main window to a PNG once it has
     /// settled, so screenshots don't need Screen Recording permission.
     static func writeSnapshotIfRequested() {
-        guard isEnabled, let path = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--ui-snapshot=") })
+        guard isEnabled, onboardingStep == nil, let path = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--ui-snapshot=") })
             .map({ String($0.dropFirst("--ui-snapshot=".count)) }) else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 700 }),
@@ -73,7 +73,7 @@ enum UIPreview {
                 .write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-settings.png")))
         }
     }
-    static var isPaired: Bool { mode != "disconnected" && mode != "setup" }
+    static var isPaired: Bool { mode != "disconnected" && mode != "setup" && onboardingStep == nil }
     /// `--ui-destination=Dictionary` opens that sidebar item for screenshots.
     static var destination: String? { argument("--ui-destination=") }
     static var dictionaryTab: DictionaryTab {
@@ -85,7 +85,8 @@ enum UIPreview {
     /// Recording permission.
     static func scheduleSnapshotIfRequested() {
         #if DEBUG
-        guard let path = argument("--ui-snapshot=") else { return }
+        // Setup screens are written by `scheduleOnboardingSnapshotsIfRequested`.
+        guard onboardingStep == nil, let path = argument("--ui-snapshot=") else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil && $0.frame.width > 400 }),
                   let view = window.contentView,
@@ -102,6 +103,11 @@ enum UIPreview {
     private static func argument(_ prefix: String) -> String? {
         guard isEnabled else { return nil }
         return ProcessInfo.processInfo.arguments.first { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
+    }
+    /// `--ui-state=onboarding-<step>` opens setup on that screen.
+    static var onboardingStep: OnboardingStep? {
+        guard mode.hasPrefix("onboarding-") else { return nil }
+        return OnboardingStep(rawValue: String(mode.dropFirst("onboarding-".count)))
     }
     static var isRecordingMeeting: Bool { mode == "meeting-recording" }
 
@@ -120,7 +126,7 @@ enum UIPreview {
                 "A quick thought for the next design session.\n\nLet’s give the main screen a little more breathing room and make the next action obvious.",
                 "The best tools get out of your way. A shortcut, a thought, and the words are there."
             ]
-            if mode != "empty" && mode != "setup" {
+            if mode != "empty" && mode != "setup" && onboardingStep == nil {
                 let sampleAudio = silentRecording(in: root)
                 for (index, text) in samples.enumerated() {
                     try? store.add(TranscriptRecord(text: text, audioFilePath: index == 0 ? sampleAudio : "", createdAt: Date().addingTimeInterval(-Double(index) * 86400 - 3600),
@@ -130,10 +136,17 @@ enum UIPreview {
                                                 status: .failed(errorMessage: "The microphone disconnected before transcription finished.")))
             }
             let permission = MicrophonePermissionController(provider: PreviewMicrophone(granted: mode != "setup"))
+            let onboardingStore = UserDefaultsOnboardingStore(defaults: defaults)
+            if let step = onboardingStep {
+                let passed: Set<OnboardingStep> = [.welcome, .permissions, .microphone, .shortcut, .practice]
+                onboardingStore.save(OnboardingProgress(current: step, furthest: step,
+                                                        completed: passed.filter { $0 < step }, startedAt: Date()))
+            }
             let (dictionary, corrections) = sampleDictionary()
             let state = AppState(settings: settings, store: store, correctionStore: corrections,
-                                 dictionaryStore: dictionary, microphonePermission: permission)
-            if mode != "empty" && mode != "setup" {
+                                 dictionaryStore: dictionary, microphonePermission: permission,
+                                 onboardingStore: onboardingStore)
+            if mode != "empty" && mode != "setup" && onboardingStep == nil {
                 let learned = dictionary.entries.first { $0.written == "Claude" }!
                 state.dictionaryNotice = DictionaryNotice(changes: [
                     DictionaryChange(pair: learned.pair, before: nil, after: learned)
@@ -145,13 +158,28 @@ enum UIPreview {
             state.meetingModelState = .ready
             state.hasAccessibilityPermission = mode != "setup"
             state.hasScreenRecordingPermission = mode != "setup"
-            if mode != "empty" && mode != "setup" { addSampleInsights(to: state) }
+            if mode != "empty" && mode != "setup" && onboardingStep == nil { addSampleInsights(to: state) }
             if mode == "error" { state.status = .failure("The microphone disconnected. Choose an available microphone in Settings.") }
             if mode == "recording" { state.isRecording = true; state.status = .recording; state.audioLevel = 0.16; state.liveText = "This is a preview of your words as you speak." }
             if mode == "transcribing" { state.isTranscribing = true; state.status = .transcribing }
             if screen == "dictate-style" {
                 state.lastWritingStyle = DictationStyleReceipt(
                     resolution: .init(category: .email, tone: .formal, source: .website), appName: "Safari")
+            }
+            if let step = onboardingStep {
+                state.hasAccessibilityPermission = step != .permissions
+                state.hasScreenRecordingPermission = false
+                if step == .permissions { state.onboarding.accessibilityRequestedAt = .distantPast }
+                if step == .model || step <= .permissions {
+                    var tracker = StagedDownloadProgress.parakeetFirstDownload
+                    tracker.ingest(fraction: 0, startsNewOperation: true)
+                    tracker.ingest(fraction: 1)
+                    tracker.ingest(fraction: 0, startsNewOperation: true)
+                    tracker.ingest(fraction: 0.48)
+                    state.modelDownload = ModelDownloadStatus(tracker: tracker, needsDownload: true)
+                    state.modelState = .preparing
+                }
+                state.onboarding.present()
             }
             return state
         }
@@ -241,6 +269,45 @@ enum UIPreview {
         }
         state.refreshInsightsSummary()
     }
+
+    /// With `--ui-state=onboarding-<step>`, `--ui-snapshot=<file.png>` writes the
+    /// setup window to a PNG and exits. The app draws its own window, so visual QA
+    /// needs no Screen Recording permission.
+    static func scheduleOnboardingSnapshotsIfRequested() {
+        #if DEBUG
+        // `--ui-snapshot-every=<dir>`: keeps `<dir>/latest.png` current in a
+        // real (non-preview) debug run, for scripted walkthroughs.
+        if let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--ui-snapshot-every=") }) {
+            let url = URL(fileURLWithPath: String(argument.dropFirst("--ui-snapshot-every=".count)))
+                .appendingPathComponent("latest.png")
+            Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
+                MainActor.assumeIsolated { writeSnapshot(to: url) }
+            }
+        }
+        guard isEnabled, onboardingStep != nil,
+              let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--ui-snapshot=") }) else { return }
+        let path = String(argument.dropFirst("--ui-snapshot=".count))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            writeSnapshot(to: URL(fileURLWithPath: path))
+            // A preview holds no data; an open sheet would stall a normal terminate.
+            exit(0)
+        }
+        #endif
+    }
+
+    #if DEBUG
+    private static func writeSnapshot(to url: URL) {
+        let main = NSApp.windows.first { $0.isVisible && $0.title == "Set Up WhiskerFlow" }
+            ?? NSApp.windows.first { $0.attachedSheet != nil }
+            ?? NSApp.windows.first { $0.isVisible && $0.identifier?.rawValue.hasPrefix("main") == true }
+            ?? NSApp.windows.first { $0.isVisible && $0.contentView != nil && $0.frame.width > 400 }
+        guard let window = main?.attachedSheet ?? main,
+              let view = window.contentView?.superview ?? window.contentView,
+              let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try? bitmap.representation(using: .png, properties: [:])?.write(to: url, options: .atomic)
+    }
+    #endif
 
     static var meetings: [AtlasCaptureScheduleIntent] {
         guard isEnabled && isPaired else { return [] }

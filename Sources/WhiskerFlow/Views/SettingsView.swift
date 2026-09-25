@@ -129,6 +129,12 @@ struct SettingsView: View {
                 Toggle("Launch at login", isOn: $appState.settings.launchAtLogin)
             }
 
+            Section("Setup") {
+                LabeledContent("First-run setup") { RunSetupAgainButton(appState: appState) }
+                Text("Walks through permissions, your microphone, shortcut and a practice dictation again.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("Updates") {
                 Toggle("Automatically check for updates",
                        isOn: $updaterService.automaticallyChecksForUpdates)

@@ -207,7 +207,7 @@ struct MeetingSetupView: View {
                 Label("Microphone", systemImage: "mic")
                 Spacer()
                 if appState.hasMicrophonePermission { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
-                else { Button("Enable") { Task { await appState.requestMicrophonePermission() }; OnboardingView.openSettings("Privacy_Microphone") } }
+                else { Button("Enable") { Task { await appState.requestMicrophonePermission() }; SystemSettingsLink.open(SystemSettingsLink.microphone) } }
             }
             HStack {
                 Label("Mac audio", systemImage: "speaker.wave.2")
@@ -216,7 +216,7 @@ struct MeetingSetupView: View {
                 else {
                     Button("Enable") {
                         appState.requestScreenRecordingPermission()
-                        OnboardingView.openSettings("Privacy_ScreenCapture")
+                        SystemSettingsLink.open(SystemSettingsLink.screenRecording)
                     }
                 }
             }

@@ -28,10 +28,22 @@ actor ParakeetTDTv3Engine: Sendable {
     /// Dictionary biasing; see `ParakeetVocabularyBooster`.
     let booster = ParakeetVocabularyBooster()
 
+    /// Download and compile progress for the setup screen. Observation only:
+    /// nothing on the dictation path reads it.
+    static let downloadProgress = ModelProgressRelay()
+
+    /// Whether the first-run download has already happened on this Mac.
+    static var isModelDownloaded: Bool {
+        AsrModels.modelsExist(at: AsrModels.defaultCacheDirectory(for: .v3), version: .v3, encoderPrecision: .int8)
+    }
+
     init(
         preparationWait: TimeInterval = DecodeTimeoutPolicy.modelPreparationWait,
         loadManager: @escaping @Sendable () async throws -> AsrManager = {
-            let models = try await AsrModels.downloadAndLoad(version: .v3, encoderPrecision: .int8)
+            let models = try await AsrModels.downloadAndLoad(
+                version: .v3, encoderPrecision: .int8,
+                progressHandler: { ParakeetTDTv3Engine.downloadProgress.report($0) }
+            )
             let manager = AsrManager(config: .default)
             try await manager.loadModels(models)
             return manager
@@ -257,5 +269,27 @@ actor ParakeetTDTv3Engine: Sendable {
             language: language,
             duration: result.duration
         )
+    }
+}
+
+/// Forwards FluidAudio's progress callbacks, which arrive on arbitrary queues.
+final class ModelProgressRelay: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: (@Sendable (_ fraction: Double, _ startsNewOperation: Bool, _ compiling: Bool) -> Void)?
+
+    func setHandler(_ handler: (@Sendable (Double, Bool, Bool) -> Void)?) {
+        lock.withLock { self.handler = handler }
+    }
+
+    func report(_ progress: DownloadProgress) {
+        let handler = lock.withLock { self.handler }
+        let startsNew: Bool
+        let compiling: Bool
+        switch progress.phase {
+        case .listing: startsNew = true; compiling = false
+        case .downloading: startsNew = false; compiling = false
+        case .compiling: startsNew = false; compiling = true
+        }
+        handler?(progress.fractionCompleted, startsNew, compiling)
     }
 }

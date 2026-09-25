@@ -120,6 +120,12 @@ final class AppState {
     /// The latest automatic Dictionary addition, offered for Undo.
     var dictionaryNotice: DictionaryNotice?
     var meetingModelState: ModelState = .unloaded
+    /// First-run download progress of the dictation model, for setup.
+    var modelDownload = ModelDownloadStatus()
+    let onboarding: OnboardingController
+    /// Routes a practice dictation into setup's own text field; nil in tests
+    /// that inject their own delivery service.
+    let practiceDelivery: InAppPracticeDelivery?
 
     var settings: AppSettings
 
@@ -227,7 +233,8 @@ final class AppState {
         dictionaryStore: DictionaryStore? = nil,
         insightsStore: InsightsStore? = nil,
         microphonePermission: MicrophonePermissionController? = nil,
-        pasteService: (any TextDeliveryService)? = nil
+        pasteService: (any TextDeliveryService)? = nil,
+        onboardingStore: (any OnboardingProgressStoring)? = nil
     ) {
         let resolvedSettings = settings ?? AppSettings()
         let resolvedMicrophonePermission = microphonePermission ?? MicrophonePermissionController(
@@ -253,7 +260,15 @@ final class AppState {
         self.live = LiveDictationSession(transcription: transcription)
         var defaultPasteService = PasteService()
         defaultPasteService.correctionMonitor = correctionMonitor
-        self.pasteService = pasteService ?? defaultPasteService
+        if let pasteService {
+            self.pasteService = pasteService
+            practiceDelivery = nil
+        } else {
+            let router = InAppPracticeDelivery(base: defaultPasteService)
+            self.pasteService = router
+            practiceDelivery = router
+        }
+        onboarding = OnboardingController(store: onboardingStore ?? UserDefaultsOnboardingStore())
         if store == nil && !UIPreview.isEnabled {
             meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant)
         }
@@ -295,6 +310,15 @@ final class AppState {
             if signalQuality != signalAssessor.quality { signalQuality = signalAssessor.quality }
         }
         live.onPartial = { [weak self] text in self?.liveText = text }
+        if store == nil && !UIPreview.isEnabled {
+            ParakeetTDTv3Engine.downloadProgress.setHandler { [weak self] fraction, startsNew, compiling in
+                Task { @MainActor [weak self] in
+                    guard let self, self.modelDownload.tracker != nil else { return }
+                    self.modelDownload.tracker?.ingest(fraction: fraction, startsNewOperation: startsNew)
+                    if self.modelDownload.isCompiling != compiling { self.modelDownload.isCompiling = compiling }
+                }
+            }
+        }
         live.onConfigurationChange = { [weak self] in self?.handleAudioConfigurationChange() }
     }
 
@@ -598,9 +622,17 @@ final class AppState {
             return
         }
         modelState = .preparing
+        if engine == .parakeetTDTv3 {
+            let needsDownload = !ParakeetTDTv3Engine.isModelDownloaded
+            modelDownload = ModelDownloadStatus(
+                tracker: needsDownload ? .parakeetFirstDownload : .parakeetCachedLoad,
+                needsDownload: needsDownload
+            )
+        }
         warmUpTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let ready = await transcription.prepare(kind: engine, model: model, language: language)
+            if ready, engine == .parakeetTDTv3 { self.modelDownload.tracker?.finish() }
             await transcription.prepareHints(self.recognizerHints, kind: engine)
             guard !Task.isCancelled,
                   self.settings.engine == engine,

@@ -4,7 +4,6 @@ import WhiskerFlowCore
 struct ContentView: View {
     @Bindable var appState: AppState
     @State private var destination: FlowDestination = UIPreview.screen == "styles" ? .assistant : .dictate
-    @State private var showOnboarding = false
     @State private var draft = TranscriptDraft()
     @State private var selectedSnapshot: TranscriptRecord?
     @State private var pendingNavigation: (() -> Void)?
@@ -38,7 +37,7 @@ struct ContentView: View {
                 }
                 switch destination {
                 case .dictate:
-                    DictationView(appState: appState, openSetup: { showOnboarding = true }) { record in
+                    DictationView(appState: appState, openSetup: { appState.onboarding.present() }) { record in
                         navigate {
                             destination = .history
                             select(record ?? appState.records.first)
@@ -77,7 +76,7 @@ struct ContentView: View {
         } message: {
             Text("This transcript has unsaved changes.")
         }
-        .sheet(isPresented: $showOnboarding) { OnboardingView(appState: appState) }
+        .modifier(OnboardingWindow.Presenter(onboarding: appState.onboarding))
         .onAppear {
             if let name = UIPreview.destination, let preview = FlowDestination(rawValue: name) { destination = preview }
             UIPreview.scheduleSnapshotIfRequested()
@@ -87,9 +86,12 @@ struct ContentView: View {
             DispatchQueue.main.async {
                 appState.start()
                 appState.applyActivationPolicy()
-                if appState.records.isEmpty && DictationPresentation(appState: appState).needsSetup {
-                    showOnboarding = true
-                }
+                guard !appState.onboarding.isPresented else { return }
+                appState.onboarding.presentIfNeeded(
+                    hasHistory: !appState.records.isEmpty,
+                    hadPreviousLaunch: appState.settings.hadPreviousLaunch,
+                    permissionsReady: !DictationPresentation(appState: appState).needsSetup
+                )
                 UIPreview.writeSnapshotIfRequested()
             }
         }

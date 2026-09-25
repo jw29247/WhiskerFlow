@@ -130,6 +130,9 @@ final class AppSettings {
     }
 
     @ObservationIgnored private(set) var legacySelectedDeviceID: String?
+    /// Whether this install launched before this process: read before `init`
+    /// writes its one-shot migration flags, which every launch sets.
+    @ObservationIgnored let hadPreviousLaunch: Bool
 
     private static let legacyParakeetMigrationKey = "parakeetTDTv3DefaultMigrated"
 
@@ -153,6 +156,7 @@ final class AppSettings {
     init(defaults: UserDefaults = .standard, meetingTokenStore: MeetingCaptureTokenStore = MeetingCaptureTokenStore()) {
         self.defaults = defaults
         self.meetingTokenStore = meetingTokenStore
+        hadPreviousLaunch = defaults.object(forKey: Keys.languageAutoMigrated) != nil
 
         let storedEngine = defaults.string(forKey: Keys.engine).flatMap(TranscriptionEngineKind.init)
         let storedModel = defaults.string(forKey: Keys.model).flatMap(WhisperModel.init)
@@ -246,6 +250,11 @@ final class AppSettings {
     /// Human-readable name for the active hotkey, for status text and prompts.
     var hotkeyDisplayName: String {
         hotkey == .custom ? customHotkey.displayName : hotkey.displayName
+    }
+
+    /// The shortcut as it reads in a sentence ("hold fn and speak").
+    var hotkeySpokenName: String {
+        hotkey == .fn ? "fn" : hotkeyDisplayName
     }
 
     var cliConfiguration: WhisperConfiguration {
