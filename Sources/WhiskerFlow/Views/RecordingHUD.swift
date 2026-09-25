@@ -9,7 +9,7 @@ struct RecordingHUDView: View {
     var body: some View {
         HStack(spacing: 12) {
             if presentation == .recording {
-                FlowWaveform(level: appState.audioLevel, recording: true, size: 26)
+                LiveFlowWaveform(appState: appState, recording: true, size: 26)
             } else { icon }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)

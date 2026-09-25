@@ -140,6 +140,13 @@ struct MeetingsView: View {
                 Form { MeetingSetupView(appState: appState) }.formStyle(.grouped)
             }.frame(width: 570, height: 590).background(FlowStyle.canvas).tint(FlowStyle.accent)
         }
+        .task {
+            // Free space changes slowly; poll only while this screen is visible.
+            while !Task.isCancelled {
+                appState.refreshMeetingStorageAvailability()
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
     }
 
     private func meetingRow(_ meeting: AtlasCaptureScheduleIntent, previous: Bool) -> some View {

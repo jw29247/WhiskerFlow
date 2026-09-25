@@ -13,6 +13,13 @@ SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 ENTITLEMENTS="${ENTITLEMENTS:-$ROOT_DIR/Resources/WhiskerFlow.entitlements}"
 BUNDLE_IDENTIFIER_OVERRIDE="${BUNDLE_IDENTIFIER_OVERRIDE:-}"
 BUNDLE_NAME_OVERRIDE="${BUNDLE_NAME_OVERRIDE:-}"
+# Debug bundles keep DEBUG-only behavior (no Sparkle updates, verification
+# commands) but are compiled with -O by default: unoptimized FluidAudio decoding
+# is 1.5–1.8x slower, so a -Onone candidate misrepresents dictation latency.
+# The optimized build uses its own scratch path so `swift test` keeps its cache.
+# OPTIMIZE=0 restores the plain -Onone build for debugger sessions.
+OPTIMIZE="${OPTIMIZE:-1}"
+BUILD_ROOT="$ROOT_DIR/.build"
 
 cd "$ROOT_DIR"
 
@@ -23,11 +30,14 @@ if [[ "$CONFIGURATION" == "release" ]]; then
     -Xswiftc -debug-prefix-map -Xswiftc "$ROOT_DIR=." \
     -Xcc "-fdebug-prefix-map=$ROOT_DIR=." \
     -Xswiftc -Xfrontend -Xswiftc -no-clang-module-breadcrumbs
+elif [[ "$OPTIMIZE" == "1" ]]; then
+  BUILD_ROOT="$ROOT_DIR/.build/optimized"
+  swift build --configuration "$CONFIGURATION" --scratch-path "$BUILD_ROOT" -Xswiftc -O
 else
   swift build --configuration "$CONFIGURATION"
 fi
 
-BINARY="$ROOT_DIR/.build/$CONFIGURATION/$PRODUCT"
+BINARY="$BUILD_ROOT/$CONFIGURATION/$PRODUCT"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$PRODUCT"
 
 if [[ ! -x "$BINARY" ]]; then
@@ -38,7 +48,7 @@ fi
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$BINARY" "$APP_BINARY"
-cp "$ROOT_DIR/.build/$CONFIGURATION/WhiskerFlowMeetBridge" "$APP_BUNDLE/Contents/MacOS/WhiskerFlowMeetBridge"
+cp "$BUILD_ROOT/$CONFIGURATION/WhiskerFlowMeetBridge" "$APP_BUNDLE/Contents/MacOS/WhiskerFlowMeetBridge"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 BUILD_REVISION="$(git rev-parse --short=12 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
 /usr/libexec/PlistBuddy -c "Add :WhiskerFlowBuildRevision string $BUILD_REVISION" "$APP_BUNDLE/Contents/Info.plist"

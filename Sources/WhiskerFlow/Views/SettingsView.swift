@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
@@ -71,9 +72,23 @@ struct SettingsView: View {
                 }
 
                 Toggle("Live transcription", isOn: $appState.settings.liveTranscription)
-                Text("Show text while you speak when using WhisperKit. Other engines transcribe after recording.")
+                Text("Show what's being heard in the recording panel while you speak. The pasted text still comes from a full pass when you finish.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Toggle("Ignore audio from speakers", isOn: $appState.settings.ignoreSpeakerAudio)
+                    .onChange(of: appState.settings.ignoreSpeakerAudio) { _, _ in appState.microphoneProcessingChanged() }
+                Text("Cancels videos, music and calls playing on this Mac out of your dictation, so only your voice is transcribed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if appState.settings.ignoreSpeakerAudio {
+                    LabeledContent("Other voices in the room") {
+                        Button("Microphone Mode…") { AVCaptureDevice.showSystemUserInterface(.microphoneModes) }
+                    }
+                    Text("While dictating, choose Voice Isolation to filter out people talking nearby.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 Picker("Microphone", selection: $appState.settings.selectedInputUID) {
                     Text("System Default").tag("system-default")

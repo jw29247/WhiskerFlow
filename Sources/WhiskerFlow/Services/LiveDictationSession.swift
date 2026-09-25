@@ -24,9 +24,12 @@ final class LiveDictationSession {
     var onConfigurationChange: (() -> Void)?
 
     private var decodeLoop: Task<Void, Never>?
+    private var previewLoop: Task<Void, Never>?
     private var language: String?
     private var model: WhisperModel = .tiny
     private var vocabulary = Vocabulary()
+    /// Compiled on first use, off the hotkey path, then reused for every partial.
+    private var compiledVocabulary: CompiledVocabulary?
     private var style: WritingStyle = .standard
     private var recognizeCorrections = false
     private var formatting = FormattingOptions()
@@ -47,12 +50,16 @@ final class LiveDictationSession {
     private static let sampleRate = 16_000.0
     /// Re-decode once this much new audio has accumulated since the last pass.
     private static let minNewSamples = Int(sampleRate * 0.4)
+    /// Live preview decodes only the recent tail: the HUD shows the latest words,
+    /// and a window under Parakeet's 15 s model input stays a single pass.
+    private static let previewWindowSamples = Int(sampleRate * 12)
     /// On release, if more than this much audio went undecoded (only happens when
     /// decoding fell behind real time on a long hold), do one final clean pass.
     private static let staleSampleThreshold = Int(sampleRate * 1.5)
 
     init(transcription: TranscriptionService) {
         self.transcription = transcription
+        audioCapture.keepsCaptureReady = true
         audioCapture.onLevel = { [weak self] level, peak in self?.onLevel?(level, peak) }
         audioCapture.onConfigurationChange = { [weak self] in self?.onConfigurationChange?() }
     }
@@ -67,11 +74,13 @@ final class LiveDictationSession {
         formatting: FormattingOptions,
         streaming: Bool,
         style: WritingStyle = .standard,
-        recognizeCorrections: Bool = false
+        recognizeCorrections: Bool = false,
+        previewEngine: TranscriptionEngineKind? = nil
     ) throws {
         self.language = language
         self.model = model
         self.vocabulary = vocabulary
+        compiledVocabulary = nil
         self.style = style
         self.recognizeCorrections = recognizeCorrections
         self.formatting = formatting
@@ -91,6 +100,8 @@ final class LiveDictationSession {
 
         if streaming {
             startDecodeLoop(generation: generation)
+        } else if let previewEngine {
+            startPreviewLoop(engine: previewEngine, generation: generation)
         }
     }
 
@@ -101,6 +112,10 @@ final class LiveDictationSession {
                 audioURL: URL?, totalSampleCount: Int) {
         let myGeneration = generation
         isRunning = false
+        // Not awaited: the release-time decode waits only for a preview already
+        // inside the model, never for the loop to wind down.
+        previewLoop?.cancel()
+        previewLoop = nil
         let loop = decodeLoop
         decodeLoop = nil
         let completeTailWasResident = audioCapture.hasResidentSamples(from: confirmedSampleCount)
@@ -143,12 +158,30 @@ final class LiveDictationSession {
         return (finalText, samples, captured.conversionFailureCount, rawText, captured.audioURL, captured.totalSampleCount)
     }
 
+    /// Echo cancellation for engines built from now on; see `AudioCaptureService.voiceProcessing`.
+    var voiceProcessing: Bool {
+        get { audioCapture.voiceProcessing }
+        set { audioCapture.voiceProcessing = newValue }
+    }
+
+    /// Build the next capture's engine in the background so a hotkey press only
+    /// has to start it.
+    func prepareCapture(selection: AudioInputSelection) {
+        audioCapture.prepareCapture(for: selection)
+    }
+
+    func invalidatePreparedCapture() {
+        audioCapture.invalidatePreparedCapture()
+    }
+
     /// Abort without producing a transcript (e.g. permission revoked mid-flight).
     func cancel() {
         isRunning = false
         generation &+= 1
         decodeLoop?.cancel()
         decodeLoop = nil
+        previewLoop?.cancel()
+        previewLoop = nil
         audioCapture.cancel()
         resetTranscript()
         onLevel?(0, 0)
@@ -172,6 +205,30 @@ final class LiveDictationSession {
         }
     }
 
+    /// For engines that transcribe on release: show what is being heard, so the
+    /// user can see dictation working. Display only — never part of the result.
+    private func startPreviewLoop(engine: TranscriptionEngineKind, generation myGeneration: Int) {
+        previewLoop = Task { @MainActor [weak self] in
+            var lastPreviewed = 0
+            while let self, self.isRunning, self.generation == myGeneration, !Task.isCancelled {
+                let total = self.audioCapture.sampleCount()
+                guard total - lastPreviewed >= Self.minNewSamples else {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    continue
+                }
+                lastPreviewed = total
+                let window = self.audioCapture.snapshotTail(from: max(0, total - Self.previewWindowSamples))
+                guard let text = await self.transcription.previewDictation(
+                    samples: window, kind: engine, language: self.language),
+                    !text.isEmpty, !Task.isCancelled, self.isRunning, self.generation == myGeneration
+                else { continue }
+                self.onPartial?(AssistantTextProcessing.process(
+                    text, style: self.style, vocabulary: self.compiled(),
+                    formatting: self.formatting, recognizeCorrections: self.recognizeCorrections))
+            }
+        }
+    }
+
     private func decodeWindow(_ window: [Float], generation myGeneration: Int) async {
         guard let text = await decodedText(for: window), !text.isEmpty else { return }
         guard generation == myGeneration else { return }
@@ -184,7 +241,14 @@ final class LiveDictationSession {
     /// capitalise mid-sentence at every seam and split spoken commands in half.
     private func emittedText() -> String {
         AssistantTextProcessing.process(LiveDecodeWindowPolicy.join(confirmedText, windowText),
-            style: style, vocabulary: vocabulary, formatting: formatting, recognizeCorrections: recognizeCorrections)
+            style: style, vocabulary: compiled(), formatting: formatting, recognizeCorrections: recognizeCorrections)
+    }
+
+    private func compiled() -> CompiledVocabulary {
+        if let compiledVocabulary { return compiledVocabulary }
+        let compiled = CompiledVocabulary(vocabulary)
+        compiledVocabulary = compiled
+        return compiled
     }
 
     /// Fold everything up to a mid-silence cut into the confirmed prefix so the

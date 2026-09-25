@@ -149,9 +149,11 @@ public final class TranscriptStore {
         try pruneExpired()
     }
 
+    /// Runs on the release-to-paste path, so it skips the recordings-directory
+    /// sweep: orphans only come from interrupted sessions, and `load()` sweeps them.
     public func add(_ record: TranscriptRecord) throws {
         records.insert(record, at: 0)
-        try pruneExpired()
+        try pruneExpired(sweepOrphans: false)
     }
 
     /// Persistence stays suspended if `load()` suspended it: an unreadable history
@@ -177,7 +179,8 @@ public final class TranscriptStore {
     }
 
     public func markTranscribing(id: UUID) throws {
-        guard let index = records.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = records.firstIndex(where: { $0.id == id }),
+              records[index].status != .transcribing else { return }
         records[index].status = .transcribing
         try persist()
     }
@@ -220,6 +223,10 @@ public final class TranscriptStore {
     }
 
     public func pruneExpired() throws {
+        try pruneExpired(sweepOrphans: true)
+    }
+
+    private func pruneExpired(sweepOrphans: Bool) throws {
         let cutoff = now().addingTimeInterval(-retentionInterval)
         let ordered = records.sorted { lhs, rhs in
             if lhs.createdAt == rhs.createdAt { return lhs.id.uuidString > rhs.id.uuidString }
@@ -234,7 +241,7 @@ public final class TranscriptStore {
             removeAudioFile(record.audioFilePath)
         }
         records = retained
-        removeOldOrphanedAudioFiles(cutoff: cutoff)
+        if sweepOrphans { removeOldOrphanedAudioFiles(cutoff: cutoff) }
         try persist()
     }
 

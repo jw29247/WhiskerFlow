@@ -12,6 +12,12 @@ import WhiskerFlowCore
 actor ParakeetTDTv3Engine: Sendable {
     private var manager: AsrManager?
     private var preparation: (id: UUID, task: Task<AsrManager, Error>)?
+    /// The warm-up or live-preview decode in flight. At most one runs, and never
+    /// alongside a real decode, so the shared manager sees one decode at a time.
+    private var backgroundInference: (id: UUID, task: Task<Void, Never>)?
+    private var activeDecodes = 0
+    /// One second of silence: enough to run the encoder, decoder and joint once.
+    private static let warmUpSamples = [Float](repeating: 0, count: 16_000)
     private let loadManager: @Sendable () async throws -> AsrManager
 
     init(loadManager: @escaping @Sendable () async throws -> AsrManager = {
@@ -52,8 +58,56 @@ actor ParakeetTDTv3Engine: Sendable {
         }
     }
 
+    /// Core ML and the Neural Engine go cold within about a minute of idle: the
+    /// first decode after a pause measured 0.4–4 s against 80 ms warm for the same
+    /// 11 s clip. A throwaway decode while the user is still speaking moves that
+    /// cost off the release-to-paste path. No-op until the model is loaded.
+    func warmUpInference() {
+        guard let manager, backgroundInference == nil, activeDecodes == 0 else { return }
+        let id = UUID()
+        let task = Task { [weak self] in
+            if var state = try? TdtDecoderState() {
+                _ = try? await manager.transcribe(Self.warmUpSamples, decoderState: &state)
+            }
+            await self?.finishBackgroundInference(id)
+        }
+        backgroundInference = (id, task)
+    }
+
+    /// A best-effort transcript of recent audio for the HUD while the user is
+    /// still speaking. Returns nil instead of queueing when the model is busy;
+    /// the delivered transcript always comes from the full decode on release.
+    func previewTranscription(samples: [Float], language: String?) async -> String? {
+        guard let manager, backgroundInference == nil, activeDecodes == 0 else { return nil }
+        let id = UUID()
+        let decode = Task<String?, Never> {
+            guard var state = try? TdtDecoderState(),
+                  let decoded = try? await manager.transcribe(samples, decoderState: &state) else { return nil }
+            return try? Self.result(decoded, language: language).text
+        }
+        backgroundInference = (id, Task { _ = await decode.value })
+        let text = await decode.value
+        finishBackgroundInference(id)
+        return text
+    }
+
+    private func finishBackgroundInference(_ id: UUID) {
+        if backgroundInference?.id == id { backgroundInference = nil }
+    }
+
+    /// Real decodes never interleave with a warm-up or preview inside the shared
+    /// manager: wait for one in flight, and block new ones until done.
+    private func beginDecode() async {
+        await backgroundInference?.task.value
+        activeDecodes += 1
+    }
+
+    private func endDecode() { activeDecodes -= 1 }
+
     func transcribe(_ request: TranscriptionRequest) async throws -> TranscriptionResult {
         try await prepare()
+        await beginDecode()
+        defer { endDecode() }
         guard let manager else {
             throw TranscriptionError.modelUnavailable("Parakeet TDT v3")
         }
@@ -81,6 +135,8 @@ actor ParakeetTDTv3Engine: Sendable {
     /// leaving WAV encoding and history persistence off the delivery path.
     func transcribe(samples: [Float], model: WhisperModel, language: String?) async throws -> TranscriptionResult {
         try await prepare()
+        await beginDecode()
+        defer { endDecode() }
         guard let manager else { throw TranscriptionError.modelUnavailable("Parakeet TDT v3") }
         do {
             try Task.checkCancellation()

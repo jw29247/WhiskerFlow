@@ -27,6 +27,8 @@ final class AppSettings {
     /// Stream and transcribe while speaking so the transcript pastes instantly on
     /// release. Applies to the WhisperKit engine; other engines stay file-based.
     var liveTranscription: Bool { didSet { defaults.set(liveTranscription, forKey: Keys.liveTranscription) } }
+    /// Echo-cancel speaker playback out of dictation audio.
+    var ignoreSpeakerAudio: Bool { didSet { defaults.set(ignoreSpeakerAudio, forKey: Keys.ignoreSpeakerAudio) } }
     var rememberCorrections: Bool { didSet { defaults.set(rememberCorrections, forKey: "rememberCorrections") } }
     var delivery: DeliveryMode { didSet { defaults.set(delivery.rawValue, forKey: Keys.delivery) } }
     var playSounds: Bool { didSet { defaults.set(playSounds, forKey: Keys.playSounds) } }
@@ -45,15 +47,28 @@ final class AppSettings {
     var atlasBaseURL: String { Self.atlasProductionURL }
     var meetingModeEnabled: Bool { didSet { defaults.set(meetingModeEnabled, forKey: Keys.meetingModeEnabled) } }
 
+    /// Keychain reads are synchronous securityd IPC, and this token is read on
+    /// every hotkey press and in several view bodies. Only this setter writes
+    /// it, so a read-through cache stays authoritative.
+    @ObservationIgnored private var cachedAtlasDeviceToken: String?
+
     var atlasDeviceToken: String {
-        get { meetingTokenStore.read() ?? "" }
+        get {
+            if let cachedAtlasDeviceToken { return cachedAtlasDeviceToken }
+            let token = meetingTokenStore.read() ?? ""
+            cachedAtlasDeviceToken = token
+            return token
+        }
         set {
+            cachedAtlasDeviceToken = nil
             do {
-                if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
                     try meetingTokenStore.delete()
                 } else {
-                    try meetingTokenStore.write(newValue.trimmingCharacters(in: .whitespacesAndNewlines))
+                    try meetingTokenStore.write(trimmed)
                 }
+                cachedAtlasDeviceToken = trimmed
                 persistenceError = nil
             } catch {
                 reportPersistenceFailure(error)
@@ -123,6 +138,7 @@ final class AppSettings {
         customHotkey = Self.loadCustomHotkey(from: defaults) ?? .default
         recordingMode = defaults.string(forKey: Keys.recordingMode).flatMap(RecordingMode.init) ?? .holdToTalk
         liveTranscription = defaults.object(forKey: Keys.liveTranscription) as? Bool ?? true
+        ignoreSpeakerAudio = defaults.object(forKey: Keys.ignoreSpeakerAudio) as? Bool ?? true
         rememberCorrections = defaults.object(forKey: "rememberCorrections") as? Bool ?? true
         delivery = defaults.string(forKey: Keys.delivery).flatMap(DeliveryMode.init) ?? .pasteAtCursor
         playSounds = defaults.object(forKey: Keys.playSounds) as? Bool ?? true
@@ -266,6 +282,7 @@ final class AppSettings {
         static let customHotkey = "customHotkey"
         static let recordingMode = "recordingMode"
         static let liveTranscription = "liveTranscription"
+        static let ignoreSpeakerAudio = "ignoreSpeakerAudio"
         static let delivery = "delivery"
         static let playSounds = "playSounds"
         static let allowAppleFallback = "allowAppleFallback"

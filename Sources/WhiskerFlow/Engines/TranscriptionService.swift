@@ -28,6 +28,8 @@ actor TranscriptionService {
     case .parakeetTDTv3:
       do {
         try await parakeetTDTv3.prepare()
+        // The first inference after loading pays Core ML's one-time setup.
+        await parakeetTDTv3.warmUpInference()
         return true
       } catch {
         return false
@@ -44,6 +46,20 @@ actor TranscriptionService {
     case .whisperCLI:
       return true
     }
+  }
+
+  /// Wakes the dictation model while the user is still speaking; see
+  /// `ParakeetTDTv3Engine.warmUpInference()`.
+  func warmUpDictationInference(kind: TranscriptionEngineKind) async {
+    guard kind == .parakeetTDTv3 else { return }
+    await parakeetTDTv3.warmUpInference()
+  }
+
+  /// Live HUD text for engines that decode only on release; nil when unsupported
+  /// or when the model is busy.
+  func previewDictation(samples: [Float], kind: TranscriptionEngineKind, language: String?) async -> String? {
+    guard kind == .parakeetTDTv3 else { return nil }
+    return await parakeetTDTv3.previewTranscription(samples: samples, language: language)
   }
 
   func requestAppleSpeechAuthorization() async -> Bool {

@@ -116,6 +116,31 @@ final class TranscriptStoreCleanupTests: XCTestCase {
         XCTAssertEqual(store.records.map(\.id), [record.id])
     }
 
+    /// `add` runs between key release and paste, so the directory sweep is left to `load`.
+    func testAddLeavesOrphanSweepToLoad() throws {
+        let now = Date(timeIntervalSince1970: 100_000_000)
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("WhiskerFlowRecordings-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("transcripts.json")
+        let store = TranscriptStore(fileURL: url, now: { now }, recordingsDirectory: directory)
+        try store.load()
+
+        let oldOrphan = directory.appendingPathComponent("old.wav")
+        try Data("old".utf8).write(to: oldOrphan)
+        try FileManager.default.setAttributes(
+            [.modificationDate: now.addingTimeInterval(-31 * 24 * 60 * 60)],
+            ofItemAtPath: oldOrphan.path
+        )
+        try store.add(TranscriptRecord(text: "", audioFilePath: directory.appendingPathComponent("new.wav").path,
+                                       createdAt: now, status: .transcribing))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: oldOrphan.path))
+
+        try TranscriptStore(fileURL: url, now: { now }, recordingsDirectory: directory).load()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldOrphan.path))
+    }
+
     func testLoadSweepsOldOrphansWhenTranscriptIndexIsMissing() throws {
         let now = Date(timeIntervalSince1970: 100_000_000)
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())

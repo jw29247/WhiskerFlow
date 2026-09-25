@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import Accelerate
 import AudioToolbox
 import CoreAudio
 import Foundation
@@ -266,9 +267,58 @@ final class OrdinaryAudioSpool: @unchecked Sendable {
     }
 }
 
+/// Where a tap sends converted audio for the capture that is running. Taps are
+/// installed while an engine is prepared ahead of time, before its capture
+/// exists, so each buffer looks up its destination here.
+private final class CaptureSink: @unchecked Sendable {
+    struct Session {
+        let spool: OrdinaryAudioSpool?
+        let store: LockedAudioBuffer
+        let retainSamples: Bool
+        let failures: ConversionFailureBox
+        let sampleCount: CaptureSampleCountBox
+        /// Converted samples, RMS level and peak for the main actor.
+        let deliver: @Sendable ([Float], Float, Float) -> Void
+        let reportFailure: @Sendable (Error, _ isFirst: Bool) -> Void
+    }
+
+    private let lock = NSLock()
+    private var session: Session?
+
+    func begin(_ session: Session) { lock.withLock { self.session = session } }
+    func end() { lock.withLock { session = nil } }
+    var current: Session? { lock.withLock { session } }
+}
+
+/// An engine with its device assigned, tap installed and resources allocated,
+/// but not started: no input I/O runs, so the microphone indicator stays off.
+/// Building one costs roughly 100–150 ms, almost all of it off the hotkey path.
+private final class PreparedCapture: @unchecked Sendable {
+    let engine: AVAudioEngine
+    let selection: AudioInputSelection
+    let deviceID: AudioDeviceID
+    let inputFormat: AVAudioFormat
+    let sink: CaptureSink
+    /// What was requested, so a changed preference rebuilds the engine even if
+    /// the device refused voice processing and this engine fell back.
+    let requestedVoiceProcessing: Bool
+
+    init(engine: AVAudioEngine, selection: AudioInputSelection, deviceID: AudioDeviceID,
+         inputFormat: AVAudioFormat, sink: CaptureSink, requestedVoiceProcessing: Bool) {
+        self.engine = engine
+        self.selection = selection
+        self.deviceID = deviceID
+        self.inputFormat = inputFormat
+        self.sink = sink
+        self.requestedVoiceProcessing = requestedVoiceProcessing
+    }
+}
+
 @MainActor
 final class AudioCaptureService {
-    private static let targetSampleRate = 16_000.0
+    nonisolated private static let targetSampleRate = 16_000.0
+    /// Builds and tears down engines away from the main actor.
+    nonisolated private static let engineQueue = DispatchQueue(label: "WhiskerFlow.capture-engine", qos: .userInitiated)
     private let logger = Logging.Logger(
         label: "agency.thatworks.WhiskerFlow.AudioCapture"
     )
@@ -276,12 +326,22 @@ final class AudioCaptureService {
     private let capturedSampleCount = CaptureSampleCountBox()
     private var spool: OrdinaryAudioSpool?
     private let conversionFailures = ConversionFailureBox()
-    private var engine: AVAudioEngine?
-    private var tapInstalled = false
+    private var active: PreparedCapture?
+    private var ready: PreparedCapture?
+    private var readyObserver: NSObjectProtocol?
+    private var readyGeneration = 0
     private var configurationObserver: NSObjectProtocol?
     private var configurationArmTask: Task<Void, Never>?
     private var configurationObservationGate = AudioConfigurationObservationGate()
 
+    /// Keep a prepared engine for the next capture. Dictation opts in; the
+    /// meeting microphone starts rarely enough not to need one.
+    var keepsCaptureReady = false
+    /// Apple voice processing: cancels what this Mac plays through its speakers
+    /// (videos, calls) out of the microphone signal, and makes the system Mic
+    /// Mode (e.g. Voice Isolation, which suppresses other voices) available.
+    /// Applies to engines built after it changes.
+    var voiceProcessing = false
     /// Normalized 0...1 RMS level plus the buffer's absolute peak.
     var onLevel: ((Float, Float) -> Void)?
     /// Normalized 16 kHz mono samples for Meeting Mode's durable writer.
@@ -310,8 +370,185 @@ final class AudioCaptureService {
             throw AudioCaptureServiceError.deviceUnavailable
         }
 
+        let capture: PreparedCapture
+        if let prepared = takeReadyCapture(selection: selection, deviceID: descriptor.transientID) {
+            capture = prepared
+        } else {
+            do {
+                capture = try Self.buildCapture(
+                    selection: selection, descriptor: descriptor, voiceProcessing: voiceProcessing)
+            } catch AudioCaptureServiceError.deviceAssignmentFailed(let status) {
+                logger.error(
+                    "Device assignment failed",
+                    metadata: ["core_audio.status": "\(status)"]
+                )
+                throw AudioCaptureServiceError.deviceAssignmentFailed(status)
+            }
+        }
+
+        capture.sink.begin(CaptureSink.Session(
+            spool: spool,
+            store: samples,
+            retainSamples: retainSamples,
+            failures: conversionFailures,
+            sampleCount: capturedSampleCount,
+            deliver: { [weak self] converted, level, peak in
+                // One main-actor hop per buffer carries both consumers.
+                Task { @MainActor [weak self] in
+                    self?.onSamples?(converted)
+                    self?.onLevel?(level, peak)
+                }
+            },
+            reportFailure: { [weak self] error, isFirstFailure in
+                Task { @MainActor [weak self] in
+                    self?.logger.error(
+                        "Audio conversion failed",
+                        metadata: ["error.code": "\((error as NSError).code)"]
+                    )
+                    // AppState reports the count when a capture yields nothing
+                    // usable; this only marks that conversion started failing at
+                    // all, so partial failures are not invisible.
+                    if isFirstFailure {
+                        DiagnosticsService.breadcrumb(
+                            category: "audio",
+                            metadata: ["error_code": "conversion_failed"]
+                        )
+                    }
+                }
+            }
+        ))
+
+        do {
+            try capture.engine.start()
+            active = capture
+            started = true
+            armConfigurationObservation(for: capture.engine)
+            logger.info(
+                "Capture started",
+                metadata: [
+                    "audio.input.kind":
+                        "\(selection.persistedValue == "system-default" ? "default" : "specific")"
+                ]
+            )
+        } catch {
+            capture.sink.end()
+            Self.retire(capture)
+            throw error
+        }
+    }
+
+    /// Prepares an engine for the next capture on `selection` in the background.
+    func prepareCapture(for selection: AudioInputSelection) {
+        guard keepsCaptureReady, active == nil else { return }
+        if let ready, ready.selection == selection, ready.requestedVoiceProcessing == voiceProcessing { return }
+        discardReadyCapture()
+        let generation = readyGeneration
+        let voiceProcessing = voiceProcessing
+        Self.engineQueue.async { [weak self] in
+            guard let descriptor = CoreAudioDeviceCatalog.resolve(selection),
+                  let capture = try? Self.buildCapture(
+                    selection: selection, descriptor: descriptor, voiceProcessing: voiceProcessing)
+            else { return }
+            Task { @MainActor [weak self] in
+                // A press that raced this preparation built its own engine;
+                // the next one is prepared once that capture ends.
+                guard let self, self.readyGeneration == generation, self.ready == nil,
+                      self.active == nil else {
+                    Self.retire(capture)
+                    return
+                }
+                self.adoptReadyCapture(capture)
+            }
+        }
+    }
+
+    /// The device list changed: a prepared engine may point at stale hardware.
+    func invalidatePreparedCapture() {
+        discardReadyCapture()
+    }
+
+    private func adoptReadyCapture(_ capture: PreparedCapture) {
+        ready = capture
+        readyObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: capture.engine,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.ready === capture else { return }
+                // The hardware changed under the idle engine; rebuild it lazily.
+                let selection = capture.selection
+                self.discardReadyCapture()
+                self.prepareCapture(for: selection)
+            }
+        }
+    }
+
+    /// The prepared engine, if it still matches the device and its format.
+    private func takeReadyCapture(selection: AudioInputSelection, deviceID: AudioDeviceID) -> PreparedCapture? {
+        guard let ready else { return nil }
+        guard ready.selection == selection, ready.deviceID == deviceID,
+              ready.requestedVoiceProcessing == voiceProcessing,
+              ready.engine.inputNode.inputFormat(forBus: 0) == ready.inputFormat else {
+            discardReadyCapture()
+            return nil
+        }
+        removeReadyObserver()
+        self.ready = nil
+        readyGeneration &+= 1
+        return ready
+    }
+
+    private func discardReadyCapture() {
+        readyGeneration &+= 1
+        removeReadyObserver()
+        if let ready { Self.retire(ready) }
+        ready = nil
+    }
+
+    private func removeReadyObserver() {
+        if let readyObserver {
+            NotificationCenter.default.removeObserver(readyObserver)
+            self.readyObserver = nil
+        }
+    }
+
+    /// Voice processing is best effort: a device or route that refuses it still
+    /// records, just without echo cancellation.
+    nonisolated private static func buildCapture(
+        selection: AudioInputSelection,
+        descriptor: AudioInputDescriptor,
+        voiceProcessing: Bool
+    ) throws -> PreparedCapture {
+        guard voiceProcessing else {
+            return try buildCapture(selection: selection, descriptor: descriptor,
+                                    enableVoiceProcessing: false, requested: false)
+        }
+        do {
+            return try buildCapture(selection: selection, descriptor: descriptor,
+                                    enableVoiceProcessing: true, requested: true)
+        } catch {
+            return try buildCapture(selection: selection, descriptor: descriptor,
+                                    enableVoiceProcessing: false, requested: true)
+        }
+    }
+
+    nonisolated private static func buildCapture(
+        selection: AudioInputSelection,
+        descriptor: AudioInputDescriptor,
+        enableVoiceProcessing: Bool,
+        requested: Bool
+    ) throws -> PreparedCapture {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
+        if enableVoiceProcessing {
+            // Must precede device assignment and the format query: it swaps the
+            // node's I/O unit for the voice-processing unit.
+            try inputNode.setVoiceProcessingEnabled(true)
+            // Dictation must not turn down the video or call the user is playing.
+            inputNode.voiceProcessingOtherAudioDuckingConfiguration =
+                AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
+        }
         if case .device = selection {
             guard let audioUnit = inputNode.audioUnit else {
                 throw AudioCaptureServiceError.deviceUnavailable
@@ -326,10 +563,6 @@ final class AudioCaptureService {
                 UInt32(MemoryLayout<AudioDeviceID>.size)
             )
             guard status == noErr else {
-                logger.error(
-                    "Device assignment failed",
-                    metadata: ["core_audio.status": "\(status)"]
-                )
                 throw AudioCaptureServiceError.deviceAssignmentFailed(status)
             }
         }
@@ -353,77 +586,64 @@ final class AudioCaptureService {
             interleaved: false
         ) else { throw AudioCaptureServiceError.converterUnavailable }
 
+        // The voice-processing unit reports every hardware channel (9 on a
+        // MacBook Pro array) but carries the processed voice on the first;
+        // downmixing would blend it with the unprocessed channels.
+        let usesFirstChannel = enableVoiceProcessing && inputFormat.channelCount > 1
+        let converterInput: AVAudioFormat
+        if usesFirstChannel {
+            guard let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: inputFormat.sampleRate,
+                                           channels: 1, interleaved: false) else {
+                throw AudioCaptureServiceError.converterUnavailable
+            }
+            converterInput = mono
+        } else {
+            converterInput = inputFormat
+        }
         let converter: AVAudioConverter?
-        if inputFormat.sampleRate == targetFormat.sampleRate,
-           inputFormat.channelCount == targetFormat.channelCount,
-           inputFormat.commonFormat == targetFormat.commonFormat {
+        if converterInput.sampleRate == targetFormat.sampleRate,
+           converterInput.channelCount == targetFormat.channelCount,
+           converterInput.commonFormat == targetFormat.commonFormat {
             converter = nil
         } else {
-            converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+            converter = AVAudioConverter(from: converterInput, to: targetFormat)
             guard converter != nil else { throw AudioCaptureServiceError.converterUnavailable }
         }
         let converterBox = AudioConverterBox(converter: converter)
-        let store = samples
-        let spool = spool
-        let retainSamples = retainSamples
-        let failures = conversionFailures
-        let capturedSampleCount = capturedSampleCount
+        let sink = CaptureSink()
 
-        inputNode.installTap(onBus: 0, bufferSize: 1_600, format: inputFormat) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 1_600, format: inputFormat) { buffer, _ in
+            guard let session = sink.current else { return }
             do {
+                let source = usesFirstChannel ? try Self.firstChannel(of: buffer, format: converterInput) : buffer
                 let converted = try Self.convert(
-                    buffer,
+                    source,
                     converter: converterBox.converter,
                     targetFormat: targetFormat
                 )
-                if let spool {
+                if let spool = session.spool {
                     guard spool.append(converted) else { throw spool.failure ?? CocoaError(.fileWriteUnknown) }
-                } else if retainSamples {
-                    store.append(converted)
+                } else if session.retainSamples {
+                    session.store.append(converted)
                 }
-                capturedSampleCount.add(converted.count)
-                Task { @MainActor [weak self] in self?.onSamples?(converted) }
-                let level = Self.level(from: converted)
-                let peak = Self.peak(from: converted)
-                Task { @MainActor [weak self] in self?.onLevel?(level, peak) }
+                session.sampleCount.add(converted.count)
+                session.deliver(converted, Self.level(from: converted), Self.peak(from: converted))
             } catch {
-                let isFirstFailure = failures.increment()
-                Task { @MainActor [weak self] in
-                    self?.logger.error(
-                        "Audio conversion failed",
-                        metadata: ["error.code": "\((error as NSError).code)"]
-                    )
-                    // AppState reports the count when a capture yields nothing
-                    // usable; this only marks that conversion started failing at
-                    // all, so partial failures are not invisible.
-                    if isFirstFailure {
-                        DiagnosticsService.breadcrumb(
-                            category: "audio",
-                            metadata: ["error_code": "conversion_failed"]
-                        )
-                    }
-                }
+                session.reportFailure(error, session.failures.increment())
             }
         }
-        tapInstalled = true
-
         engine.prepare()
-        do {
-            try engine.start()
-            self.engine = engine
-            started = true
-            armConfigurationObservation(for: engine)
-            logger.info(
-                "Capture started",
-                metadata: [
-                    "audio.input.kind":
-                        "\(selection.persistedValue == "system-default" ? "default" : "specific")"
-                ]
-            )
-        } catch {
-            inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-            throw error
+        return PreparedCapture(
+            engine: engine, selection: selection, deviceID: descriptor.transientID,
+            inputFormat: inputFormat, sink: sink, requestedVoiceProcessing: requested
+        )
+    }
+
+    /// Engine teardown and deallocation take ~10–15 ms; keep them off the caller.
+    nonisolated private static func retire(_ capture: PreparedCapture) {
+        engineQueue.async {
+            capture.engine.inputNode.removeTap(onBus: 0)
+            capture.engine.stop()
         }
     }
 
@@ -484,12 +704,14 @@ final class AudioCaptureService {
         configurationArmTask = nil
         configurationObservationGate.captureStopped()
         removeConfigurationObserver()
-        if tapInstalled {
-            engine?.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
-        engine?.stop()
-        engine = nil
+        guard let active else { return }
+        self.active = nil
+        // Stop synchronously so every delivered buffer is in the spool before the
+        // caller reads it; only deallocation is deferred.
+        active.engine.inputNode.removeTap(onBus: 0)
+        active.engine.stop()
+        active.sink.end()
+        Self.engineQueue.async { _ = active }
     }
 
     private func armConfigurationObservation(for engine: AVAudioEngine) {
@@ -501,7 +723,7 @@ final class AudioCaptureService {
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled,
                   let self,
-                  self.engine === engine,
+                  self.active?.engine === engine,
                   self.configurationObservationGate.arm(generation) else { return }
 
             self.configurationObserver = NotificationCenter.default.addObserver(
@@ -525,6 +747,19 @@ final class AudioCaptureService {
             NotificationCenter.default.removeObserver(configurationObserver)
             self.configurationObserver = nil
         }
+    }
+
+    nonisolated private static func firstChannel(of buffer: AVAudioPCMBuffer, format: AVAudioFormat) throws -> AVAudioPCMBuffer {
+        guard let source = buffer.floatChannelData?[0],
+              let mono = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: max(1, buffer.frameLength)),
+              let destination = mono.floatChannelData?[0] else {
+            throw AudioCaptureServiceError.conversionFailed("voice-processed channel unavailable")
+        }
+        mono.frameLength = buffer.frameLength
+        // Interleaved data strides across channels; non-interleaved has stride 1.
+        let stride = buffer.stride
+        for frame in 0..<Int(buffer.frameLength) { destination[frame] = source[frame * stride] }
+        return mono
     }
 
     nonisolated private static func convert(
@@ -560,14 +795,17 @@ final class AudioCaptureService {
 
     nonisolated private static func level(from buffer: [Float]) -> Float {
         guard !buffer.isEmpty else { return 0 }
-        let sum = buffer.reduce(Float.zero) { $0 + ($1 * $1) }
-        let rms = (sum / Float(buffer.count)).squareRoot()
+        var rms: Float = 0
+        vDSP_rmsqv(buffer, 1, &rms, vDSP_Length(buffer.count))
         let db = 20 * log10(max(rms, 1e-7))
         return (max(-50, min(0, db)) + 50) / 50
     }
 
     nonisolated private static func peak(from buffer: [Float]) -> Float {
-        buffer.reduce(Float.zero) { max($0, abs($1)) }
+        guard !buffer.isEmpty else { return 0 }
+        var peak: Float = 0
+        vDSP_maxmgv(buffer, 1, &peak, vDSP_Length(buffer.count))
+        return peak
     }
 }
 

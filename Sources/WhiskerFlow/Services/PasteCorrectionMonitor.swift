@@ -22,32 +22,39 @@ final class PasteCorrectionMonitor {
         task = nil
     }
 
-    func prepare(pasted: String) -> Target? {
+    /// `context` was captured from the focused, non-secure text input moments
+    /// before the paste, so its value and selection are the pre-paste state.
+    func prepare(pasted: String, context: TextFieldSnapshot) -> Target? {
         stop()
-        guard isEnabled(), AXIsProcessTrusted(),
-              let app = NSWorkspace.shared.frontmostApplication,
-              app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-              let element = Self.focusedElement(app), Self.isTextInput(element),
-              let before = Self.string(element, kAXValueAttribute),
-              let rawRange = Self.attribute(element, kAXSelectedTextRangeAttribute),
-              CFGetTypeID(rawRange) == AXValueGetTypeID() else { return nil }
-        var selection = CFRange()
-        guard AXValueGetValue(unsafeBitCast(rawRange, to: AXValue.self), .cfRange, &selection),
-              let scope = PastedTextScope(before: before, selection: NSRange(location: selection.location, length: selection.length), pasted: pasted) else { return nil }
-        return Target(element: element, application: app, scope: scope)
+        guard isEnabled(),
+              let scope = PastedTextScope(before: context.before, selection: context.selection, pasted: pasted) else { return nil }
+        return Target(element: context.element, application: context.application, scope: scope)
+    }
+
+    private func isActive(_ token: UUID) -> Bool {
+        generation == token && isEnabled()
+    }
+
+    private func report(_ changes: [VocabularyCorrection], sessionID: UUID, application: String, token: UUID) {
+        guard generation == token else { return }
+        onCorrections(changes, sessionID, application)
     }
 
     func observe(_ target: Target?) {
         guard let target else { return }
         let token = generation
         let sessionID = UUID()
-        task = Task { @MainActor [weak self] in
+        let probe = CorrectionProbe(target)
+        let applicationName = target.application.localizedName ?? "Another app"
+        // Every AX read is a synchronous round trip to the destination app, bounded
+        // only by its 0.2 s messaging timeout. Poll on a utility worker so a slow
+        // destination can never hold the main actor that serves the hotkey and HUD.
+        task = Task.detached(priority: .utility) { [weak self] in
             // Confirm the exact insertion before interpreting any subsequent edits.
             var confirmed = false
             for _ in 0..<12 {
-                guard let self, !Task.isCancelled, self.generation == token,
-                      self.isEnabled(), Self.stillFocused(target), Self.isTextInput(target.element) else { return }
-                if let value = Self.string(target.element, kAXValueAttribute), target.scope.confirmsInsertion(value) {
+                guard !Task.isCancelled, await self?.isActive(token) == true, probe.isFocusedTextInput() else { return }
+                if let value = probe.value(), target.scope.confirmsInsertion(value) {
                     confirmed = true
                     break
                 }
@@ -60,9 +67,8 @@ final class PasteCorrectionMonitor {
             var lastSaved = latest
             while !Task.isCancelled, Date() < deadline {
                 try? await Task.sleep(for: .milliseconds(500))
-                guard let self, !Task.isCancelled, self.generation == token, self.isEnabled() else { return }
-                guard Self.stillFocused(target), Self.isTextInput(target.element),
-                      let value = Self.string(target.element, kAXValueAttribute),
+                guard !Task.isCancelled, await self?.isActive(token) == true, probe.isFocusedTextInput(),
+                      let value = probe.value(),
                       let edited = target.scope.editedText(in: value) else { return }
                 if edited != latest {
                     latest = edited
@@ -70,43 +76,44 @@ final class PasteCorrectionMonitor {
                 }
                 if latest != lastSaved, Date().timeIntervalSince(changedAt) >= 1.5 {
                     let changes = VocabularyCorrectionDetector.corrections(original: target.scope.original, edited: latest, maxSuggestions: 20, allowShortCorrections: true)
-                    self.onCorrections(changes, sessionID, target.application.localizedName ?? "Another app")
+                    await self?.report(changes, sessionID: sessionID, application: applicationName, token: token)
                     lastSaved = latest
                 }
             }
         }
     }
+}
 
-    private static func stillFocused(_ target: Target) -> Bool {
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.application.processIdentifier,
-              let focused = focusedElement(target.application) else { return false }
-        return CFEqual(focused, target.element)
-    }
+/// Immutable AX handles read by the correction worker; no AppKit state is
+/// touched off the main actor.
+private struct CorrectionProbe: @unchecked Sendable {
+    private let application: AXUIElement
+    private let element: AXUIElement
 
-    private static func focusedElement(_ app: NSRunningApplication) -> AXUIElement? {
-        let application = AXUIElementCreateApplication(app.processIdentifier)
+    @MainActor
+    init(_ target: PasteCorrectionMonitor.Target) {
+        application = AXUIElementCreateApplication(target.application.processIdentifier)
+        element = target.element
         AXUIElementSetMessagingTimeout(application, 0.2)
-        guard let value = attribute(application, kAXFocusedUIElementAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        let element = unsafeBitCast(value, to: AXUIElement.self)
         AXUIElementSetMessagingTimeout(element, 0.2)
-        return element
     }
 
-    private static func isTextInput(_ element: AXUIElement) -> Bool {
-        // Check role before value; secure text values must never be read.
-        guard let role = string(element, kAXRoleAttribute),
+    /// The destination is still frontmost with the same non-secure text input focused.
+    func isFocusedTextInput() -> Bool {
+        guard attribute(application, kAXFrontmostAttribute) as? Bool == true,
+              let focused = attribute(application, kAXFocusedUIElementAttribute),
+              CFEqual(focused, element),
+              let role = attribute(element, kAXRoleAttribute) as? String,
               [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role),
-              string(element, kAXSubroleAttribute) != kAXSecureTextFieldSubrole else { return false }
+              attribute(element, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else { return false }
         return true
     }
 
-    private static func string(_ element: AXUIElement, _ name: String) -> String? {
-        attribute(element, name) as? String
-    }
+    func value() -> String? { attribute(element, kAXValueAttribute) as? String }
 
-    private static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+    private func attribute(_ element: AXUIElement, _ key: String) -> CFTypeRef? {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+        guard AXUIElementCopyAttributeValue(element, key as CFString, &value) == .success else { return nil }
         return value
     }
 }

@@ -160,6 +160,16 @@ final class AppState {
     /// Whether the most recent recording streamed live (vs. file-based capture).
     private var streamingActive = false
     private var signalAssessor = AudioSignalAssessor()
+    /// Keeps App Nap off while the hotkey is armed. A menu-bar utility with no
+    /// visible window is otherwise napped: its queues are throttled and its
+    /// priority lowered, which delays the first hotkey press after idle.
+    private var hotkeyReadinessActivity: NSObjectProtocol?
+    /// Held from hotkey press until the transcript is delivered, so timers and
+    /// I/O on the capture, decode and paste path are not coalesced.
+    private var dictationActivity: NSObjectProtocol?
+    private var dictationWarmUpTask: Task<Void, Never>?
+    /// Neural Engine state decays within seconds; re-warm during long holds.
+    private static let dictationWarmUpInterval: UInt64 = 4_000_000_000
     var isSigningInToAtlas = false
     var atlasSignInError: String?
     var atlasSignInConfirmation: String?
@@ -226,7 +236,8 @@ final class AppState {
             audioLevel = level
             guard isRecording else { return }
             signalAssessor.ingest(level: level, peak: peak)
-            signalQuality = signalAssessor.quality
+            // Per-buffer writes would re-run the HUD's show/layout on every buffer.
+            if signalQuality != signalAssessor.quality { signalQuality = signalAssessor.quality }
         }
         live.onPartial = { [weak self] text in self?.liveText = text }
         live.onConfigurationChange = { [weak self] in self?.handleAudioConfigurationChange() }
@@ -329,12 +340,22 @@ final class AppState {
 
     var hasScreenRecordingPermission = false
 
-    var isMeetingStorageAvailable: Bool {
-        let root = StorageLocations.applicationSupportRootOrTemporary()
-            .appendingPathComponent("MeetingRecordings", isDirectory: true)
-        guard let values = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
-              let capacity = values.volumeAvailableCapacityForImportantUsage else { return false }
-        return capacity >= 500 * 1024 * 1024
+    /// Refreshed off the main actor: the capacity query can wait synchronously on
+    /// CacheDelete XPC, and the Meetings view reads this several times per render.
+    private(set) var isMeetingStorageAvailable = true
+
+    func refreshMeetingStorageAvailability() {
+        Task { @MainActor [weak self] in
+            let available = await Task.detached(priority: .utility) {
+                let root = StorageLocations.applicationSupportRootOrTemporary()
+                    .appendingPathComponent("MeetingRecordings", isDirectory: true)
+                guard let values = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+                      let capacity = values.volumeAvailableCapacityForImportantUsage else { return false }
+                return capacity >= 500 * 1024 * 1024
+            }.value
+            guard let self, self.isMeetingStorageAvailable != available else { return }
+            self.isMeetingStorageAvailable = available
+        }
     }
 
     // MARK: - Lifecycle
@@ -373,7 +394,13 @@ final class AppState {
         sharedVocabulary.configureAgencyLibrary()
         sharedVocabulary.startPeriodicRefresh()
         startAudioDeviceMonitor()
+        hotkeyReadinessActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "Respond immediately to the dictation hotkey"
+        )
         startHotkeyMonitor()
+        prepareNextCapture()
+        refreshMeetingStorageAvailability()
         meetingCapture.start()
         hudController = RecordingHUDController(appState: self)
         warmUpEngine()
@@ -390,6 +417,10 @@ final class AppState {
     }
 
     func stopMonitors() {
+        if let hotkeyReadinessActivity {
+            ProcessInfo.processInfo.endActivity(hotkeyReadinessActivity)
+            self.hotkeyReadinessActivity = nil
+        }
         correctionMonitor.stop()
         hotkeyMonitor?.stop()
         assistantHotkeyMonitors.forEach { $0.stop() }
@@ -512,7 +543,9 @@ final class AppState {
             await Task.yield()
             guard !Task.isCancelled, let self else { return }
             let refreshed = CoreAudioDeviceCatalog.availableInputs()
-            self.devices = refreshed
+            // Runs on every hotkey press; an unchanged list must not invalidate
+            // the settings views observing it.
+            if self.devices != refreshed { self.devices = refreshed }
 
             // Picker option and selection changes must not occur in the same
             // NSTableView delegate stack. Publish the selection one turn later.
@@ -528,8 +561,28 @@ final class AppState {
         }
     }
 
+    /// Keeps an engine ready for the preferred microphone. A press that ends up
+    /// on a fallback device simply builds its engine on demand.
+    private func prepareNextCapture() {
+        guard !UIPreview.isEnabled, settings.legacySelectedDeviceID == nil,
+              microphonePermission.authorizationState == .authorized,
+              recordingCoordinator.phase == .idle else { return }
+        live.voiceProcessing = settings.ignoreSpeakerAudio
+        live.prepareCapture(selection: settings.selectedInput)
+    }
+
+    /// The speaker-audio preference changed: rebuild the ready engine to match.
+    func microphoneProcessingChanged() {
+        live.invalidatePreparedCapture()
+        prepareNextCapture()
+    }
+
     private func startAudioDeviceMonitor() {
-        let monitor = AudioDeviceChangeMonitor { [weak self] in self?.refreshDevices() }
+        let monitor = AudioDeviceChangeMonitor { [weak self] in
+            self?.refreshDevices()
+            self?.live.invalidatePreparedCapture()
+            self?.prepareNextCapture()
+        }
         monitor.start()
         audioDeviceMonitor = monitor
     }
@@ -813,7 +866,47 @@ final class AppState {
         }
     }
 
+    /// Begins or ends `dictationActivity` to match whether any dictation is in flight.
+    private func updateDictationActivity() {
+        let active = recordingCoordinator.phase != .idle || isTranscribing
+        if active, dictationActivity == nil {
+            dictationActivity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .latencyCritical],
+                reason: "Dictation in progress"
+            )
+        } else if !active, let activity = dictationActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            dictationActivity = nil
+        }
+    }
+
+    /// Keeps the dictation model warm from key press until release, so the
+    /// release-time decode never pays a cold Neural Engine start.
+    private func startDictationWarmUp(sessionID: UUID) {
+        dictationWarmUpTask?.cancel()
+        let engine = settings.engine
+        guard engine == .parakeetTDTv3 else { return }
+        let transcription = transcription
+        // Live preview decodes keep the model warm on their own while held.
+        let previewKeepsWarm = settings.liveTranscription
+        dictationWarmUpTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                await transcription.warmUpDictationInference(kind: engine)
+                guard !previewKeepsWarm else { return }
+                try? await Task.sleep(nanoseconds: Self.dictationWarmUpInterval)
+                guard !Task.isCancelled, let self,
+                      self.recordingCoordinator.phase == .preparing(sessionID)
+                        || self.recordingCoordinator.phase == .recording(sessionID) else { return }
+            }
+        }
+    }
+
     private func beginRecording(sessionID: UUID, span: any SpanBase) async {
+        // Before the microphone: the warm-up runs on the Neural Engine while
+        // capture starts on the main actor.
+        startDictationWarmUp(sessionID: sessionID)
+        updateDictationActivity()
+        defer { updateDictationActivity() }
         var telemetryOutcome = "error"
         defer {
             span.setAttribute(key: "outcome", value: telemetryOutcome)
@@ -833,7 +926,11 @@ final class AppState {
         logger.info("Recording preparing")
         DiagnosticsService.breadcrumb(category: "recording", metadata: ["phase": "preparing"])
 
-        let microphoneAuthorization = await microphonePermission.requestIfNeeded()
+        // Re-querying TCC costs 20–60 ms on the main actor per press. Trust a
+        // granted state here; it is re-checked after every dictation.
+        let microphoneAuthorization = microphonePermission.authorizationState == .authorized
+            ? .authorized
+            : await microphonePermission.requestIfNeeded()
         guard recordingCoordinator.phase == .preparing(sessionID) else {
             telemetryOutcome = "cancelled"
             return
@@ -888,6 +985,7 @@ final class AppState {
             streamingActive = configuration.engine == .whisperKit && settings.liveTranscription
             var inputSelection: AudioInputSelection?
             var lastStartError: Error?
+            live.voiceProcessing = settings.ignoreSpeakerAudio
             for candidate in MicrophoneSelection.captureCandidates(
                 for: preferredInputSelection,
                 devices: currentDevices
@@ -901,7 +999,8 @@ final class AppState {
                         formatting: configuration.formatting,
                         streaming: streamingActive,
                         style: configuration.style,
-                        recognizeCorrections: configuration.recognizeCorrections
+                        recognizeCorrections: configuration.recognizeCorrections,
+                        previewEngine: settings.liveTranscription ? configuration.engine : nil
                     )
                     inputSelection = candidate
                     break
@@ -990,6 +1089,12 @@ final class AppState {
         reason: CaptureStopReason,
         span: any SpanBase
     ) async {
+        defer {
+            updateDictationActivity()
+            scheduleAfterDictationUpkeep()
+        }
+        dictationWarmUpTask?.cancel()
+        dictationWarmUpTask = nil
         let finishStarted = ProcessInfo.processInfo.systemUptime
         lifecycleLogger.info("Finishing recording", metadata: ["event": "finish_started", "session": "\(sessionID)"])
         defer { lifecycleLogger.info("Recording finish returned", metadata: ["event": "finish_returned", "session": "\(sessionID)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - finishStarted) * 1000)"]) }
@@ -1169,6 +1274,17 @@ final class AppState {
         }
     }
 
+    /// Off the release-to-paste path: confirm the microphone grant the press
+    /// trusted, then ready the engine for the next press.
+    private func scheduleAfterDictationUpkeep() {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 750_000_000)
+            guard let self, self.recordingCoordinator.phase == .idle else { return }
+            self.refreshMicrophonePermission()
+            self.prepareNextCapture()
+        }
+    }
+
     private func abandonStuckFinish(sessionID: UUID) {
         guard recordingCoordinator.phase == .finishing(sessionID) else { return }
         lifecycleLogger.warning("Recording finish timed out", metadata: ["event": "finish_timeout", "session": "\(sessionID)"])
@@ -1229,6 +1345,7 @@ final class AppState {
         )
         if current == .authorized {
             refreshDevices()
+            prepareNextCapture()
         }
     }
 
@@ -1690,12 +1807,21 @@ final class AppState {
             deliveryOutcome = "copied"
             if mayUpdateStatus && latestDeliveryID == deliveryID && canUpdateLifecycleUI(for: sessionID) { status = .success("Copied to clipboard") }
         case .pasteAtCursor:
-            let receipt = await pasteService.paste(text, into: pasteTarget, replacing: nil)
+            // The text lands as soon as the keystroke is posted; insertion
+            // verification (and clipboard restoration) can take up to a second
+            // more, so report the paste then rather than holding "Pasting…".
+            let receipt = await pasteService.paste(text, into: pasteTarget, replacing: nil) { [weak self] in
+                guard let self, mayUpdateStatus, self.latestDeliveryID == deliveryID,
+                      self.canUpdateLifecycleUI(for: sessionID) else { return }
+                self.status = .success("Pasted")
+            }
             deliveryOutcome = receipt.state.rawValue
             hasAccessibilityPermission = pasteService.hasAccessibilityPermission
             if mayUpdateStatus && latestDeliveryID == deliveryID && canUpdateLifecycleUI(for: sessionID) {
                 lastPasteReceipt = receipt
-                status = receipt.state == .failed ? .failure(receipt.message) : .success(receipt.message)
+                let final: AppStatus = receipt.state == .failed ? .failure(receipt.message) : .success(receipt.message)
+                // Reassigning an equal status would re-arm the HUD's hide timer.
+                if status != final { status = final }
             }
         }
     }

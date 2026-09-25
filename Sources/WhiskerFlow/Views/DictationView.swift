@@ -19,7 +19,7 @@ struct DictationView: View {
                     .padding(.top, 28)
 
                     VStack(spacing: 23) {
-                        FlowWaveform(level: appState.audioLevel, recording: appState.isRecording, size: 67)
+                        LiveFlowWaveform(appState: appState, recording: appState.isRecording, size: 67)
                         Text(presentation.heading)
                             .font(.system(size: 36, weight: .semibold, design: .rounded))
                             .tracking(-1.1)

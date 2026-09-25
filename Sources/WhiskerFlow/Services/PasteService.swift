@@ -10,6 +10,17 @@ protocol TextDeliveryService {
     func requestAccessibilityPermission()
     func copy(_ text: String)
     func paste(_ text: String, into application: NSRunningApplication?, replacing selection: TextFieldSnapshot?) async -> PasteDeliveryReceipt
+    /// `onPosted` runs once the paste keystroke reaches the destination, before
+    /// insertion is verified, so the UI can report the paste as it lands.
+    func paste(_ text: String, into application: NSRunningApplication?, replacing selection: TextFieldSnapshot?,
+               onPosted: @escaping @MainActor () -> Void) async -> PasteDeliveryReceipt
+}
+
+extension TextDeliveryService {
+    func paste(_ text: String, into application: NSRunningApplication?, replacing selection: TextFieldSnapshot?,
+               onPosted: @escaping @MainActor () -> Void) async -> PasteDeliveryReceipt {
+        await paste(text, into: application, replacing: selection)
+    }
 }
 
 @MainActor
@@ -35,6 +46,11 @@ struct PasteService: TextDeliveryService {
 
     /// Returns observed delivery, rather than treating a queued key event as success.
     func paste(_ text: String, into application: NSRunningApplication?, replacing selection: TextFieldSnapshot? = nil) async -> PasteDeliveryReceipt {
+        await paste(text, into: application, replacing: selection, onPosted: {})
+    }
+
+    func paste(_ text: String, into application: NSRunningApplication?, replacing selection: TextFieldSnapshot?,
+               onPosted: @escaping @MainActor () -> Void) async -> PasteDeliveryReceipt {
         correctionMonitor?.stop()
         let normalized = text.normalizedForDelivery
         func receipt(_ state: PasteDeliveryReceipt.State, _ message: String, retry: TextFieldSnapshot? = nil) -> PasteDeliveryReceipt {
@@ -60,7 +76,9 @@ struct PasteService: TextDeliveryService {
         }
         let context = selection ?? TextFieldSnapshot.capture()
         let scope = context?.scope(for: normalized)
-        let correctionTarget = correctionMonitor?.prepare(pasted: normalized)
+        // Every AX read is a synchronous round trip to the destination app, so
+        // the correction target reuses this snapshot instead of re-reading it.
+        let correctionTarget = context.flatMap { correctionMonitor?.prepare(pasted: normalized, context: $0) }
         let pasteboard = NSPasteboard.general
         let saved = Self.snapshot(of: pasteboard)
         pasteboard.clearContents()
@@ -75,6 +93,7 @@ struct PasteService: TextDeliveryService {
         }
         let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
         logger.info("Paste event posted", metadata: ["event": "paste_posted"])
+        onPosted()
         let target = context.flatMap { context in scope.map { PasteVerificationTarget(context: context, scope: $0) } }
         let confirmed = await PasteVerification.verify {
             target?.confirmsInsertion() ?? false

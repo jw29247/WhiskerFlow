@@ -10,7 +10,7 @@ struct MenuBarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 19) {
             HStack(spacing: 10) {
-                FlowWaveform(level: appState.audioLevel, recording: appState.isRecording, size: 26)
+                LiveFlowWaveform(appState: appState, recording: appState.isRecording, size: 26)
                 Text("WhiskerFlow").font(.system(size: 17, weight: .semibold, design: .rounded))
                 Spacer()
                 FlowStatus(title: DictationPresentation(appState: appState).statusTitle,

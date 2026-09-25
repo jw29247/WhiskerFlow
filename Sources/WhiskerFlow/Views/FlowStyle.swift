@@ -48,6 +48,18 @@ struct FlowWaveform: View {
     }
 }
 
+/// Reads the input level in its own body: the level changes with every audio
+/// buffer (~10 Hz), and reading it in a parent would rebuild the whole screen.
+struct LiveFlowWaveform: View {
+    let appState: AppState
+    var recording: Bool
+    var size: CGFloat
+
+    var body: some View {
+        FlowWaveform(level: appState.audioLevel, recording: recording, size: size)
+    }
+}
+
 struct FlowKeycap: View {
     let title: String
     var compact = false

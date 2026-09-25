@@ -32,6 +32,10 @@ enum MeetingAudioCaptureError: LocalizedError {
 final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelegate {
     private let microphone: AudioCaptureService
     private let writer: MeetingPCMChunkWriter
+    /// Each full chunk costs AES-GCM encryption, hashing and a manifest rewrite
+    /// that grows with the meeting. Appends run here, in arrival order, so that
+    /// work never blocks the main actor that dictation shares.
+    private let writeQueue = DispatchQueue(label: "WhiskerFlow.meeting-chunk-writer", qos: .utility)
     private let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.MeetingAudioCapture")
     private let microphonePending = LockedAudioBuffer()
     private let systemPending = LockedAudioBuffer()
@@ -111,11 +115,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
           self.sawMicrophoneSamples = true
           self.microphoneActivity = self.microphoneActivity || Self.hasAudibleActivity(samples)
           do {
-                _ = try writer.append(
-                    samples,
-                    track: .microphone,
-                    sourceStartMs: Int64(microphoneSampleCount / 16)
-                )
+                enqueueAppend(samples, track: .microphone, sourceStartMs: Int64(microphoneSampleCount / 16))
                 microphoneSampleCount += samples.count
                 microphonePending.append(samples)
                 try mixAvailable()
@@ -197,7 +197,8 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         microphone.onSamples = nil
         microphoneSelection = nil
         try mixAvailable(flushRemainder: true)
-        return try writer.finish()
+        let writer = writer
+        return try await afterQueuedWrites { try writer.finish() }
     }
 
     func cancel() async {
@@ -216,6 +217,8 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         microphone.cancel()
         microphone.onSamples = nil
         microphoneSelection = nil
+        // A discarded session must not receive a late chunk write.
+        _ = try? await afterQueuedWrites { () }
     }
 
     var sourceGapDetected: Bool {
@@ -408,7 +411,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
             sawSystemSamples = true
             systemActivity = systemActivity || Self.hasAudibleActivity(samples)
             do {
-                _ = try writer.append(samples, track: .system, sourceStartMs: Int64(systemSampleCount / 16))
+                enqueueAppend(samples, track: .system, sourceStartMs: Int64(systemSampleCount / 16))
                 systemSampleCount += samples.count
                 systemPending.append(samples)
                 try mixAvailable()
@@ -479,7 +482,25 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         let mic = microphonePending.drainPrefix(count)
         let system = systemPending.drainPrefix(count)
         let mixed = zip(mic, system).map { max(-1, min(1, ($0 + $1) * 0.5)) }
-        _ = try writer.append(mixed, track: .mixed)
+        enqueueAppend(mixed, track: .mixed, sourceStartMs: nil)
+    }
+
+    private func enqueueAppend(_ samples: [Float], track: MeetingAudioTrack, sourceStartMs: Int64?) {
+        let writer = writer
+        writeQueue.async { [weak self] in
+            do {
+                _ = try writer.append(samples, track: track, sourceStartMs: sourceStartMs)
+            } catch {
+                Task { @MainActor [weak self] in self?.onFailure?(error) }
+            }
+        }
+    }
+
+    /// Runs after every append queued so far.
+    private func afterQueuedWrites<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            writeQueue.async { continuation.resume(with: Result { try operation() }) }
+        }
     }
 
     nonisolated private static func samples(from sampleBuffer: CMSampleBuffer) -> [Float]? {

@@ -19,6 +19,27 @@ private final class SuspendedPasteService: TextDeliveryService {
     }
 }
 
+/// Posts the keystroke, then holds verification open.
+@MainActor
+private final class PostedPasteService: TextDeliveryService {
+    var hasAccessibilityPermission = true
+    var pending: CheckedContinuation<PasteDeliveryReceipt, Never>?
+    var posted: (() -> Void)?
+    func requestAccessibilityPermission() {}
+    func copy(_ text: String) {}
+    func paste(_ text: String, into application: NSRunningApplication?, replacing selection: TextFieldSnapshot?) async -> PasteDeliveryReceipt {
+        await paste(text, into: application, replacing: selection, onPosted: {})
+    }
+    func paste(_ text: String, into application: NSRunningApplication?, replacing selection: TextFieldSnapshot?,
+               onPosted: @escaping @MainActor () -> Void) async -> PasteDeliveryReceipt {
+        onPosted()
+        return await withCheckedContinuation { continuation in
+            pending = continuation
+            posted?()
+        }
+    }
+}
+
 final class DictationDeliveryLifecycleTests: XCTestCase {
     @MainActor
     func testPasteVerificationDoesNotKeepFinishedRecognitionBusy() async {
@@ -41,6 +62,25 @@ final class DictationDeliveryLifecycleTests: XCTestCase {
         await operation.value
         XCTAssertFalse(state.status.isBusy)
     }
+    @MainActor
+    func testPasteIsReportedWhenKeystrokeIsPostedNotAfterVerification() async {
+        let name = "WhiskerFlow.delivery-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let paste = PostedPasteService()
+        let state = AppState(settings: settings, store: TranscriptStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)), pasteService: paste)
+        let posted = expectation(description: "Keystroke posted, verification pending")
+        paste.posted = { posted.fulfill() }
+        let operation = Task { await state.deliver("Synthetic sentence", pasteTarget: nil, delivery: .pasteAtCursor, mayUpdateStatus: true) }
+        await fulfillment(of: [posted], timeout: 2)
+        XCTAssertEqual(state.status, .success("Pasted"), "The HUD must not hold \"Pasting…\" while insertion is verified")
+        paste.pending?.resume(returning: PasteDeliveryReceipt(state: .unverified, text: "Synthetic sentence", message: "Pasted"))
+        await operation.value
+        XCTAssertEqual(state.status, .success("Pasted"))
+        XCTAssertEqual(state.lastPasteReceipt?.state, .unverified)
+    }
+
     @MainActor
     func testLatePasteReceiptCannotOverwriteANewerDelivery() async {
         let name = "WhiskerFlow.delivery-tests.\(UUID().uuidString)"

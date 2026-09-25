@@ -93,10 +93,14 @@ struct MeetingDelivery {
         // The authenticated transport receives the exact encrypted bytes
         // described by the source manifest. Plaintext is used only inside the
         // local transcription process.
-        let body = try store.readEncryptedChunk(sessionID: sessionID, descriptor: descriptor)
+        let body = try await offMain { store in
+          try store.readEncryptedChunk(sessionID: sessionID, descriptor: descriptor)
+        }
         try await client.uploadChunk(artifactID: artifactID, descriptor: descriptor, body: body)
-        try store.markUploaded(
-          sessionID: sessionID, track: descriptor.track, sequence: descriptor.sequence)
+        try await offMain { store in
+          try store.markUploaded(
+            sessionID: sessionID, track: descriptor.track, sequence: descriptor.sequence)
+        }
       }
       let uploaded = try store.loadManifest(sessionID: sessionID)
       let counts = Dictionary(
@@ -104,14 +108,18 @@ struct MeetingDelivery {
           (track, uploaded.chunks.filter { $0.track == track }.count)
         })
       let missing = MeetingAudioTrack.allCases.filter { counts[$0, default: 0] == 0 }
-      var canonicalHasher = SHA256()
-      for descriptor in uploaded.chunks
+      let canonicalDescriptors = uploaded.chunks
         .filter({ $0.track == .mixed })
-        .sorted(by: { $0.sequence < $1.sequence }) {
-        canonicalHasher.update(
-          data: try store.readEncryptedChunk(sessionID: sessionID, descriptor: descriptor))
+        .sorted(by: { $0.sequence < $1.sequence })
+      // Reads and hashes every mixed chunk (hundreds of MB for a long meeting).
+      let canonicalChecksum = try await offMain { store in
+        var canonicalHasher = SHA256()
+        for descriptor in canonicalDescriptors {
+          canonicalHasher.update(
+            data: try store.readEncryptedChunk(sessionID: sessionID, descriptor: descriptor))
+        }
+        return canonicalHasher.finalize().map { String(format: "%02x", $0) }.joined()
       }
-      let canonicalChecksum = canonicalHasher.finalize().map { String(format: "%02x", $0) }.joined()
       let completion = try await client.completeRecording(
         artifactID: artifactID,
         durationMs: durationMs,
@@ -127,7 +135,9 @@ struct MeetingDelivery {
         .sorted { $0.sequence < $1.sequence }
       for descriptor in mixedDescriptors {
         try Task.checkCancellation()
-        let playbackBody = try store.readChunk(sessionID: sessionID, descriptor: descriptor)
+        let playbackBody = try await offMain { store in
+          try store.readChunk(sessionID: sessionID, descriptor: descriptor)
+        }
         try await client.uploadPlaybackChunk(
           artifactID: artifactID,
           descriptor: descriptor,
@@ -139,6 +149,15 @@ struct MeetingDelivery {
       }
 
       return RecordingDeliveryReceipt(meetingID: meetingID, artifactID: artifactID, sourceManifestHash: sourceManifestHash, status: completion.status)
+  }
+
+  /// Chunk reads decrypt and checksum ~640 KB each and manifest updates rewrite
+  /// the whole manifest; run them on a utility thread, not the main actor.
+  private func offMain<T: Sendable>(
+    _ operation: @escaping @Sendable (EncryptedMeetingChunkStore) throws -> T
+  ) async throws -> T {
+    let store = store
+    return try await Task.detached(priority: .utility) { try operation(store) }.value
   }
 }
 
