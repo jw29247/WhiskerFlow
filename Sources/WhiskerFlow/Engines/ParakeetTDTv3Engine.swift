@@ -25,11 +25,25 @@ actor ParakeetTDTv3Engine: Sendable {
     /// running, new decodes fail fast so the caller can fall back.
     private let decodeGate = ModelDecodeGate()
     private let preparationWait: TimeInterval
+    /// Dictionary biasing; see `ParakeetVocabularyBooster`.
+    let booster = ParakeetVocabularyBooster()
+
+    /// Download and compile progress for the setup screen. Observation only:
+    /// nothing on the dictation path reads it.
+    static let downloadProgress = ModelProgressRelay()
+
+    /// Whether the first-run download has already happened on this Mac.
+    static var isModelDownloaded: Bool {
+        AsrModels.modelsExist(at: AsrModels.defaultCacheDirectory(for: .v3), version: .v3, encoderPrecision: .int8)
+    }
 
     init(
         preparationWait: TimeInterval = DecodeTimeoutPolicy.modelPreparationWait,
         loadManager: @escaping @Sendable () async throws -> AsrManager = {
-            let models = try await AsrModels.downloadAndLoad(version: .v3, encoderPrecision: .int8)
+            let models = try await AsrModels.downloadAndLoad(
+                version: .v3, encoderPrecision: .int8,
+                progressHandler: { ParakeetTDTv3Engine.downloadProgress.report($0) }
+            )
             let manager = AsrManager(config: .default)
             try await manager.loadModels(models)
             return manager
@@ -149,7 +163,11 @@ actor ParakeetTDTv3Engine: Sendable {
                 return try await manager.transcribeDiskBacked(audioURL, decoderState: &decoderState)
             }
             try Task.checkCancellation()
-            return try Self.result(decoded, language: request.language)
+            let boosted = await boost(decoded, terms: request.hints.terms(for: .parakeetTDTv3)) {
+                // Only read back into memory when boosting will actually run.
+                try? AudioConverter().resampleAudioFile(audioURL)
+            }
+            return try Self.result(boosted, language: request.language)
         } catch let error as TranscriptionError {
             throw error
         } catch is CancellationError {
@@ -202,7 +220,8 @@ actor ParakeetTDTv3Engine: Sendable {
 
     /// Capture already produces mono 16 kHz samples. Decode those directly,
     /// leaving WAV encoding and history persistence off the delivery path.
-    func transcribe(samples: [Float], model: WhisperModel, language: String?) async throws -> TranscriptionResult {
+    func transcribe(samples: [Float], model: WhisperModel, language: String?,
+                    hints: RecognizerHints = .none) async throws -> TranscriptionResult {
         let manager = try await preparedManager()
         await beginDecode()
         defer { endDecode() }
@@ -214,7 +233,8 @@ actor ParakeetTDTv3Engine: Sendable {
                 return try await manager.transcribe(samples, decoderState: &decoderState)
             }
             try Task.checkCancellation()
-            return try Self.result(result, language: language)
+            let boosted = await boost(result, terms: hints.terms(for: .parakeetTDTv3)) { samples }
+            return try Self.result(boosted, language: language)
         } catch let error as TranscriptionError {
             throw error
         } catch is CancellationError {
@@ -222,6 +242,18 @@ actor ParakeetTDTv3Engine: Sendable {
         } catch {
             throw TranscriptionError.underlying(error.localizedDescription)
         }
+    }
+
+    /// Runs the vocabulary rescoring pass when there are terms and the CTC model
+    /// is ready; otherwise starts loading it for next time and returns `result`.
+    private func boost(_ result: ASRResult, terms: [String], samples: () -> [Float]?) async -> ASRResult {
+        guard !terms.isEmpty else { return result }
+        guard await booster.isReady, result.duration <= ParakeetVocabularyBooster.maximumAudioSeconds else {
+            await booster.prepare()
+            return result
+        }
+        guard let audio = samples() else { return result }
+        return await booster.rescore(result, samples: audio, terms: terms) ?? result
     }
 
     private static func result(_ result: ASRResult, language: String?) throws -> TranscriptionResult {
@@ -237,5 +269,27 @@ actor ParakeetTDTv3Engine: Sendable {
             language: language,
             duration: result.duration
         )
+    }
+}
+
+/// Forwards FluidAudio's progress callbacks, which arrive on arbitrary queues.
+final class ModelProgressRelay: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: (@Sendable (_ fraction: Double, _ startsNewOperation: Bool, _ compiling: Bool) -> Void)?
+
+    func setHandler(_ handler: (@Sendable (Double, Bool, Bool) -> Void)?) {
+        lock.withLock { self.handler = handler }
+    }
+
+    func report(_ progress: DownloadProgress) {
+        let handler = lock.withLock { self.handler }
+        let startsNew: Bool
+        let compiling: Bool
+        switch progress.phase {
+        case .listing: startsNew = true; compiling = false
+        case .downloading: startsNew = false; compiling = false
+        case .compiling: startsNew = false; compiling = true
+        }
+        handler?(progress.fractionCompleted, startsNew, compiling)
     }
 }

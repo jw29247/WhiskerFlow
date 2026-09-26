@@ -30,8 +30,9 @@ final class LiveDictationSession {
     private var vocabulary = Vocabulary()
     /// Compiled on first use, off the hotkey path, then reused for every partial.
     private var compiledVocabulary: CompiledVocabulary?
-    private var style: WritingStyle = .standard
+    private var tone: WritingTone = .formal
     private var recognizeCorrections = false
+    private var hints: RecognizerHints = .none
     private var formatting = FormattingOptions()
     private var confirmedText = ""
     private var confirmedSampleCount = 0
@@ -83,16 +84,18 @@ final class LiveDictationSession {
         vocabulary: Vocabulary,
         formatting: FormattingOptions,
         streaming: Bool,
-        style: WritingStyle = .standard,
+        tone: WritingTone = .formal,
         recognizeCorrections: Bool = false,
+        hints: RecognizerHints = .none,
         previewEngine: TranscriptionEngineKind? = nil
     ) throws {
         self.language = language
         self.model = model
         self.vocabulary = vocabulary
         compiledVocabulary = nil
-        self.style = style
+        self.tone = tone
         self.recognizeCorrections = recognizeCorrections
+        self.hints = hints
         self.formatting = formatting
         generation &+= 1
         resetTranscript()
@@ -136,7 +139,7 @@ final class LiveDictationSession {
                 audioURL: URL?, totalSampleCount: Int, coversAllAudio: Bool, storageFailed: Bool) {
         let myGeneration = generation
         let streaming = isStreaming
-        let options = (language: language, model: model, style: style, vocabulary: vocabulary,
+        let options = (language: language, model: model, tone: tone, vocabulary: vocabulary,
                        formatting: formatting, recognizeCorrections: recognizeCorrections)
         isRunning = false
         // Not awaited: the release-time decode waits only for a preview already
@@ -187,10 +190,16 @@ final class LiveDictationSession {
         }
 
         let rawText = LiveDecodeWindowPolicy.join(transcript.confirmedText, transcript.windowText)
-        let finalText = AssistantTextProcessing.process(rawText, style: options.style, vocabulary: options.vocabulary,
+        let finalText = AssistantTextProcessing.process(rawText, tone: options.tone, vocabulary: options.vocabulary,
             formatting: options.formatting, recognizeCorrections: options.recognizeCorrections)
         return (finalText, samples, captured.conversionFailureCount, rawText, captured.audioURL,
                 captured.totalSampleCount, coversAllAudio && !captured.storageFailed, captured.storageFailed)
+    }
+
+    /// Refines the tone once a slower lookup (a browser tab) resolves. Applies to
+    /// partials from now on and to `finish()`.
+    func setTone(_ tone: WritingTone) {
+        self.tone = tone
     }
 
     /// Echo cancellation for engines built from now on; see `AudioCaptureService.voiceProcessing`.
@@ -264,7 +273,7 @@ final class LiveDictationSession {
                     !text.isEmpty, !Task.isCancelled, self.isRunning, self.generation == myGeneration
                 else { continue }
                 self.onPartial?(AssistantTextProcessing.process(
-                    text, style: self.style, vocabulary: self.compiled(),
+                    text, tone: self.tone, vocabulary: self.compiled(),
                     formatting: self.formatting, recognizeCorrections: self.recognizeCorrections))
             }
         }
@@ -283,7 +292,7 @@ final class LiveDictationSession {
     /// capitalise mid-sentence at every seam and split spoken commands in half.
     private func emittedText() -> String {
         AssistantTextProcessing.process(LiveDecodeWindowPolicy.join(confirmedText, windowText),
-            style: style, vocabulary: compiled(), formatting: formatting, recognizeCorrections: recognizeCorrections)
+            tone: tone, vocabulary: compiled(), formatting: formatting, recognizeCorrections: recognizeCorrections)
     }
 
     private func compiled() -> CompiledVocabulary {
@@ -319,7 +328,7 @@ final class LiveDictationSession {
     private func decodedText(for samples: [Float], language: String?, model: WhisperModel) async -> String? {
         guard !samples.isEmpty else { return nil }
         do {
-            let result = try await transcription.transcribeSamples(samples, language: language, model: model)
+            let result = try await transcription.transcribeSamples(samples, language: language, model: model, hints: hints)
             return result.text
         } catch {
             // Partial decode failures are non-fatal — keep the previous text. The

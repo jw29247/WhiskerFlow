@@ -6,7 +6,7 @@ import WhiskerFlowCore
 struct SettingsView: View {
     @Bindable var appState: AppState
     @ObservedObject var updaterService: UpdaterService
-    @State private var category: SettingsCategory = .dictation
+    @State private var category: SettingsCategory = UIPreview.settingsCategory.flatMap(SettingsCategory.init) ?? .dictation
 
     var body: some View {
         HStack(spacing: 0) {
@@ -34,6 +34,7 @@ struct SettingsView: View {
                     switch category {
                     case .dictation: dictationTab
                     case .text: vocabularyTab
+                    case .history: historyTab
                     case .meetings: Form { MeetingSetupView(appState: appState) }.formStyle(.grouped)
                     case .app: appTab
                     case .advanced: engineTab
@@ -128,6 +129,12 @@ struct SettingsView: View {
                 Toggle("Launch at login", isOn: $appState.settings.launchAtLogin)
             }
 
+            Section("Setup") {
+                LabeledContent("First-run setup") { RunSetupAgainButton(appState: appState) }
+                Text("Walks through permissions, your microphone, shortcut and a practice dictation again.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("Updates") {
                 Toggle("Automatically check for updates",
                        isOn: $updaterService.automaticallyChecksForUpdates)
@@ -135,6 +142,50 @@ struct SettingsView: View {
             }
 
         }.formStyle(.grouped)
+    }
+
+    // MARK: - History
+
+    @State private var confirmResetInsights = false
+
+    private var historyTab: some View {
+        Form {
+            Section("Transcript history") {
+                HistoryRetentionControl(appState: appState)
+                Text(appState.settings.historyRetention.savesTranscripts
+                     ? "Older transcripts are deleted automatically. Recordings that failed to transcribe are kept until they are retried or expire."
+                     : "Dictations are still pasted, and the latest can be copied for a few minutes, but no transcript is saved. Failed recordings are kept for 24 hours so you can retry them.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Recordings") {
+                Toggle("Keep recordings for 14 days", isOn: Binding(get: { appState.settings.keepRecentRecordings },
+                                                                    set: { appState.setKeepRecentRecordings($0) }))
+                Text(appState.settings.keepRecentRecordings
+                     ? "The audio of every dictation from the last 14 days stays on this Mac, so you can play it back or transcribe it again with another engine in History."
+                     : "Only the audio of your 25 most recent dictations is kept, for up to 30 days. Turn this on to keep every recording from the last 14 days.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Insights") {
+                Stepper(value: Binding(get: { appState.settings.typingWordsPerMinute }, set: { appState.setTypingSpeed($0) }),
+                        in: InsightsSummary.typingWordsPerMinuteRange, step: 5) {
+                    LabeledContent("Your typing speed", value: "\(appState.settings.typingWordsPerMinute) wpm")
+                }
+                Text("Insights keep counts only — words, speaking time, app and engine — never transcript text. They stay on this Mac and are kept whatever the history setting.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Reset insights…", role: .destructive) { confirmResetInsights = true }
+                    .disabled(appState.insightsSummary.isEmpty)
+            }
+        }
+        .formStyle(.grouped)
+        .alert("Reset insights?", isPresented: $confirmResetInsights) {
+            Button("Reset insights", role: .destructive) { appState.resetInsights() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your word counts, speed, streaks and activity start again from zero. History is not affected.")
+        }
     }
 
     // MARK: - Engine
@@ -207,8 +258,7 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Toggle("Capitalise sentences", isOn: $appState.settings.formatting.capitalizeSentences)
-                Text("Uppercase the first letter of each sentence and line.")
+                Text("Capitalisation and end punctuation follow each app category's tone in Assistant → Styles.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -220,37 +270,28 @@ struct SettingsView: View {
 
             sharedLibrarySection
 
-            Section("Your replacements") {
-                Text("Replace recognized words automatically — e.g. fix names or jargon Whisper gets wrong. These apply on top of the shared library and win on conflicts.")
+            Section("Your dictionary") {
+                Text("Words and replacements now live in the Dictionary (⌘4 in the main window), with learned suggestions, usage and CSV import/export. \(appState.dictionary.entries.count) personal \(appState.dictionary.entries.count == 1 ? "entry" : "entries").")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
 
-                ForEach($appState.settings.vocabulary.rules) { $rule in
-                    HStack {
-                        TextField("Heard", text: $rule.find)
-                        Image(systemName: "arrow.right").foregroundStyle(.secondary)
-                        TextField("Replace with", text: $rule.replaceWith)
-                        Button {
-                            // Capture the id first: reading `rule` (a Binding into
-                            // settings.vocabulary) inside removeAll's mutating closure
-                            // overlaps its write access and traps on exclusivity.
-                            let ruleID = rule.id
-                            appState.settings.vocabulary.rules.removeAll { $0.id == ruleID }
-                        } label: {
-                            Image(systemName: "minus.circle.fill")
-                                .foregroundStyle(.red)
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Remove replacement")
+            Section("Recogniser hints") {
+                Text("Tell the speech recogniser which Dictionary words to expect, before any replacements run. Replacements still apply afterwards either way.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Toggle("Apple Speech", isOn: $appState.settings.biasAppleSpeech)
+                Text("Passes Words and the written side of Replacements as contextual phrases (up to 100).")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("WhisperKit", isOn: $appState.settings.biasWhisperKit)
+                Text("Adds a short glossary prompt. In testing it fixed most names but made each decode about 0.1 s (tiny) to 1 s (small) slower.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Parakeet", isOn: $appState.settings.biasParakeet)
+                    .onChange(of: appState.settings.biasParakeet) { _, enabled in
+                        if enabled { appState.warmUpEngine() }
                     }
-                }
-                .onDelete { appState.settings.vocabulary.rules.remove(atOffsets: $0) }
-
-                Button {
-                    appState.settings.vocabulary.rules.append(VocabularyRule(find: "", replaceWith: ""))
-                } label: {
-                    Label("Add replacement", systemImage: "plus")
-                }
+                Text("Rescores the transcript against a separate 98 MB English-only model, downloaded once. Adds about 0.2 s and can occasionally swap in the wrong term.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -323,12 +364,13 @@ struct SettingsView: View {
 }
 
 private enum SettingsCategory: String, CaseIterable, Identifiable {
-    case dictation = "Dictation", text = "Text", meetings = "Meetings", app = "App", advanced = "Advanced"
+    case dictation = "Dictation", text = "Text", history = "History", meetings = "Meetings", app = "App", advanced = "Advanced"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .dictation: return "mic"
         case .text: return "textformat"
+        case .history: return "clock.arrow.circlepath"
         case .meetings: return "calendar"
         case .app: return "macwindow"
         case .advanced: return "slider.horizontal.3"

@@ -49,6 +49,12 @@ public enum Observability {
         state.transcriptPersistence
     }
 
+    /// Anonymous setup funnel: one count per step and outcome, nothing else.
+    public static func recordOnboarding(_ event: OnboardingTelemetryEvent) {
+        let attributes = DiagnosticPrivacy.safeMetadata(from: event.attributes)
+        state.onboardingSteps.add(value: 1, attributes: attributes.mapValues { .string($0) })
+    }
+
     public static func start() {
         guard state.markStarted() else { return }
         MainThreadHealthMonitor.shared.start()
@@ -142,6 +148,7 @@ public enum Observability {
         let transcriptionDuration: DoubleHistogramMeterSdk
         let recordingDuration: DoubleHistogramMeterSdk
         let transcriptPersistence: LongCounterSdk
+        let onboardingSteps: LongCounterSdk
         let telemetryVerification: LongCounterSdk
 
         private let startLock = NSLock()
@@ -252,6 +259,10 @@ public enum Observability {
                 .build()
             transcriptPersistence = meter.counterBuilder(name: "transcript.persistence")
                 .setDescription("Transcript persistence outcomes")
+                .setUnit("1")
+                .build()
+            onboardingSteps = meter.counterBuilder(name: "onboarding.steps")
+                .setDescription("First-run setup step views, completions, skips and drop-offs")
                 .setUnit("1")
                 .build()
             telemetryVerification = meter.counterBuilder(name: "telemetry.verification")

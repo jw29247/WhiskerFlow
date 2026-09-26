@@ -65,15 +65,24 @@ actor TranscriptionService {
     return await parakeetTDTv3.previewTranscription(samples: samples, language: language)
   }
 
+  /// Loads what dictionary biasing needs for `kind` ahead of the first
+  /// dictation. Only Parakeet has anything to load (its CTC boosting model).
+  func prepareHints(_ hints: RecognizerHints, kind: TranscriptionEngineKind) async {
+    guard kind == .parakeetTDTv3, !hints.terms(for: .parakeetTDTv3).isEmpty else { return }
+    await parakeetTDTv3.booster.prepare()
+  }
+
   func requestAppleSpeechAuthorization() async -> Bool {
     await appleSpeech.requestAuthorization()
   }
 
   /// Transcribe an in-memory 16 kHz mono float buffer with the warm WhisperKit
   /// pipe (single shared model instance — no extra load). Drives live dictation.
-  func transcribeSamples(_ samples: [Float], language: String?, model: WhisperModel) async throws
+  func transcribeSamples(_ samples: [Float], language: String?, model: WhisperModel,
+                         hints: RecognizerHints = .none) async throws
     -> TranscriptionResult {
-    try await whisperKit.transcribe(samples: samples, language: language, model: model)
+    try await whisperKit.transcribe(samples: samples, language: language, model: model,
+                                    promptTerms: hints.terms(for: .whisperKit))
   }
 
   func transcribeMeeting(audioURL: URL, language: String?) async throws -> TranscriptionResult {
@@ -237,12 +246,14 @@ actor TranscriptionService {
     language: String?,
     cliConfiguration: WhisperConfiguration,
     allowAppleFallback: Bool,
-    capturedSamples: [Float]? = nil
+    capturedSamples: [Float]? = nil,
+    hints: RecognizerHints = .none
   ) async throws -> TranscriptionOutcome {
     let request = TranscriptionRequest(
       audioURL: audioURL,
       language: language,
-      model: model
+      model: model,
+      hints: hints
     )
 
     do {
@@ -252,7 +263,8 @@ actor TranscriptionService {
       }
       if kind == .parakeetTDTv3, let capturedSamples {
         do {
-          let result = try await parakeetTDTv3.transcribe(samples: capturedSamples, model: model, language: language)
+          let result = try await parakeetTDTv3.transcribe(
+            samples: capturedSamples, model: model, language: language, hints: hints)
           return TranscriptionOutcome(result: result, engine: kind)
         } catch {
           if Task.isCancelled { throw error }
@@ -300,7 +312,8 @@ actor TranscriptionService {
       let decoded: TranscriptionResult
       do {
         decoded = try await whisperKit.transcribeFileWindow(
-          samples: samples, language: request.language, model: request.model)
+          samples: samples, language: request.language, model: request.model,
+          promptTerms: request.hints.terms(for: .whisperKit))
       } catch TranscriptionError.emptyTranscript {
         guard BoundedDecodeWindowPolicy.containsAudibleActivity(samples) else { continue }
         throw TranscriptionError.underlying(

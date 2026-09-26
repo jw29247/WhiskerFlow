@@ -55,10 +55,13 @@ struct MenuBarView: View {
                 SettingsLink { Image(systemName: "gearshape") }.help("Settings")
                 Menu {
                     CheckForUpdatesButton(updaterService: updaterService)
+                    RunSetupAgainButton(appState: appState)
+                    Divider()
                     Button("Quit WhiskerFlow") { NSApplication.shared.terminate(nil) }.keyboardShortcut("q")
                 } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize()
             }
         }
+        .modifier(OnboardingWindow.Presenter(onboarding: appState.onboarding))
         .padding(21).frame(width: 350)
         .background(FlowStyle.canvas).foregroundStyle(FlowStyle.ink).tint(FlowStyle.accent)
     }

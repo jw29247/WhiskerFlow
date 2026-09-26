@@ -4,11 +4,9 @@ import WhiskerFlowCore
 
 struct AssistantView: View {
     @Bindable var appState: AppState
-    @State private var tab = 0
+    @State private var tab = UIPreview.screen == "styles" ? 2 : 0
     @State private var operation = "shorten"
     @State private var typedCapture = ""
-    @State private var appIdentifier = ""
-    @State private var style: WritingStyle = .standard
     @State private var captureCountdown = false
     @State private var clientFind = ""
     @State private var clientReplacement = ""
@@ -24,7 +22,8 @@ struct AssistantView: View {
                 Picker("Assistant tool", selection: $tab) {
                     Text("Edit selection").tag(0)
                     Text("Quick capture").tag(1)
-                    Text("Writing preferences").tag(2)
+                    Text("Styles").tag(2)
+                    Text("Writing preferences").tag(3)
                 }.pickerStyle(.segmented)
                 if let message = assistant.message {
                     HStack {
@@ -52,6 +51,7 @@ struct AssistantView: View {
                     switch tab {
                     case 0: selectionEditor
                     case 1: quickCapture
+                    case 2: StylesView(assistant: assistant, formatting: appState.settings.formatting)
                     default: preferences
                     }
                 }
@@ -185,35 +185,8 @@ struct AssistantView: View {
                 }
             }
             Divider()
-            Text("App writing profiles").font(.headline)
-            Text("Standard uses your existing formatting. Conversational removes fillers and supports line commands. Polished also capitalizes sentences. Literal keeps the recognized words.")
-                .font(.callout).foregroundStyle(FlowStyle.muted)
-            Picker("Application", selection: $appIdentifier) {
-                Text("Choose an open app").tag("")
-                ForEach(runningApps, id: \.bundleIdentifier) { app in
-                    Text(app.localizedName ?? app.bundleIdentifier ?? "App").tag(app.bundleIdentifier ?? "")
-                }
-            }
-            Picker("Writing style", selection: $style) {
-                ForEach(WritingStyle.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
-            }
-            Button("Save app profile") { assistant.setProfile(bundleIdentifier: appIdentifier, style: style) }.disabled(appIdentifier.isEmpty)
-            ForEach(assistant.saved.profiles, id: \.bundleIdentifier) { profile in
-                HStack {
-                    Text(NSWorkspace.shared.urlForApplication(withBundleIdentifier: profile.bundleIdentifier)?.deletingPathExtension().lastPathComponent ?? profile.bundleIdentifier)
-                    Spacer(); Text(profile.style.rawValue.capitalized).foregroundStyle(FlowStyle.muted)
-                    Button("Reset") { assistant.setProfile(bundleIdentifier: profile.bundleIdentifier, style: .standard) }
-                }.font(.callout)
-            }
-            Divider()
             cloudConsent
-        }.onChange(of: appIdentifier) { _, value in style = assistant.style(for: value) }
-    }
-    private var runningApps: [NSRunningApplication] {
-        var seen = Set<String>()
-        return NSWorkspace.shared.runningApplications.filter { app in
-            app.activationPolicy == .regular && app.processIdentifier != ProcessInfo.processInfo.processIdentifier && app.bundleIdentifier.map { seen.insert($0).inserted } == true
-        }.sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
+        }
     }
     private var clientPicker: some View {
         HStack {

@@ -217,10 +217,31 @@ final class AssistantControllerTests: XCTestCase {
     func testProfilesKeepLiteralVerbatimAndPersonalVocabularyWins() {
         let raw = "um send it to Mark, sorry, Marc."
         let vocabulary = Vocabulary(rules: [.init(find: "Marc", replaceWith: "Marco")])
-        XCTAssertEqual(AssistantTextProcessing.process(raw, style: .literal, vocabulary: vocabulary,
+        XCTAssertEqual(AssistantTextProcessing.process(raw, tone: .literal, vocabulary: vocabulary,
                           formatting: .init(removeFillerWords: true), recognizeCorrections: true), raw)
-        XCTAssertEqual(AssistantTextProcessing.process(raw, style: .polished, vocabulary: vocabulary,
+        XCTAssertEqual(AssistantTextProcessing.process(raw, tone: .legacyPolished, vocabulary: vocabulary,
                           formatting: .init(), recognizeCorrections: true), "Send it to Marco.")
+    }
+
+    /// A file saved before app categories keeps every per-app style, and the
+    /// first edit persists the migrated overrides without dropping the originals.
+    @MainActor func testSavedProfilesMigrateIntoStyleOverrides() throws {
+        let url = location(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let legacy = #"{"cloudEnabled":false,"recognizeCorrections":true,"profiles":[{"bundleIdentifier":"com.apple.mail","style":"conversational"},{"bundleIdentifier":"com.apple.Terminal","style":"literal"}],"clients":[],"clientVocabulary":{},"drafts":[]}"#
+        try Data(legacy.utf8).write(to: url)
+        let controller = AssistantController(fileURL: url)
+        XCTAssertNil(controller.message)
+        XCTAssertEqual(controller.resolveWritingStyle(AppContext(bundleIdentifier: "com.apple.mail")),
+                       .init(category: .email, tone: .legacyConversational, source: .appOverride))
+        XCTAssertEqual(controller.resolveWritingStyle(AppContext(bundleIdentifier: "com.apple.Terminal")).tone, .literal)
+        XCTAssertEqual(controller.resolveWritingStyle(AppContext(bundleIdentifier: "com.tinyspeck.slackmacgap")).tone, .casual)
+
+        controller.editWritingStyles { $0.setTone(.veryCasual, for: .workMessages) }
+        let restarted = AssistantController(fileURL: url)
+        XCTAssertEqual(restarted.saved.profiles.count, 2, "an older build still finds its profiles")
+        XCTAssertEqual(restarted.resolveWritingStyle(AppContext(bundleIdentifier: "com.apple.mail")).tone, .legacyConversational)
+        XCTAssertEqual(restarted.resolveWritingStyle(AppContext(bundleIdentifier: "com.tinyspeck.slackmacgap")).tone, .veryCasual)
     }
 
     @MainActor func testClientPaginationStopsOnEmptyPagesAndRepeatedCursors() async throws {

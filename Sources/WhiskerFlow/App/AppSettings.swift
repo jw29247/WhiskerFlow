@@ -35,6 +35,13 @@ final class AppSettings {
     /// Echo-cancel speaker playback out of dictation audio.
     var ignoreSpeakerAudio: Bool { didSet { defaults.set(ignoreSpeakerAudio, forKey: Keys.ignoreSpeakerAudio) } }
     var rememberCorrections: Bool { didSet { defaults.set(rememberCorrections, forKey: "rememberCorrections") } }
+    /// Add a remembered correction to the Dictionary once it has been seen twice.
+    var autoAddLearnedWords: Bool { didSet { defaults.set(autoAddLearnedWords, forKey: Keys.autoAddLearnedWords) } }
+    /// Per-engine recogniser hints from the Dictionary. Each can be turned off
+    /// independently; post-recognition replacement applies either way.
+    var biasAppleSpeech: Bool { didSet { defaults.set(biasAppleSpeech, forKey: Keys.biasAppleSpeech) } }
+    var biasWhisperKit: Bool { didSet { defaults.set(biasWhisperKit, forKey: Keys.biasWhisperKit) } }
+    var biasParakeet: Bool { didSet { defaults.set(biasParakeet, forKey: Keys.biasParakeet) } }
     var delivery: DeliveryMode { didSet { defaults.set(delivery.rawValue, forKey: Keys.delivery) } }
     var playSounds: Bool { didSet { defaults.set(playSounds, forKey: Keys.playSounds) } }
     var allowAppleFallback: Bool { didSet { defaults.set(allowAppleFallback, forKey: Keys.allowAppleFallback) } }
@@ -44,10 +51,25 @@ final class AppSettings {
     var selectedInputUID: String { didSet { defaults.set(selectedInputUID, forKey: Keys.selectedInputUID) } }
     var whisperCommand: String { didSet { defaults.set(whisperCommand, forKey: Keys.whisperCommand) } }
     var whisperArguments: String { didSet { defaults.set(whisperArguments, forKey: Keys.whisperArguments) } }
+    /// The pre-Dictionary personal vocabulary. Read once to migrate into
+    /// `DictionaryStore` and otherwise left as it was, as a fallback for older builds.
     var vocabulary: Vocabulary { didSet { persist(vocabulary, key: Keys.vocabulary) } }
     /// Carries the dictation language (not persisted) so filler removal can
     /// skip languages the English filler list doesn't fit.
     var formatting: FormattingOptions { didSet { persist(formatting, key: Keys.formatting) } }
+    /// Apply changes through `AppState.setHistoryRetention(_:)`, which also prunes.
+    var historyRetention: HistoryRetention {
+        didSet { defaults.set(historyRetention.rawValue, forKey: Keys.historyRetention) }
+    }
+    /// Opt-in: keep the audio of every dictation from the last 14 days, for
+    /// playback and re-transcription. Off keeps only the newest 25 recordings.
+    var keepRecentRecordings: Bool {
+        didSet { defaults.set(keepRecentRecordings, forKey: Keys.keepRecentRecordings) }
+    }
+    /// The user's own typing speed, for Insights' time-saved estimate.
+    var typingWordsPerMinute: Int {
+        didSet { defaults.set(typingWordsPerMinute, forKey: Keys.typingWordsPerMinute) }
+    }
 
     /// Atlas is the production service used by Meeting Mode. The connection
     /// token returned after Clerk sign-in remains in Keychain.
@@ -119,6 +141,9 @@ final class AppSettings {
     }
 
     @ObservationIgnored private(set) var legacySelectedDeviceID: String?
+    /// Whether this install launched before this process: read before `init`
+    /// writes its one-shot migration flags, which every launch sets.
+    @ObservationIgnored let hadPreviousLaunch: Bool
 
     private static let legacyParakeetMigrationKey = "parakeetTDTv3DefaultMigrated"
 
@@ -142,6 +167,7 @@ final class AppSettings {
     init(defaults: UserDefaults = .standard, meetingTokenStore: MeetingCaptureTokenStore = MeetingCaptureTokenStore()) {
         self.defaults = defaults
         self.meetingTokenStore = meetingTokenStore
+        hadPreviousLaunch = defaults.object(forKey: Keys.languageAutoMigrated) != nil
 
         let storedEngine = defaults.string(forKey: Keys.engine).flatMap(TranscriptionEngineKind.init)
         let storedModel = defaults.string(forKey: Keys.model).flatMap(WhisperModel.init)
@@ -171,6 +197,10 @@ final class AppSettings {
         liveTranscription = defaults.object(forKey: Keys.liveTranscription) as? Bool ?? true
         ignoreSpeakerAudio = defaults.object(forKey: Keys.ignoreSpeakerAudio) as? Bool ?? true
         rememberCorrections = defaults.object(forKey: "rememberCorrections") as? Bool ?? true
+        autoAddLearnedWords = defaults.object(forKey: Keys.autoAddLearnedWords) as? Bool ?? true
+        biasAppleSpeech = defaults.object(forKey: Keys.biasAppleSpeech) as? Bool ?? Self.defaultBiasAppleSpeech
+        biasWhisperKit = defaults.object(forKey: Keys.biasWhisperKit) as? Bool ?? Self.defaultBiasWhisperKit
+        biasParakeet = defaults.object(forKey: Keys.biasParakeet) as? Bool ?? Self.defaultBiasParakeet
         delivery = defaults.string(forKey: Keys.delivery).flatMap(DeliveryMode.init) ?? .pasteAtCursor
         playSounds = defaults.object(forKey: Keys.playSounds) as? Bool ?? true
         allowAppleFallback = defaults.object(forKey: Keys.allowAppleFallback) as? Bool ?? true
@@ -183,6 +213,12 @@ final class AppSettings {
         var initialFormatting = Self.loadFormatting(from: defaults) ?? FormattingOptions()
         initialFormatting.language = initialLanguage
         formatting = initialFormatting
+        historyRetention = Self.migratedHistoryRetention(from: defaults)
+        keepRecentRecordings = defaults.object(forKey: Keys.keepRecentRecordings) as? Bool ?? false
+        let storedTypingSpeed = defaults.object(forKey: Keys.typingWordsPerMinute) as? Int
+        typingWordsPerMinute = storedTypingSpeed.map {
+            min(max($0, InsightsSummary.typingWordsPerMinuteRange.lowerBound), InsightsSummary.typingWordsPerMinuteRange.upperBound)
+        } ?? InsightsSummary.defaultTypingWordsPerMinute
         defaults.removeObject(forKey: Keys.atlasBaseURL)
         // Meeting Mode is an opt-in capture surface. Existing installs must not
         // begin recording or download the large local meeting model until the
@@ -199,6 +235,11 @@ final class AppSettings {
     }
 
     static let atlasProductionURL = "https://atlas.thatworks.agency"
+
+    /// Defaults follow docs/validation/2026-09-25-dictionary-biasing.md.
+    static let defaultBiasAppleSpeech = true
+    static let defaultBiasWhisperKit = false
+    static let defaultBiasParakeet = false
 
     var resolvedLanguage: String? {
         language.lowercased() == "auto" ? nil : language
@@ -225,6 +266,11 @@ final class AppSettings {
     /// Human-readable name for the active hotkey, for status text and prompts.
     var hotkeyDisplayName: String {
         hotkey == .custom ? customHotkey.displayName : hotkey.displayName
+    }
+
+    /// The shortcut as it reads in a sentence ("hold fn and speak").
+    var hotkeySpokenName: String {
+        hotkey == .fn ? "fn" : hotkeyDisplayName
     }
 
     var cliConfiguration: WhisperConfiguration {
@@ -294,6 +340,16 @@ final class AppSettings {
         return "en"
     }
 
+    /// History used to be fixed at 30 days and 25 records. New and existing
+    /// installs both start at 90 days: every record an existing user has is
+    /// younger than that, so the migration deletes nothing. Written through so a
+    /// later default change can't silently shorten an existing user's history.
+    private static func migratedHistoryRetention(from defaults: UserDefaults) -> HistoryRetention {
+        if let stored = defaults.string(forKey: Keys.historyRetention).flatMap(HistoryRetention.init) { return stored }
+        defaults.set(HistoryRetention.defaultValue.rawValue, forKey: Keys.historyRetention)
+        return .defaultValue
+    }
+
     private static func loadFormatting(from defaults: UserDefaults) -> FormattingOptions? {
         guard let data = defaults.data(forKey: Keys.formatting) else { return nil }
         return try? JSONDecoder().decode(FormattingOptions.self, from: data)
@@ -333,7 +389,14 @@ final class AppSettings {
         static let whisperCommand = "whisperCommand"
         static let whisperArguments = "whisperArguments"
         static let vocabulary = "vocabulary"
+        static let autoAddLearnedWords = "autoAddLearnedWords"
+        static let biasAppleSpeech = "dictionaryBiasAppleSpeech"
+        static let biasWhisperKit = "dictionaryBiasWhisperKit"
+        static let biasParakeet = "dictionaryBiasParakeet"
         static let formatting = "formattingOptions"
+        static let historyRetention = "historyRetention"
+        static let typingWordsPerMinute = "typingWordsPerMinute"
+        static let keepRecentRecordings = "keepRecentRecordings"
         static let sharedVocabularyURL = "sharedVocabularyURL"
         static let launchAtLogin = "launchAtLogin"
         static let atlasBaseURL = "atlasBaseURL"

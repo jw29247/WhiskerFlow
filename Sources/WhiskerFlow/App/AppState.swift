@@ -65,8 +65,10 @@ final class AppState {
         let allowAppleFallback: Bool
         let delivery: DeliveryMode
         let playSounds: Bool
-        var style: WritingStyle = .standard
+        /// Resolved from the app at key press; a browser's tab can refine it at release.
+        var writing = WritingStyleResolution(category: .other, tone: .formal, source: .fallback)
         var recognizeCorrections = false
+        var hints: RecognizerHints = .none
         var purpose: AssistantController.CapturePurpose = .dictation
         var quickKind: AssistantRecordKind = .note
         var clientReference: String?
@@ -115,7 +117,15 @@ final class AppState {
     /// Corrections spotted in the user's last transcript edit, offered as
     /// personal vocabulary rules until accepted or dismissed.
     var pendingVocabularySuggestions: [VocabularyCorrection] = []
+    /// The latest automatic Dictionary addition, offered for Undo.
+    var dictionaryNotice: DictionaryNotice?
     var meetingModelState: ModelState = .unloaded
+    /// First-run download progress of the dictation model, for setup.
+    var modelDownload = ModelDownloadStatus()
+    let onboarding: OnboardingController
+    /// Routes a practice dictation into setup's own text field; nil in tests
+    /// that inject their own delivery service.
+    let practiceDelivery: InAppPracticeDelivery?
 
     var settings: AppSettings
 
@@ -136,6 +146,16 @@ final class AppState {
     private var correctionEditBaselines: [UUID: String] = [:]
     let assistant: AssistantController
     let corrections: CorrectionStore
+    let dictionary: DictionaryStore
+    let insights: InsightsStore
+    /// Recomputed when a dictation is recorded, on reset and on a typing-speed change.
+    private(set) var insightsSummary = InsightsSummary(buckets: [], recentSamples: [])
+    /// With history off, the last transcript stays in memory for a few minutes
+    /// so Copy keeps working. It is never written to disk.
+    private(set) var ephemeralTranscript: TranscriptRecord?
+    private var ephemeralTranscriptExpiry: Task<Void, Never>?
+    private var retentionPruneTask: Task<Void, Never>?
+    nonisolated static let ephemeralTranscriptLifetimeSeconds: UInt64 = 10 * 60
     private let correctionMonitor = PasteCorrectionMonitor()
     private let soundService = SoundService()
     let microphonePermission: MicrophonePermissionController
@@ -157,6 +177,11 @@ final class AppState {
     private var hasStarted = false
     private var recordingIntentActive = false
     private var pasteTargetApplication: NSRunningApplication?
+    /// The browser-tab read for the current recording. Accessibility IPC can be
+    /// slow, so it runs beside the recording and is applied at formatting time.
+    private var websiteLookup: Task<AppContext, Never>?
+    /// How the latest dictation was written, shown on the Dictate screen.
+    var lastWritingStyle: DictationStyleReceipt?
     private var activeTranscriptionIDs: Set<UUID> = []
     private var latestRecordingSessionID: UUID?
     private var latestDeliveryID: UUID?
@@ -206,8 +231,11 @@ final class AppState {
         settings: AppSettings? = nil,
         store: TranscriptStore? = nil,
         correctionStore: CorrectionStore? = nil,
+        dictionaryStore: DictionaryStore? = nil,
+        insightsStore: InsightsStore? = nil,
         microphonePermission: MicrophonePermissionController? = nil,
-        pasteService: (any TextDeliveryService)? = nil
+        pasteService: (any TextDeliveryService)? = nil,
+        onboardingStore: (any OnboardingProgressStoring)? = nil
     ) {
         let resolvedSettings = settings ?? AppSettings()
         let resolvedMicrophonePermission = microphonePermission ?? MicrophonePermissionController(
@@ -218,6 +246,11 @@ final class AppState {
         self.store = store ?? .defaultStore()
         self.assistant = store == nil && !UIPreview.isEnabled ? .defaultStore() : AssistantController()
         self.corrections = correctionStore ?? (store == nil ? .defaultStore() : CorrectionStore())
+        self.dictionary = dictionaryStore ?? (store == nil
+            ? .defaultStore(legacyVocabulary: resolvedSettings.vocabulary)
+            : DictionaryStore(legacyVocabulary: resolvedSettings.vocabulary))
+        // An injected history (tests, UI preview) never writes the real Insights.
+        self.insights = insightsStore ?? (store == nil && !UIPreview.isEnabled ? .defaultStore() : .temporaryStore())
         self.microphonePermission = resolvedMicrophonePermission
         self.transcription = transcription
         self.meetingCapture = MeetingCaptureCoordinator(
@@ -232,7 +265,15 @@ final class AppState {
         self.live = LiveDictationSession(transcription: transcription)
         var defaultPasteService = PasteService()
         defaultPasteService.correctionMonitor = correctionMonitor
-        self.pasteService = pasteService ?? defaultPasteService
+        if let pasteService {
+            self.pasteService = pasteService
+            practiceDelivery = nil
+        } else {
+            let router = InAppPracticeDelivery(base: defaultPasteService)
+            self.pasteService = router
+            practiceDelivery = router
+        }
+        onboarding = OnboardingController(store: onboardingStore ?? UserDefaultsOnboardingStore())
         if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "coach" {
             meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant)
         }
@@ -272,6 +313,7 @@ final class AppState {
         }
         correctionMonitor.onCorrections = { [weak self] changes, sessionID, application in
             self?.corrections.record(changes, sessionID: sessionID, application: application)
+            self?.learnFromCorrections(changes)
         }
         live.onLevel = { [weak self] level, peak in
             guard let self else { return }
@@ -282,6 +324,15 @@ final class AppState {
             if signalQuality != signalAssessor.quality { signalQuality = signalAssessor.quality }
         }
         live.onPartial = { [weak self] text in self?.liveText = text }
+        if store == nil && !UIPreview.isEnabled {
+            ParakeetTDTv3Engine.downloadProgress.setHandler { [weak self] fraction, startsNew, compiling in
+                Task { @MainActor [weak self] in
+                    guard let self, self.modelDownload.tracker != nil else { return }
+                    self.modelDownload.tracker?.ingest(fraction: fraction, startsNewOperation: startsNew)
+                    if self.modelDownload.isCompiling != compiling { self.modelDownload.isCompiling = compiling }
+                }
+            }
+        }
         live.onConfigurationChange = { [weak self] in self?.handleAudioConfigurationChange() }
     }
 
@@ -326,15 +377,14 @@ final class AppState {
     }
 
     var latestTranscript: TranscriptRecord? {
-        records.first { $0.status == .transcribed }
+        records.first { $0.status == .transcribed } ?? ephemeralTranscript
     }
 
-    var analytics: TranscriptAnalytics {
-        TranscriptAnalytics(records: records)
-    }
-
-    var dailyWordCounts: [DailyWordCount] {
-        records.dailyWordCounts(days: 14)
+    /// The newest successful transcripts, or the in-memory one with history off.
+    func recentTranscripts(limit: Int) -> [TranscriptRecord] {
+        let saved = Array(records.lazy.filter { $0.status == .transcribed }.prefix(limit))
+        if saved.isEmpty, let ephemeralTranscript { return [ephemeralTranscript] }
+        return saved
     }
 
     var recordingElapsed: TimeInterval {
@@ -525,6 +575,8 @@ final class AppState {
         // bootstrap down with it: an unreadable transcripts.json would otherwise
         // leave the app running with no hotkey monitor and no HUD — no way to
         // dictate at all — and `hasStarted` blocks any retry.
+        store.retention = settings.historyRetention
+        store.audioRetention = audioRetention
         do {
             try store.load()
             normalizeInterruptedRecords()
@@ -540,6 +592,9 @@ final class AppState {
 
         records = store.records
         selectedRecordID = records.first?.id
+        dictionary.update { DictionaryLearning.demoteStale(&$0) }
+        loadInsights()
+        startRetentionPruning()
         refreshAccessibilityPermission()
         refreshMicrophonePermission()
         refreshScreenRecordingPermission()
@@ -637,7 +692,8 @@ final class AppState {
                 status: .failed(errorMessage: "WhiskerFlow quit before transcription finished. Retry this recording."),
                 model: pending.configuration.model.rawValue,
                 engine: pending.configuration.engine.rawValue,
-                language: pending.configuration.language
+                language: pending.configuration.language,
+                appCategory: pending.configuration.writing.category
             )
             do {
                 try store.add(record)
@@ -663,9 +719,18 @@ final class AppState {
             return
         }
         modelState = .preparing
+        if engine == .parakeetTDTv3 {
+            let needsDownload = !ParakeetTDTv3Engine.isModelDownloaded
+            modelDownload = ModelDownloadStatus(
+                tracker: needsDownload ? .parakeetFirstDownload : .parakeetCachedLoad,
+                needsDownload: needsDownload
+            )
+        }
         warmUpTask = Task { @MainActor [weak self] in
             guard let self else { return }
             let ready = await transcription.prepare(kind: engine, model: model, language: language)
+            if ready, engine == .parakeetTDTv3 { self.modelDownload.tracker?.finish() }
+            await transcription.prepareHints(self.recognizerHints, kind: engine)
             guard !Task.isCancelled,
                   self.settings.engine == engine,
                   self.settings.model == model,
@@ -721,7 +786,106 @@ final class AppState {
     /// The team glossary plus the user's personal rules, applied to every
     /// transcript. Personal rules override shared ones on conflict.
     var effectiveVocabulary: Vocabulary {
-        Vocabulary.effective(shared: Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: assistant.vocabulary), personal: settings.vocabulary)
+        Vocabulary.effective(shared: Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: assistant.vocabulary), personal: dictionary.vocabulary)
+    }
+
+    // MARK: - Dictionary
+
+    /// The selected client's name, for labelling its read-only entries.
+    var selectedClientName: String? {
+        guard let reference = assistant.saved.selectedClient else { return nil }
+        return assistant.saved.clients.first { $0.reference == reference }?.name ?? reference
+    }
+
+    /// Shared and client rules in the order they apply, for lint and display.
+    var readOnlyDictionaryRules: [DictionaryRule] {
+        let shared = sharedVocabulary.rules.map { DictionaryRule(rule: $0, source: .shared) }
+        let client = selectedClientName.map { name in
+            assistant.vocabulary.rules.map { DictionaryRule(rule: $0, source: .client(name)) }
+        } ?? []
+        return shared + client
+    }
+
+    var correctionObservations: [CorrectionObservation] {
+        corrections.records.map {
+            CorrectionObservation(pair: DictionaryPair(heard: $0.original, written: $0.replacement),
+                                  sessionID: $0.sessionID, application: $0.application, date: $0.date)
+        }
+    }
+
+    var dictionarySuggestions: [DictionarySuggestion] {
+        DictionaryLearning.suggestions(observations: correctionObservations, dictionary: dictionary.dictionary,
+                                       readOnly: readOnlyDictionaryRules)
+    }
+
+    /// Hints for the recognisers, from the Dictionary and the read-only libraries.
+    var recognizerHints: RecognizerHints {
+        RecognizerHints(
+            terms: DictionaryBiasing.terms(personal: dictionary.entries, readOnly: readOnlyDictionaryRules.map(\.rule)),
+            appleSpeech: settings.biasAppleSpeech,
+            whisperKit: settings.biasWhisperKit,
+            parakeet: settings.biasParakeet
+        )
+    }
+
+    /// Promotes corrections that have now been seen often enough.
+    private func learnFromCorrections(_ changes: [VocabularyCorrection]) {
+        guard settings.rememberCorrections, settings.autoAddLearnedWords, !changes.isEmpty else { return }
+        let pairs = changes.map { DictionaryPair(heard: $0.find, written: $0.replaceWith) }
+        var learned: [DictionaryChange] = []
+        let observations = correctionObservations
+        let readOnly = readOnlyDictionaryRules
+        dictionary.update { dictionary in
+            learned = DictionaryLearning.learn(from: pairs, observations: observations, dictionary: &dictionary,
+                                               readOnly: readOnly)
+        }
+        guard !learned.isEmpty else { return }
+        dictionaryNotice = DictionaryNotice(changes: learned)
+        // A short HUD note for users who fixed the word in another app; Undo lives
+        // in the main window and the Dictionary, since the HUD takes no clicks.
+        if !isRecording, !isTranscribing, status == .idle || status.hudNotificationMessage != nil, status != .delivering {
+            status = .success(dictionaryNotice?.hudMessage ?? "Added to Dictionary")
+        }
+    }
+
+    func undoDictionaryNotice() {
+        guard let notice = dictionaryNotice else { return }
+        dictionary.update { dictionary in
+            for change in notice.changes.reversed() { DictionaryLearning.undo(change, in: &dictionary) }
+        }
+        dictionaryNotice = nil
+    }
+
+    func acceptDictionarySuggestion(_ suggestion: DictionarySuggestion) {
+        dictionary.update { _ = DictionaryLearning.accept(suggestion, in: &$0) }
+    }
+
+    func dismissDictionarySuggestion(_ suggestion: DictionarySuggestion) {
+        dictionary.update { DictionaryLearning.dismiss(suggestion, in: &$0) }
+        corrections.remove(VocabularyCorrection(find: suggestion.pair.heard, replaceWith: suggestion.pair.written))
+    }
+
+    /// Counts which entries shaped a delivered transcript, then retires
+    /// auto-added entries that have gone unused.
+    /// Counting compiles a regex per entry, so it runs off the main actor and
+    /// never delays the paste that follows the history save.
+    private func recordDictionaryUsage(raw: String, final: String, configuration: TranscriptionJobConfiguration) {
+        guard configuration.writing.tone != .literal, !raw.isEmpty else { return }
+        let entries = dictionary.entries
+        let readOnlyRules = readOnlyDictionaryRules.map(\.rule)
+        Task.detached(priority: .utility) { [weak self] in
+            let counts = DictionaryUsage.counts(for: entries, raw: raw, final: final)
+            let readOnly = DictionaryUsage.counts(forReadOnly: readOnlyRules, raw: raw)
+            await self?.applyDictionaryUsage(counts, readOnly: readOnly)
+        }
+    }
+
+    private func applyDictionaryUsage(_ counts: [UUID: Int], readOnly: [String: Int]) {
+        let now = Date()
+        dictionary.update { dictionary in
+            DictionaryUsage.record(counts, readOnly: readOnly, in: &dictionary, at: now)
+            DictionaryLearning.demoteStale(&dictionary, at: now)
+        }
     }
 
     func refreshSharedVocabulary() {
@@ -902,6 +1066,7 @@ final class AppState {
                 let changes = VocabularyCorrectionDetector.corrections(original: baseline, edited: text,
                                                                        maxSuggestions: 20, allowShortCorrections: true)
                 corrections.record(changes, sessionID: record.id, application: "WhiskerFlow")
+                learnFromCorrections(changes)
             }
         } catch {
             handleStorageError(error, message: "Could not save transcript changes")
@@ -934,9 +1099,12 @@ final class AppState {
     }
 
     func acceptVocabularySuggestion(_ suggestion: VocabularyCorrection) {
-        settings.vocabulary.rules.append(
-            VocabularyRule(find: suggestion.find, replaceWith: suggestion.replaceWith)
-        )
+        let pair = DictionaryPair(heard: suggestion.find, written: suggestion.replaceWith)
+        let evaluation = DictionaryLearning.evaluate(pair, observations: correctionObservations,
+                                                     dictionary: dictionary.dictionary, readOnly: readOnlyDictionaryRules)
+        let accepted = DictionarySuggestion(pair: pair, proposed: evaluation.proposed, sightings: evaluation.sightings,
+                                            lastSeen: nil, applications: [], demotedAt: nil, issues: evaluation.issues)
+        acceptDictionarySuggestion(accepted)
         pendingVocabularySuggestions.removeAll { $0 == suggestion }
     }
 
@@ -955,6 +1123,197 @@ final class AppState {
         if selectedRecordID == record.id {
             selectedRecordID = records.first?.id
         }
+    }
+
+    // MARK: - History retention and Insights
+
+    /// How many saved transcripts a switch to `retention` would delete now.
+    func historyRemovalCount(for retention: HistoryRetention) -> Int {
+        store.removalCount(for: retention)
+    }
+
+    func setHistoryRetention(_ retention: HistoryRetention) {
+        settings.historyRetention = retention
+        do {
+            try store.applyRetention(retention)
+        } catch {
+            handleStorageError(error, message: "Could not apply the history setting")
+        }
+        records = store.records
+        if let selectedRecordID, !records.contains(where: { $0.id == selectedRecordID }) {
+            self.selectedRecordID = records.first?.id
+        }
+        if retention.savesTranscripts { clearEphemeralTranscript() }
+    }
+
+    private var audioRetention: TranscriptAudioRetention {
+        settings.keepRecentRecordings ? .fourteenDays : .standard
+    }
+
+    func setKeepRecentRecordings(_ keep: Bool) {
+        settings.keepRecentRecordings = keep
+        do {
+            try store.applyRetention(settings.historyRetention, audio: audioRetention)
+        } catch {
+            handleStorageError(error, message: "Could not apply the recordings setting")
+        }
+        records = store.records
+    }
+
+    /// Whether a saved transcript still has its recording on disk.
+    func hasRecording(_ record: TranscriptRecord) -> Bool {
+        !record.audioFilePath.isEmpty && FileManager.default.fileExists(atPath: record.audioFilePath)
+    }
+
+    /// Re-transcribes a saved recording with `engine` and replaces the transcript
+    /// only if that succeeds; a failure leaves the existing text untouched. Never
+    /// pastes, and is not a new dictation, so Insights don't count it.
+    func retranscribe(_ record: TranscriptRecord, with engine: TranscriptionEngineKind) {
+        guard !UIPreview.isEnabled, record.status == .transcribed, hasRecording(record), !isRecording,
+              !activeTranscriptionIDs.contains(record.id) else { return }
+        let configuration = makeTranscriptionConfiguration()
+        let audioURL = URL(fileURLWithPath: record.audioFilePath)
+        activeTranscriptionIDs.insert(record.id)
+        isTranscribing = true
+        status = .transcribing
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.activeTranscriptionIDs.remove(record.id)
+                self.isTranscribing = !self.activeTranscriptionIDs.isEmpty
+            }
+            let transcription = self.transcription
+            let backstop = Self.recognitionBackstopSeconds(forAudioSeconds: record.durationSeconds, engine: engine,
+                                                           allowAppleFallback: false)
+            do {
+                let outcome = try await withAbandoningDeadline(seconds: backstop) {
+                    try await transcription.transcribe(audioURL: audioURL, kind: engine, model: configuration.model,
+                                                       language: configuration.language,
+                                                       cliConfiguration: configuration.cliConfiguration,
+                                                       allowAppleFallback: false)
+                }
+                let text = await Task.detached(priority: .userInitiated) {
+                    AssistantTextProcessing.process(outcome.result.text, tone: configuration.writing.tone,
+                                                    vocabulary: configuration.vocabulary, formatting: configuration.formatting,
+                                                    recognizeCorrections: configuration.recognizeCorrections)
+                }.value
+                try self.store.markTranscribed(id: record.id, text: text, durationSeconds: outcome.result.duration,
+                                               model: configuration.model.rawValue, engine: outcome.engine.rawValue,
+                                               language: outcome.result.language, rawRecognition: outcome.result.text)
+                self.records = self.store.records
+                self.status = .success("Transcribed again with \(engine.displayName)")
+            } catch {
+                self.logger.warning("Re-transcription failed", metadata: [
+                    "error.code": "\((error as NSError).code)", "transcription.engine": "\(engine.rawValue)"
+                ])
+                self.status = .failure("\(engine.displayName) couldn’t transcribe this recording. Your transcript is unchanged.")
+            }
+        }
+    }
+
+    func setTypingSpeed(_ wordsPerMinute: Int) {
+        settings.typingWordsPerMinute = min(max(wordsPerMinute, InsightsSummary.typingWordsPerMinuteRange.lowerBound),
+                                            InsightsSummary.typingWordsPerMinuteRange.upperBound)
+        refreshInsightsSummary()
+    }
+
+    func resetInsights() {
+        do {
+            try insights.reset()
+        } catch {
+            handleStorageError(error, message: "Could not reset Insights")
+        }
+        refreshInsightsSummary()
+    }
+
+    func refreshInsightsSummary() {
+        insightsSummary = insights.summary(typingWordsPerMinute: settings.typingWordsPerMinute)
+    }
+
+    /// Loads the aggregates and, on the first launch with Insights, seeds them
+    /// from the history the user already has.
+    private func loadInsights() {
+        do {
+            try insights.load()
+            if try insights.backfillIfNeeded(from: store.records) {
+                logger.info("Insights backfilled from history", metadata: ["records": "\(store.records.count)"])
+            }
+        } catch {
+            logger.error("Insights unavailable", metadata: ["error.code": "\((error as NSError).code)"])
+            DiagnosticsService.capture(error: error, category: "storage", code: String((error as NSError).code))
+        }
+        refreshInsightsSummary()
+    }
+
+    /// "24 hours" has to expire records even when nothing new is dictated.
+    private func startRetentionPruning() {
+        retentionPruneTask?.cancel()
+        retentionPruneTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 15 * 60 * 1_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                guard !self.isRecording, !self.isTranscribing else { continue }
+                let before = self.store.records.count
+                do { try self.store.applyRetention(self.settings.historyRetention) } catch { continue }
+                if self.store.records.count != before || self.store.records != self.records { self.records = self.store.records }
+            }
+        }
+    }
+
+    /// Every successful dictation is counted in Insights whatever the history
+    /// setting. Only counts leave this method: the words are counted here and
+    /// the correction passes run off the main actor.
+    private func recordSuccessfulDictation(
+        text: String,
+        rawText: String,
+        speakingSeconds: Double?,
+        engine: String,
+        appBundleID: String?,
+        configuration: TranscriptionJobConfiguration
+    ) {
+        guard configuration.purpose == .dictation, !UIPreview.isEnabled else { return }
+        let date = Date()
+        if !settings.historyRetention.savesTranscripts {
+            showEphemeralTranscript(TranscriptRecord(text: text, audioFilePath: "", createdAt: date, status: .transcribed,
+                                                     durationSeconds: speakingSeconds, engine: engine))
+        }
+        let words = text.transcriptWordCount
+        let tone = configuration.writing.tone
+        let vocabulary = configuration.vocabulary
+        let recognizeCorrections = configuration.recognizeCorrections
+        Task { @MainActor [weak self] in
+            let counts = await Task.detached(priority: .utility) {
+                AssistantTextProcessing.correctionCounts(rawText, tone: tone, vocabulary: vocabulary,
+                                                         recognizeCorrections: recognizeCorrections)
+            }.value
+            guard let self else { return }
+            do {
+                try self.insights.record(DictationInsight(
+                    date: date, words: words, speakingSeconds: speakingSeconds ?? 0, appBundleID: appBundleID,
+                    engine: engine, vocabularyReplacements: counts.vocabularyReplacements,
+                    selfCorrections: counts.selfCorrections
+                ))
+            } catch {
+                self.logger.error("Insights update failed", metadata: ["error.code": "\((error as NSError).code)"])
+            }
+            self.refreshInsightsSummary()
+        }
+    }
+
+    private func showEphemeralTranscript(_ record: TranscriptRecord) {
+        ephemeralTranscript = record
+        ephemeralTranscriptExpiry?.cancel()
+        ephemeralTranscriptExpiry = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.ephemeralTranscriptLifetimeSeconds * 1_000_000_000)
+            guard !Task.isCancelled, self?.ephemeralTranscript?.id == record.id else { return }
+            self?.clearEphemeralTranscript()
+        }
+    }
+
+    private func clearEphemeralTranscript() {
+        ephemeralTranscriptExpiry?.cancel()
+        ephemeralTranscriptExpiry = nil
+        ephemeralTranscript = nil
     }
 
     func retry(_ record: TranscriptRecord) {
@@ -988,6 +1347,10 @@ final class AppState {
         var configuration = makeTranscriptionConfiguration()
         configuration.deliversText = false
         configuration.purpose = .dictation
+        // The app is long gone: write the retry for the category it was dictated
+        // into, or — for a recording from before categories — as it was then.
+        configuration.writing = record.appCategory.map(assistant.writingStyles.resolve(category:))
+            ?? WritingStyleResolution(category: .other, tone: .legacyStandard, source: .fallback)
         await transcribeRecording(
             record,
             pasteTarget: nil,
@@ -1121,6 +1484,7 @@ final class AppState {
         // Before the microphone: the warm-up runs on the Neural Engine while
         // capture starts on the main actor.
         startDictationWarmUp(sessionID: sessionID)
+        startWebsiteLookup()
         updateDictationActivity()
         defer { updateDictationActivity() }
         var telemetryOutcome = "error"
@@ -1192,7 +1556,8 @@ final class AppState {
             span.setAttributes([
                 "transcription.engine": .string(configuration.engine.rawValue),
                 "transcription.model": .string(configuration.model.rawValue),
-                "recording.mode": .string(String(describing: settings.recordingMode))
+                "recording.mode": .string(String(describing: settings.recordingMode)),
+                "writing.category": .string(configuration.writing.category.rawValue)
             ])
             activeRecordingConfiguration = configuration
             assistant.capturePurpose = .dictation
@@ -1214,8 +1579,9 @@ final class AppState {
                         vocabulary: configuration.vocabulary,
                         formatting: configuration.formatting,
                         streaming: streamingActive,
-                        style: configuration.style,
+                        tone: configuration.writing.tone,
                         recognizeCorrections: configuration.recognizeCorrections,
+                        hints: configuration.hints,
                         previewEngine: settings.liveTranscription ? configuration.engine : nil
                     )
                     inputSelection = candidate
@@ -1371,10 +1737,19 @@ final class AppState {
 
         let wasStreaming = streamingActive
         streamingActive = false
-        let configuration = activeRecordingConfiguration ?? makeTranscriptionConfiguration()
+        var configuration = activeRecordingConfiguration ?? makeTranscriptionConfiguration()
         activeRecordingConfiguration = nil
         let pasteTarget = pasteTargetApplication
         pasteTargetApplication = nil
+        if let lookup = websiteLookup {
+            // Normally finished long ago; bounded by the reader's own budget.
+            websiteLookup = nil
+            configuration.writing = assistant.resolveWritingStyle(await lookup.value)
+            live.setTone(configuration.writing.tone)
+        }
+        if configuration.purpose == .dictation {
+            lastWritingStyle = DictationStyleReceipt(resolution: configuration.writing, appName: pasteTarget?.localizedName)
+        }
         if let url = live.currentAudioURL {
             inFlightFinishAudio[sessionID] = (url, configuration)
         }
@@ -1399,6 +1774,12 @@ final class AppState {
                 ]
             )
             inFlightFinishAudio[sessionID] = nil
+            if recovered {
+                recordSuccessfulDictation(text: result.text, rawText: result.rawText,
+                                          speakingSeconds: Double(result.totalSampleCount) / 16_000,
+                                          engine: configuration.engine.rawValue, appBundleID: nil,
+                                          configuration: configuration)
+            }
             if let recordID = recoveryRecordIDs.removeValue(forKey: sessionID) {
                 // Shutdown already filed this audio for retry; complete it in place.
                 if recovered {
@@ -1445,6 +1826,10 @@ final class AppState {
                 sessionID: sessionID
             )
             inFlightFinishAudio[sessionID] = nil
+            recordSuccessfulDictation(text: result.text, rawText: result.rawText,
+                                      speakingSeconds: Double(result.totalSampleCount) / 16_000,
+                                      engine: configuration.engine.rawValue,
+                                      appBundleID: pasteTarget?.bundleIdentifier, configuration: configuration)
             if let recordID = recoveryRecordIDs.removeValue(forKey: sessionID) {
                 abandonedSessionIDs.remove(sessionID)
                 completeRecoveryRecord(recordID, text: result.text, rawText: result.rawText,
@@ -1613,11 +1998,13 @@ final class AppState {
         configuration: TranscriptionJobConfiguration,
         sessionID: UUID
     ) {
+        recordDictionaryUsage(raw: rawText, final: text, configuration: configuration)
         let createdAt = Date()
         let duration = Double(totalSampleCount) / 16_000
         let model = configuration.model.rawValue
         let engine = configuration.engine.rawValue
         let language = configuration.language
+        let category = configuration.writing.category
         guard let url = capturedAudioURL else {
             handleStorageError(CocoaError(.fileNoSuchFile), message: "Could not save recording")
             return
@@ -1653,6 +2040,7 @@ final class AppState {
                         model: model,
                         engine: engine,
                         language: language,
+                        category: category,
                         sessionID: sessionID
                 ) ?? false
                 if saved {
@@ -1675,6 +2063,7 @@ final class AppState {
         model: String,
         engine: String,
         language: String?,
+        category: AppCategory,
         sessionID: UUID
     ) -> Bool {
         let record = TranscriptRecord(
@@ -1687,7 +2076,8 @@ final class AppState {
             engine: engine,
             language: language,
             updatedAt: createdAt,
-            rawRecognition: rawText
+            rawRecognition: rawText,
+            appCategory: category
         )
         do {
             try store.add(record)
@@ -1713,7 +2103,8 @@ final class AppState {
             durationSeconds: Double(totalSampleCount) / 16_000,
             model: configuration.model.rawValue,
             engine: configuration.engine.rawValue,
-            language: configuration.language
+            language: configuration.language,
+            appCategory: configuration.writing.category
         )
         do {
             try store.add(record)
@@ -1738,8 +2129,10 @@ final class AppState {
                 model: configuration.model.rawValue,
                 engine: configuration.engine.rawValue,
                 language: configuration.language,
-                rawRecognition: rawText
+                rawRecognition: rawText,
+                appCategory: configuration.writing.category
             )
+            recordDictionaryUsage(raw: rawText, final: text, configuration: configuration)
         } catch {
             noteHistoryFailure(error)
         }
@@ -1828,7 +2221,8 @@ final class AppState {
             durationSeconds: Double(totalSampleCount) / 16_000,
             model: configuration.model.rawValue,
             engine: configuration.engine.rawValue,
-            language: configuration.language
+            language: configuration.language,
+            appCategory: configuration.writing.category
         )
         // History is best-effort here: the audio is on disk and the recognizer
         // does not need the record, so a full disk or an unwritable history must
@@ -1951,7 +2345,8 @@ final class AppState {
                         language: configuration.language,
                         cliConfiguration: configuration.cliConfiguration,
                         allowAppleFallback: configuration.allowAppleFallback,
-                        capturedSamples: capturedSamples
+                        capturedSamples: capturedSamples,
+                        hints: configuration.hints
                     )
                 }
             } catch AsyncTimeoutError.timedOut {
@@ -1963,7 +2358,7 @@ final class AppState {
             lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "text_processing", "session": "\(sessionID ?? record.id)"])
             let processed = await Task.detached(priority: .userInitiated) {
                 let started = ProcessInfo.processInfo.systemUptime
-                let text = AssistantTextProcessing.process(outcome.result.text, style: configuration.style,
+                let text = AssistantTextProcessing.process(outcome.result.text, tone: configuration.writing.tone,
                     vocabulary: configuration.vocabulary, formatting: configuration.formatting,
                     recognizeCorrections: configuration.recognizeCorrections)
                 let completed = ProcessInfo.processInfo.systemUptime
@@ -1983,8 +2378,10 @@ final class AppState {
                     model: configuration.model.rawValue,
                     engine: outcome.engine.rawValue,
                     language: outcome.result.language,
-                    rawRecognition: outcome.result.text
+                    rawRecognition: outcome.result.text,
+                    appCategory: configuration.writing.category
                 )
+                recordDictionaryUsage(raw: outcome.result.text, final: finalText, configuration: configuration)
             } catch {
                 // A recognized transcript is still delivered; only History missed it.
                 historySaved = false
@@ -2019,6 +2416,10 @@ final class AppState {
             )
             activeTranscriptionIDs.remove(record.id)
             isTranscribing = !activeTranscriptionIDs.isEmpty
+            recordSuccessfulDictation(text: finalText, rawText: outcome.result.text,
+                                      speakingSeconds: outcome.result.duration ?? record.durationSeconds,
+                                      engine: outcome.engine.rawValue, appBundleID: pasteTarget?.bundleIdentifier,
+                                      configuration: configuration)
             guard configuration.deliversText else {
                 if mayUpdateUI {
                     status = historySaved ? .success("Retry saved to History") : .failure("Could not save transcript")
@@ -2207,20 +2608,34 @@ final class AppState {
         if receipt.state == .verified { assistant.clearSelection() }
     }
 
+    /// Starts reading the target browser's tab without delaying the microphone.
+    private func startWebsiteLookup() {
+        websiteLookup?.cancel()
+        websiteLookup = nil
+        guard let target = pasteTargetApplication,
+              assistant.writingStyles.needsWebsiteLookup(bundleIdentifier: target.bundleIdentifier) else { return }
+        let bundleIdentifier = target.bundleIdentifier
+        let pid = target.processIdentifier
+        websiteLookup = Task.detached(priority: .userInitiated) {
+            AppContextReader.readBrowser(bundleIdentifier: bundleIdentifier, pid: pid)
+        }
+    }
+
     private func makeTranscriptionConfiguration() -> TranscriptionJobConfiguration {
         let accountReady = assistant.synchronizeAccount()
         return TranscriptionJobConfiguration(
             engine: settings.engine,
             model: settings.model,
             language: settings.resolvedLanguage,
-            vocabulary: accountReady ? effectiveVocabulary : Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: settings.vocabulary),
+            vocabulary: accountReady ? effectiveVocabulary : Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: dictionary.vocabulary),
             formatting: settings.formatting,
             cliConfiguration: settings.cliConfiguration,
             allowAppleFallback: settings.allowAppleFallback,
             delivery: settings.delivery,
             playSounds: settings.playSounds,
-            style: assistant.style(for: pasteTargetApplication?.bundleIdentifier),
+            writing: assistant.resolveWritingStyle(AppContext(bundleIdentifier: pasteTargetApplication?.bundleIdentifier)),
             recognizeCorrections: assistant.saved.recognizeCorrections,
+            hints: recognizerHints,
             purpose: assistant.capturePurpose,
             quickKind: assistant.quickCaptureKind,
             clientReference: accountReady ? assistant.saved.selectedClient : nil,
@@ -2337,6 +2752,18 @@ final class AppState {
     }
 }
 
+extension InsightsStore {
+    static func defaultStore() -> InsightsStore {
+        InsightsStore(databaseURL: StorageLocations.applicationSupportRootOrTemporary().appendingPathComponent("insights.sqlite"))
+    }
+
+    static func temporaryStore() -> InsightsStore {
+        InsightsStore(databaseURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("WhiskerFlow-insights-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("insights.sqlite"))
+    }
+}
+
 extension TranscriptStore {
     static func defaultStore() -> TranscriptStore {
         let root = StorageLocations.applicationSupportRootOrTemporary()
@@ -2344,5 +2771,23 @@ extension TranscriptStore {
             fileURL: root.appendingPathComponent("transcripts.json"),
             recordingsDirectory: AudioFileWriter.recordingsDirectoryURL()
         )
+    }
+}
+
+/// How one dictation was written, for the Dictate screen.
+struct DictationStyleReceipt: Equatable {
+    var resolution: WritingStyleResolution
+    var appName: String?
+}
+
+extension DictationStyleReceipt {
+    var description: String {
+        let style = "\(resolution.category.displayName) · \(resolution.tone.displayName)"
+        guard let appName else { return "Written as \(style)" }
+        switch resolution.source {
+        case .website: return "Written as \(style) for a website in \(appName)"
+        case .appOverride: return "Written as \(style) · your setting for \(appName)"
+        case .builtInApp, .fallback: return "Written as \(style) for \(appName)"
+        }
     }
 }

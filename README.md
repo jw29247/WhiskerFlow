@@ -8,8 +8,11 @@ transcribes locally and pastes the text wherever your cursor is.
   account. Operational telemetry excludes audio and transcript text.
 - **Zero-setup install** — no Python, no Homebrew Whisper. The model downloads itself on first use.
 - **Works offline too** — a built-in Apple Speech engine needs no download at all.
+- **Styles by app category** — dictation into Messages, Slack, Mail, code editors, AI chats and documents
+  is written in that category's tone (Formal, Casual, Very casual or Literal). Browsers are sorted by the
+  website you're on. Change tones, or move individual apps, in **Assistant → Styles**; all rules run on this Mac.
 - **Floating HUD** with a live level meter, a rich menu-bar popover, searchable/editable
-  history, custom-vocabulary replacement, configurable hotkey, and hold-to-talk or tap-to-toggle modes.
+  history, a Dictionary that learns names and fixes from your corrections (and can hint them to the recogniser), configurable hotkey, and hold-to-talk or tap-to-toggle modes.
 
 ## Requirements
 
@@ -48,7 +51,11 @@ permissions (Accessibility is what lets WhiskerFlow paste at the cursor).
 3. Release. The transcript is pasted at your cursor (or copied — your choice).
 
 Open the main window for searchable history, inline editing, retry of failed runs,
-and dictation stats. The menu-bar icon gives quick access to recent transcripts.
+and Insights (lifetime words, speaking speed, streaks and activity). Choose how long
+history is kept — forever, a year, 90 days (the default), 30 days, 7 days, 24 hours,
+or not at all — in **Settings → History** or from the History screen. Insights keep
+counts only, never transcript text, and survive any retention setting. The menu-bar
+icon gives quick access to recent transcripts.
 
 ### Engines
 
@@ -90,8 +97,9 @@ swift script/make_icon.swift Resources/AppIcon.iconset && \
 
 ## Architecture
 
-- **`WhiskerFlowCore`** — pure, dependency-free, unit-tested: the transcript store,
-  analytics, search, vocabulary, transcription request/result models, and shared value types.
+- **`WhiskerFlowCore`** — pure, dependency-free (system SQLite only), unit-tested: the
+  transcript store (`transcripts.sqlite`, migrated from the older `transcripts.json`,
+  which is kept as a backup), retention, Insights aggregates, search, vocabulary, transcription request/result models, and shared value types.
 - **`WhiskerFlow`** (app target) — SwiftUI/AppKit UI plus the engines
   (`ParakeetTDTv3Engine`, `WhisperKitEngine`, `AppleSpeechEngine`, `WhisperCLIEngine`) behind a
   `TranscriptionService` coordinator, audio capture, paste, and hotkey services.

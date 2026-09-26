@@ -68,6 +68,11 @@ struct DictationView: View {
                     if let client = appState.assistant.saved.clients.first(where: { $0.reference == appState.assistant.saved.selectedClient }) {
                         Text("Client vocabulary: \(client.name)").font(.caption).foregroundStyle(FlowStyle.muted).padding(.bottom, 14)
                     }
+                    if let style = appState.lastWritingStyle, !appState.isRecording {
+                        Label(style.description, systemImage: style.resolution.category.symbol)
+                            .font(.caption).foregroundStyle(FlowStyle.muted).padding(.bottom, 10)
+                            .help("Change how each category is written in Assistant → Styles.")
+                    }
                     if let receipt = appState.lastPasteReceipt {
                         HStack(spacing: 14) {
                             Image(systemName: receipt.state == .verified ? "checkmark.circle" : "doc.on.clipboard")
@@ -109,7 +114,7 @@ struct DictationView: View {
                     .buttonStyle(.plain).foregroundStyle(FlowStyle.accent)
             }.padding(.vertical, 23)
 
-            let recent = Array(appState.records.filter { $0.status == .transcribed }.prefix(3))
+            let recent = appState.recentTranscripts(limit: 3)
             if recent.isEmpty {
                 HStack(spacing: 12) {
                     Image(systemName: "text.alignleft").foregroundStyle(FlowStyle.muted)

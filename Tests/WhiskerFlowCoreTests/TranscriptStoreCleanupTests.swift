@@ -32,6 +32,7 @@ final class TranscriptStoreCleanupTests: XCTestCase {
         let store = TranscriptStore(
             fileURL: tempURL(),
             now: { now },
+            retention: .thirtyDays,
             removeAudioFile: { removed.paths.append($0) }
         )
         let fresh = TranscriptRecord(text: "fresh", audioFilePath: "/tmp/fresh.m4a", createdAt: now, status: .transcribed)
@@ -49,13 +50,14 @@ final class TranscriptStoreCleanupTests: XCTestCase {
         XCTAssertEqual(removed.paths, ["/tmp/stale.m4a"])
     }
 
-    func testPruneKeepsOnlyTheNewest25Sessions() throws {
+    /// The old 25-record cap bounded audio on disk. Transcripts no longer have a
+    /// count limit, but only the newest 25 successful dictations keep their audio.
+    func testPruneKeepsEveryTranscriptButOnlyTheNewest25Recordings() throws {
         let now = Date(timeIntervalSince1970: 100_000_000)
         let removed = RemovedPaths()
         let store = TranscriptStore(
             fileURL: tempURL(),
             now: { now },
-            retentionLimit: 25,
             removeAudioFile: { removed.paths.append($0) }
         )
         let records = (0..<26).map { index in
@@ -69,8 +71,9 @@ final class TranscriptStoreCleanupTests: XCTestCase {
         try store.replaceAll(records)
         try store.pruneExpired()
 
-        XCTAssertEqual(store.records.count, 25)
-        XCTAssertFalse(store.records.contains { $0.text == "session 0" })
+        XCTAssertEqual(store.records.count, 26)
+        XCTAssertEqual(store.records.last?.text, "session 0")
+        XCTAssertEqual(store.records.last?.audioFilePath, "", "the released audio must not stay referenced")
         XCTAssertEqual(removed.paths, ["/tmp/session-0.wav"])
     }
 
@@ -164,7 +167,7 @@ final class TranscriptStoreCleanupTests: XCTestCase {
         try store.load()
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: oldOrphan.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.databaseURL.path))
     }
 
     func testTranscribingRecordsAreNotInRetryQueue() throws {
@@ -194,8 +197,9 @@ final class TranscriptStoreCleanupTests: XCTestCase {
 
         let record = TranscriptRecord(text: "fresh", audioFilePath: "", status: .transcribed)
         try store.add(record)
-        let reloaded = try JSONDecoder.whiskerFlow.decode([TranscriptRecord].self, from: Data(contentsOf: url))
-        XCTAssertEqual(reloaded.map(\.id), [record.id])
+        let reloaded = TranscriptStore(fileURL: url)
+        try reloaded.load()
+        XCTAssertEqual(reloaded.records.map(\.id), [record.id])
     }
 
     func testCorruptFileFallsBackToCopyWhenMoveFails() throws {
@@ -216,8 +220,8 @@ final class TranscriptStoreCleanupTests: XCTestCase {
         XCTAssertTrue(store.records.isEmpty)
         let backup = url.deletingPathExtension().appendingPathExtension("corrupt-42.json")
         XCTAssertEqual(try Data(contentsOf: backup), Data("{ not json".utf8))
-        let rewritten = try JSONDecoder.whiskerFlow.decode([TranscriptRecord].self, from: Data(contentsOf: url))
-        XCTAssertTrue(rewritten.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path), "the copied original must not be re-read")
+        try store.add(TranscriptRecord(text: "fresh", audioFilePath: "", status: .transcribed))
     }
 
     func testUnbackedUpCorruptFileThrowsAndBlocksFurtherWrites() throws {

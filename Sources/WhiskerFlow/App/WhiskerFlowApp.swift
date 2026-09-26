@@ -26,6 +26,7 @@ struct WhiskerFlowApp: App {
         let appState = UIPreview.makeAppState()
         _appState = State(initialValue: appState)
         AppDelegate.launchAppState = appState
+        UIPreview.scheduleOnboardingSnapshotsIfRequested()
     }
 
     var body: some Scene {
@@ -40,6 +41,9 @@ struct WhiskerFlowApp: App {
             TranscriptCommands()
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesButton(updaterService: updaterService)
+            }
+            CommandGroup(replacing: .help) {
+                RunSetupAgainButton(appState: appState)
             }
             CommandGroup(after: .newItem) {
                 #if DEBUG
@@ -58,6 +62,16 @@ struct WhiskerFlowApp: App {
                 .keyboardShortcut("r", modifiers: [.command, .option, .shift])
             }
         }
+
+        // Its own window, not a sheet: an attached sheet makes AppKit refuse to
+        // quit (including at logout), and setup must survive a quit mid-way.
+        Window("Set Up WhiskerFlow", id: OnboardingWindow.id) {
+            OnboardingView(appState: appState)
+                .preferredColorScheme(UIPreview.colorScheme)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
 
         Settings {
             SettingsView(appState: appState, updaterService: updaterService)

@@ -8,15 +8,20 @@ struct HistoryView: View {
     let record: TranscriptRecord?
     var save: () -> Bool
     var select: (TranscriptRecord) -> Void
-    @State private var showStats = false
+    var openInsights: () -> Void
+    /// History can hold tens of thousands of transcripts; rows are added a page
+    /// at a time as the list scrolls.
+    @State private var visibleLimit = Self.pageSize
     @FocusState private var searchFocused: Bool
+    private static let pageSize = 200
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("History").font(.system(size: 24, weight: .semibold, design: .rounded))
                 Spacer()
-                Button { showStats = true } label: { Label("Activity", systemImage: "chart.bar") }
+                HistoryRetentionControl(appState: appState, presentation: .menu)
+                Button { openInsights() } label: { Label("Insights", systemImage: "chart.bar.xaxis") }
                 Menu {
                     Button("Markdown") { export(.markdown) }
                     Button("CSV") { export(.csv) }
@@ -26,9 +31,19 @@ struct HistoryView: View {
             }
             .padding(.horizontal, 28).padding(.vertical, 25)
             Divider()
+            if !appState.settings.historyRetention.savesTranscripts {
+                Label("History is off. Dictations are still pasted, and your latest one can be copied for a few minutes, but nothing is saved.",
+                      systemImage: "eye.slash")
+                    .font(.callout).foregroundStyle(FlowStyle.muted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 28).padding(.vertical, 12)
+                    .background(FlowStyle.selection.opacity(0.6))
+            }
             if appState.records.isEmpty && record == nil {
                 FlowEmptyState(symbol: "text.alignleft", title: "Your words, all here.",
-                               detail: "Your first dictation will appear here, ready to copy, edit or export.")
+                               detail: appState.settings.historyRetention.savesTranscripts
+                                   ? "Your first dictation will appear here, ready to copy, edit or export."
+                                   : "Choose how long to keep history from the menu above to start saving transcripts.")
             } else {
                 HStack(spacing: 0) {
                     transcriptList
@@ -42,7 +57,6 @@ struct HistoryView: View {
                 }
             }
         }
-        .sheet(isPresented: $showStats) { StatsView(appState: appState) }
     }
 
     private var transcriptList: some View {
@@ -61,12 +75,13 @@ struct HistoryView: View {
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(FlowStyle.line, lineWidth: 1))
             .padding(15)
 
-            if appState.filteredRecords.isEmpty {
+            let filtered = appState.filteredRecords
+            if filtered.isEmpty {
                 FlowEmptyState(symbol: "magnifyingglass", title: "No matches", detail: "Try a different word or clear your search.")
             } else {
                 ScrollView {
                     LazyVStack(spacing: 3) {
-                        ForEach(appState.filteredRecords) { record in
+                        ForEach(filtered.prefix(visibleLimit)) { record in
                             Button { select(record) } label: {
                                 VStack(alignment: .leading, spacing: 9) {
                                     HStack(spacing: 6) {
@@ -87,14 +102,19 @@ struct HistoryView: View {
                             .background(record.id == draft.recordID ? FlowStyle.selection : .clear, in: RoundedRectangle(cornerRadius: 9))
                             .accessibilityAddTraits(record.id == draft.recordID ? .isSelected : [])
                         }
+                        if filtered.count > visibleLimit {
+                            ProgressView().controlSize(.small).padding(10)
+                                .onAppear { visibleLimit += Self.pageSize }
+                        }
                     }.padding(.horizontal, 10).padding(.bottom, 12)
                 }
             }
             Divider()
-            Text("\(appState.filteredRecords.count) of \(appState.records.count) saved recordings")
+            Text("\(filtered.count.formatted()) of \(appState.records.count.formatted()) saved recordings")
                 .font(.system(size: 10)).foregroundStyle(FlowStyle.muted).padding(13)
         }
         .frame(width: 245)
+        .onChange(of: appState.searchText) { _, _ in visibleLimit = Self.pageSize }
         .background(FlowStyle.surface.opacity(0.35))
         .background {
             Button("Find transcript") { searchFocused = true }

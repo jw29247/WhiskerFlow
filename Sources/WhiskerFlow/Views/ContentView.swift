@@ -3,12 +3,12 @@ import WhiskerFlowCore
 
 struct ContentView: View {
     @Bindable var appState: AppState
-    @State private var destination: FlowDestination = UIPreview.initialDestination.flatMap(FlowDestination.init(rawValue:)) ?? .dictate
-    @State private var showOnboarding = false
+    @State private var destination: FlowDestination = UIPreview.screen == "styles" ? .assistant : .dictate
     @State private var draft = TranscriptDraft()
     @State private var selectedSnapshot: TranscriptRecord?
     @State private var pendingNavigation: (() -> Void)?
     @State private var confirmNavigation = false
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         HStack(spacing: 0) {
@@ -23,9 +23,21 @@ struct ContentView: View {
                         Button("Dismiss") { appState.status = .idle }.buttonStyle(.plain)
                     }.foregroundStyle(FlowStyle.ink).padding(15).background(Color.orange.opacity(0.12))
                 }
+                if let notice = appState.dictionaryNotice {
+                    HStack(spacing: 12) {
+                        Label(notice.message, systemImage: "character.book.closed").font(.callout)
+                        Spacer()
+                        Button("Undo") { appState.undoDictionaryNotice() }
+                        if destination != .dictionary {
+                            Button("Review") { navigate { destination = .dictionary } }
+                        }
+                        Button { appState.dictionaryNotice = nil } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.plain).help("Dismiss").accessibilityLabel("Dismiss")
+                    }.foregroundStyle(FlowStyle.ink).padding(15).background(FlowStyle.selection)
+                }
                 switch destination {
                 case .dictate:
-                    DictationView(appState: appState, openSetup: { showOnboarding = true }) { record in
+                    DictationView(appState: appState, openSetup: { appState.onboarding.present() }) { record in
                         navigate {
                             destination = .history
                             select(record ?? appState.records.first)
@@ -35,12 +47,14 @@ struct ContentView: View {
                     AssistantView(appState: appState)
                 case .meetings:
                     MeetingsView(appState: appState)
-                case .corrections:
-                    CorrectionsView(appState: appState)
+                case .dictionary:
+                    DictionaryView(appState: appState, initialTab: UIPreview.dictionaryTab)
                 case .history:
-                    HistoryView(appState: appState, draft: $draft, record: currentRecord, save: saveDraft) { record in
-                        navigate { select(record) }
-                    }
+                    HistoryView(appState: appState, draft: $draft, record: currentRecord, save: saveDraft,
+                                select: { record in navigate { select(record) } },
+                                openInsights: { navigate { destination = .insights } })
+                case .insights:
+                    InsightsView(appState: appState)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -62,14 +76,23 @@ struct ContentView: View {
         } message: {
             Text("This transcript has unsaved changes.")
         }
-        .sheet(isPresented: $showOnboarding) { OnboardingView(appState: appState) }
+        .modifier(OnboardingWindow.Presenter(onboarding: appState.onboarding))
         .onAppear {
+            if let name = UIPreview.destination, let preview = FlowDestination(rawValue: name) { destination = preview }
+            UIPreview.scheduleSnapshotIfRequested()
+            if UIPreview.settingsCategory != nil { openSettings() }
+            UIPreview.writeSettingsSnapshotIfRequested()
+            if destination == .history && draft.recordID == nil { select(appState.records.first) }
             DispatchQueue.main.async {
                 appState.start()
                 appState.applyActivationPolicy()
-                if appState.records.isEmpty && DictationPresentation(appState: appState).needsSetup {
-                    showOnboarding = true
-                }
+                guard !appState.onboarding.isPresented else { return }
+                appState.onboarding.presentIfNeeded(
+                    hasHistory: !appState.records.isEmpty,
+                    hadPreviousLaunch: appState.settings.hadPreviousLaunch,
+                    permissionsReady: !DictationPresentation(appState: appState).needsSetup
+                )
+                UIPreview.writeSnapshotIfRequested()
             }
         }
         .onChange(of: appState.settings.showDockIcon) { _, _ in appState.applyActivationPolicy() }
@@ -182,15 +205,16 @@ struct ContentView: View {
 }
 
 private enum FlowDestination: String, CaseIterable, Identifiable {
-    case dictate = "Dictate", meetings = "Meetings", history = "History", corrections = "Corrections", assistant = "Assistant"
+    case dictate = "Dictate", meetings = "Meetings", history = "History", dictionary = "Dictionary", assistant = "Assistant",
+         insights = "Insights"
     var id: String { rawValue }
     var symbol: String {
-        switch self { case .assistant: return "wand.and.stars"; case .dictate: return "mic"; case .meetings: return "calendar"; case .history: return "clock.arrow.circlepath"; case .corrections: return "text.badge.checkmark" }
+        switch self { case .assistant: return "wand.and.stars"; case .dictate: return "mic"; case .meetings: return "calendar"; case .history: return "clock.arrow.circlepath"; case .dictionary: return "character.book.closed"; case .insights: return "chart.bar.xaxis" }
     }
     var shortcut: KeyEquivalent {
-        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .corrections: return "4" }
+        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4"; case .insights: return "6" }
     }
     var shortcutLabel: String {
-        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .corrections: return "4" }
+        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4"; case .insights: return "6" }
     }
 }
