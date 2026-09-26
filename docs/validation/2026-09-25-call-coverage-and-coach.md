@@ -131,7 +131,7 @@ Jacob ran real Google Meet calls with the Meet web app (Chrome's installed web a
    - **Result:** after the fix, the call was detected 3.3 s after launch.
 2. **Content-free detection events were dropped.** The local diagnostic log keeps only allowlisted events.
    - **Fix:** `call_detection_started`, `call_detected`, `call_ended` and `call_unrecognised` are now allowlisted. Their fields are counts, `accessibility` true/false, `platform` and `source` (app, browser or webkit). A unit test checks that titles and bundle IDs are dropped.
-3. **A recording stopped early.** Safari's WebKit process used the microphone next to the Chrome call. The prompt switched to that second call, the recording followed it, and it stopped at 06:53:15 when that call went quiet, although the Meet call carried on.
+3. **A recording stopped early.** Jacob's Safari Meet test (Safari's WebKit capture from 06:52:23) ran alongside the Chrome call. The prompt switched to that second call, the recording followed it, and it stopped at 06:53:15 when that call went quiet, although the Meet call carried on.
    - **Fix:** a prompt-started recording now stops only when no detected call remains.
    - **Fix:** a second call no longer replaces a prompt already showing.
 
@@ -141,8 +141,11 @@ Jacob ran real Google Meet calls with the Meet web app (Chrome's installed web a
 - both recordings delivered (audio removed, encrypted library entries kept);
 - transcription quality was good by Jacob's account.
 
+**Confirmed by Jacob:**
+- a Google Meet in Safari was detected and recorded;
+- a Google Meet in Chrome went end to end, from the prompt to delivery in Atlas.
+
 **Still open for Monday:**
-- calls with other people (talk share, turns, pace and AI tips on real speech);
 - a Slack huddle;
-- Safari Meet on purpose;
-- why `call_detected` was logged twice at 06:51:57. The new `source` field should explain it.
+- a Meet with other people, for talk share, turns, pace and AI tips on real speech;
+- why `call_detected` was logged twice at 06:51:57. The `source` field now logged should explain it.
