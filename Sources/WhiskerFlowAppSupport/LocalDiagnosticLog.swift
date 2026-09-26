@@ -79,7 +79,7 @@ struct LocalDiagnosticLogHandler: LogHandler {
         for key in ["window_start_ms", "window_end_ms", "worker_elapsed_ms", "resume_delay_ms", "sample_report_bytes", "sample_thread_headers", "sample_main_headers", "sample_symbol_lines", "elapsed_ms", "pending", "samples", "conversion_failures", "speaker_count", "visual_tile_count", "load_1m", "cpu_count", "app_cpu_percent", "system_cpu_percent", "sample_interval_ms", "rss_bytes", "swap_used_bytes", "swapins_pages", "swapouts_pages", "swapins_delta_pages", "swapouts_delta_pages", "compressed_pages", "page_size_bytes", "window_sources", "titles", "titles_with_meet", "titles_with_code", "corrections", "learned"] {
             if let value = values[key]?.description, let number = Double(value), number.isFinite, number >= 0 { fields[key] = value }
         }
-        for key in ["recording", "transcribing", "visual_read_failed", "accessibility", "voice_processing"] {
+        for key in ["recording", "transcribing", "visual_read_failed", "accessibility"] {
             if let value = values[key]?.description, ["true", "false"].contains(value) { fields[key] = value }
         }
         if let value = values["session"]?.description, UUID(uuidString: value) != nil { fields["session"] = value }

@@ -389,6 +389,30 @@ private final class CaptureEngineQueue: @unchecked Sendable {
     }
 }
 
+/// Inputs whose voice-processing build hung. Seen with a USB webcam mic after
+/// waking at a desk: the unit's property listener re-queried sub-devices
+/// forever, pinning a core and coreaudiod. Later launches record from these
+/// inputs without voice processing instead of hanging again; the hang itself
+/// cannot be stopped once it starts.
+enum VoiceProcessingHangRecord {
+    private static let key = "voiceProcessingHungInputs"
+    /// Retried after a day: the hang may pass with the hardware setup.
+    private static let retrySeconds: TimeInterval = 24 * 60 * 60
+
+    static func hung(_ uid: String, now: Date = Date()) -> Bool {
+        guard let since = (UserDefaults.standard.dictionary(forKey: key) as? [String: Double])?[uid] else {
+            return false
+        }
+        return now.timeIntervalSince1970 - since < retrySeconds
+    }
+
+    static func record(_ uid: String, now: Date = Date()) {
+        var hung = UserDefaults.standard.dictionary(forKey: key) as? [String: Double] ?? [:]
+        hung[uid] = now.timeIntervalSince1970
+        UserDefaults.standard.set(hung, forKey: key)
+    }
+}
+
 /// Resumes a continuation exactly once, whichever of the work and its timeout
 /// finishes first.
 private final class ResumeOnce<T>: @unchecked Sendable {
@@ -416,7 +440,6 @@ final class AudioCaptureService {
     /// A healthy build takes well under a second, and a few seconds while
     /// CoreAudio churns through a device change. Longer is a deadlock.
     nonisolated private static let engineBuildTimeoutSeconds = 6.0
-    private let lifecycleLogger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
     private let logger = Logging.Logger(
         label: "agency.thatworks.WhiskerFlow.AudioCapture"
     )
@@ -435,6 +458,16 @@ final class AudioCaptureService {
     private var startGeneration = 0
     private var readyObserver: NSObjectProtocol?
     private var readyGeneration = 0
+    /// A background build for the next capture, until it becomes `ready` or a
+    /// press claims it.
+    private var preparation: Preparation?
+
+    private struct Preparation {
+        let selection: AudioInputSelection
+        let voiceProcessing: Bool
+        let generation: Int
+        let task: Task<PreparedCapture?, Never>
+    }
     private var configurationObserver: NSObjectProtocol?
     private var interruptionWatchdog: Task<Void, Never>?
     private var configurationObservationGate = AudioConfigurationObservationGate()
@@ -483,8 +516,18 @@ final class AudioCaptureService {
             throw AudioCaptureServiceError.deviceUnavailable
         }
 
-        let prepared = takeReadyCapture(selection: selection, deviceID: descriptor.transientID)
         let voiceProcessing = voiceProcessing
+        var prepared = takeReadyCapture(selection: selection, deviceID: descriptor.transientID)
+        if prepared == nil, let inFlight = claimPreparation(selection: selection) {
+            // A press soon after launch or a device change: use the engine
+            // being built. Building a second voice-processing unit while that
+            // one still initializes is what deadlocks AudioDSP.
+            prepared = await inFlight.value
+            if let claimed = prepared, claimed.deviceID != descriptor.transientID {
+                Self.retire(claimed)
+                prepared = nil
+            }
+        }
         let capture: PreparedCapture
         do {
             do {
@@ -495,10 +538,7 @@ final class AudioCaptureService {
                 // The stuck queue was abandoned and voice processing suspended;
                 // a plain engine on the fresh queue does not need AudioDSP.
                 logger.error("Capture engine build timed out")
-                lifecycleLogger.error("Capture engine build timed out", metadata: [
-                    "event": "capture_engine_timeout",
-                    "voice_processing": "\(voiceProcessing)"
-                ])
+                if voiceProcessing { VoiceProcessingHangRecord.record(descriptor.uid) }
                 capture = try await Self.makeCapture(
                     reusing: nil, selection: selection, descriptor: descriptor,
                     voiceProcessing: voiceProcessing)
@@ -620,29 +660,52 @@ final class AudioCaptureService {
     func prepareCapture(for selection: AudioInputSelection) {
         guard keepsCaptureReady, active == nil else { return }
         if let ready, ready.selection == selection, ready.requestedVoiceProcessing == voiceProcessing { return }
+        if let preparation, preparation.selection == selection,
+           preparation.voiceProcessing == voiceProcessing { return }
         discardReadyCapture()
         let generation = readyGeneration
         let voiceProcessing = voiceProcessing
-        let engineQueue = CaptureEngineQueue.shared.current
-        engineQueue.queue.async { [weak self] in
-            // Queued behind a build that wedged: building now would instantiate
-            // a unit next to the replacement queue's.
-            guard CaptureEngineQueue.shared.isCurrent(engineQueue.generation),
-                  let descriptor = CoreAudioDeviceCatalog.resolve(selection),
-                  let capture = try? Self.buildCapture(
-                    selection: selection, descriptor: descriptor, voiceProcessing: voiceProcessing)
-            else { return }
-            Task { @MainActor [weak self] in
-                // A press that raced this preparation built its own engine;
-                // the next one is prepared once that capture ends.
-                guard let self, self.readyGeneration == generation, self.ready == nil,
-                      self.active == nil else {
-                    Self.retire(capture)
-                    return
+        let task = Task.detached(priority: .userInitiated) { () -> PreparedCapture? in
+            guard let descriptor = CoreAudioDeviceCatalog.resolve(selection) else { return nil }
+            do {
+                return try await Self.onEngineQueue(
+                    timeout: Self.engineBuildTimeoutSeconds, discardLate: { Self.retire($0) }
+                ) {
+                    try Self.buildCapture(
+                        selection: selection, descriptor: descriptor, voiceProcessing: voiceProcessing)
                 }
-                self.adoptReadyCapture(capture)
+            } catch AudioCaptureServiceError.engineTimedOut {
+                if voiceProcessing { VoiceProcessingHangRecord.record(descriptor.uid) }
+                return nil
+            } catch {
+                return nil
             }
         }
+        preparation = Preparation(
+            selection: selection, voiceProcessing: voiceProcessing, generation: generation, task: task)
+        Task { @MainActor [weak self] in
+            let capture = await task.value
+            // Claimed by a press or discarded: that path owns the result.
+            guard let self, self.preparation?.generation == generation else {
+                if self == nil, let capture { Self.retire(capture) }
+                return
+            }
+            self.preparation = nil
+            guard let capture else { return }
+            guard self.ready == nil, self.active == nil else {
+                Self.retire(capture)
+                return
+            }
+            self.adoptReadyCapture(capture)
+        }
+    }
+
+    /// Takes over a matching build in flight; the caller owns its result.
+    private func claimPreparation(selection: AudioInputSelection) -> Task<PreparedCapture?, Never>? {
+        guard let preparation, preparation.selection == selection,
+              preparation.voiceProcessing == voiceProcessing else { return nil }
+        self.preparation = nil
+        return preparation.task
     }
 
     /// The device list changed: a prepared engine may point at stale hardware.
@@ -689,6 +752,10 @@ final class AudioCaptureService {
 
     private func discardReadyCapture() {
         readyGeneration &+= 1
+        if let preparation {
+            self.preparation = nil
+            Task { if let capture = await preparation.task.value { Self.retire(capture) } }
+        }
         removeReadyObserver()
         if let ready { Self.retire(ready) }
         ready = nil
@@ -708,7 +775,8 @@ final class AudioCaptureService {
         descriptor: AudioInputDescriptor,
         voiceProcessing: Bool
     ) throws -> PreparedCapture {
-        guard voiceProcessing, !CaptureEngineQueue.shared.voiceProcessingSuspended else {
+        guard voiceProcessing, !CaptureEngineQueue.shared.voiceProcessingSuspended,
+              !VoiceProcessingHangRecord.hung(descriptor.uid) else {
             return try buildCapture(selection: selection, descriptor: descriptor,
                                     enableVoiceProcessing: false, requested: voiceProcessing)
         }
@@ -941,6 +1009,8 @@ final class AudioCaptureService {
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
                 if once.resume(with: .failure(AudioCaptureServiceError.engineTimedOut)) {
                     CaptureEngineQueue.shared.abandon(engineQueue.generation)
+                    Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
+                        .error("Capture engine build timed out", metadata: ["event": "capture_engine_timeout"])
                 }
             }
         }
