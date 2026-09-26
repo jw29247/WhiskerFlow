@@ -5,6 +5,7 @@ import CoreAudio
 import Foundation
 import Logging
 import WhiskerFlowAppSupport
+import WhiskerFlowObjCSupport
 
 @MainActor
 final class AVCaptureMicrophoneAuthorizationProvider: MicrophoneAuthorizationProviding {
@@ -412,8 +413,15 @@ final class AudioCaptureService {
             capture = prepared
         } else {
             do {
-                capture = try Self.buildCapture(
-                    selection: selection, descriptor: descriptor, voiceProcessing: voiceProcessing)
+                // Build on the engine queue, after any preparation already in
+                // flight. Two voice-processing units instantiated at once
+                // deadlock inside AudioDSP (seen when push-to-talk raced a
+                // re-preparation while a Meet call reconfigured the mic).
+                let voiceProcessing = voiceProcessing
+                capture = try Self.engineQueue.sync {
+                    try Self.buildCapture(
+                        selection: selection, descriptor: descriptor, voiceProcessing: voiceProcessing)
+                }
             } catch AudioCaptureServiceError.deviceAssignmentFailed(let status) {
                 logger.error(
                     "Device assignment failed",
@@ -674,6 +682,12 @@ final class AudioCaptureService {
         let converterBox = AudioConverterBox(converter: converter)
         let sink = CaptureSink()
 
+        // A call app reconfiguring the shared microphone can change the
+        // hardware format after the query above; AVFAudio then raises an
+        // Objective-C exception, which would abort the app. Fail this build
+        // instead so the caller retries or falls back.
+        var tapError: NSError?
+        let tapInstalled = WFPerformCatchingObjCException({
         inputNode.installTap(onBus: 0, bufferSize: 1_600, format: inputFormat) { buffer, _ in
             guard let session = sink.current else { return }
             session.deliveredBuffers.add(1)
@@ -704,6 +718,14 @@ final class AudioCaptureService {
             } catch {
                 session.reportFailure(error, session.failures.increment())
             }
+        }
+        }, &tapError)
+        guard tapInstalled else {
+            Logging.Logger(label: "agency.thatworks.WhiskerFlow.AudioCapture")
+                .error("Microphone tap rejected a changing input format", metadata: [
+                "exception": "\(tapError?.userInfo["exceptionName"] ?? "unknown")"
+            ])
+            throw AudioCaptureServiceError.invalidInputFormat
         }
         engine.prepare()
         return PreparedCapture(

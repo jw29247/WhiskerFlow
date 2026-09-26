@@ -48,23 +48,8 @@ final class MeetingLocalReplayTests: XCTestCase {
             throw error
         }
         XCTAssertFalse(result.turns.isEmpty, "A recorded meeting needs transcript turns before delivery")
-        let evidence = try store.loadCaptionEvidence(sessionID: id)
-        print("LOCAL_REPLAY: caption_rows=\(evidence.count), caption_labels=\(Set(evidence.map(\.speaker)).count)")
         for turn in result.turns {
-            print("LOCAL_REPLAY_TIMING: start_ms=\(turn.startMs), end_ms=\(turn.endMs)")
-            let words = turn.text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
-            var best = 0.0
-            if words.count >= 3 {
-                for row in evidence {
-                    let candidate = row.text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
-                    guard candidate.count >= 3 else { continue }
-                    let shingles = Set((0...(candidate.count - 3)).map { candidate[$0..<($0 + 3)].joined(separator: " ") })
-                    var covered = Set<Int>()
-                    for i in 0...(words.count - 3) where shingles.contains(words[i..<(i + 3)].joined(separator: " ")) { covered.formUnion(i..<(i + 3)) }
-                    best = max(best, Double(covered.count) / Double(words.count))
-                }
-            }
-            print("LOCAL_REPLAY_MATCH: words=\(words.count), best_trigram_coverage=\(best), resolution=\(turn.speaker.resolution.rawValue)")
+            print("LOCAL_REPLAY_TIMING: start_ms=\(turn.startMs), end_ms=\(turn.endMs), resolution=\(turn.speaker.resolution.rawValue)")
         }
         let resolutions = Dictionary(grouping: result.turns, by: { $0.speaker.resolution.rawValue }).mapValues(\.count)
         let speakers = Set(result.turns.map { $0.speaker.key }).count

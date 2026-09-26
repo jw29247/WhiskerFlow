@@ -81,6 +81,9 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
 
     var onFailure: ((Error) -> Void)?
     var onActivity: ((MeetingActivityInput) -> Void)?
+    /// Normalised 16 kHz microphone samples, for the private coach's on-device
+    /// pace analysis. Never written anywhere by this hook.
+    var onMicrophoneSamples: (([Float]) -> Void)?
     /// Called once when a microphone that started unconfirmed delivers its
     /// first samples, for example a slow Bluetooth headset.
     var onMicrophoneConfirmed: (() -> Void)?
@@ -150,6 +153,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
           // after an interruption; a sample-count "start time" cannot reveal
           // a gap by itself.
           self.enqueueWrite(samples, track: .microphone)
+          self.onMicrophoneSamples?(samples)
           self.microphoneSampleCount += samples.count
           self.microphonePending.append(samples)
           self.mixAvailable()

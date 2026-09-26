@@ -99,14 +99,12 @@ private struct MeetingCoachHUDView: View {
             if controller.isCoachPaused {
                 Text("Coaching paused · recording continues").font(.caption)
             } else {
-                Text("Own-mic estimate: \(Int(controller.activity.ownMicActiveSeconds))s / \(Int(controller.activity.windowDurationSeconds))s")
-                    .font(.caption)
-                Text(MeetingCoachView.certaintyLabel(controller.activity.certainty))
-                    .font(.caption2).foregroundStyle(FlowStyle.muted)
-                if let prompt = controller.livePrompt {
-                    Text(prompt).font(.callout).fixedSize(horizontal: false, vertical: true)
-                    Button("Dismiss reminder") { controller.dismissPrompt() }.font(.caption)
+                MeetingCoachLiveMetrics(controller: controller, compact: true)
+                if controller.activity.certainty != .reliable {
+                    Text(MeetingCoachView.certaintyLabel(controller.activity.certainty))
+                        .font(.caption2).foregroundStyle(FlowStyle.muted)
                 }
+                MeetingCoachPromptView(controller: controller)
             }
             HStack {
                 Button(controller.isCoachPaused ? "Resume" : "Pause") { controller.isCoachPaused.toggle() }

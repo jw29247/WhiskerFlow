@@ -103,6 +103,9 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
     public let occurredAtMs: Int64?
     public var atlasMeetingID: String?
     public var atlasArtifactID: String?
+    /// Atlas's opaque `wm1_` reference, when Atlas returns one. Reading the
+    /// meeting back (`notetaker.getMeeting`) requires it.
+    public var atlasMeetingReference: String?
     public var state: MeetingLocalRecordingState
     public var durationMs: Int64?
     public var sourceGapDetected: Bool
@@ -149,7 +152,7 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionID, meetingID, createdAt, expectedChunkCounts, title, calendarEventID, occurredAtMs
-        case atlasMeetingID, atlasArtifactID
+        case atlasMeetingID, atlasArtifactID, atlasMeetingReference
         case state, durationMs, sourceGapDetected, chunks
         case deliveryFailureCount, awaitingManualRetry
     }
@@ -165,6 +168,7 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
         self.occurredAtMs = try container.decodeIfPresent(Int64.self, forKey: .occurredAtMs)
         self.atlasMeetingID = try container.decodeIfPresent(String.self, forKey: .atlasMeetingID)
         self.atlasArtifactID = try container.decodeIfPresent(String.self, forKey: .atlasArtifactID)
+        self.atlasMeetingReference = try container.decodeIfPresent(String.self, forKey: .atlasMeetingReference)
         self.state = try container.decodeIfPresent(MeetingLocalRecordingState.self, forKey: .state) ?? .recording
         self.durationMs = try container.decodeIfPresent(Int64.self, forKey: .durationMs)
         self.sourceGapDetected = try container.decodeIfPresent(Bool.self, forKey: .sourceGapDetected) ?? false
@@ -233,9 +237,10 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
         }
     }
 
-    public mutating func attachAtlasReferences(meetingID: String, artifactID: String) {
+    public mutating func attachAtlasReferences(meetingID: String, artifactID: String, meetingReference: String? = nil) {
         atlasMeetingID = meetingID
         atlasArtifactID = artifactID
+        if let meetingReference { atlasMeetingReference = meetingReference }
     }
 }
 

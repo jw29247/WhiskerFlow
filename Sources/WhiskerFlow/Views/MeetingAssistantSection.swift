@@ -11,6 +11,7 @@ MeetingCoachView(controller: appState.meetingAssistant,
         await appState.assistant.requestCoach(phase: "postmeeting", goal: appState.meetingAssistant.goal,
             meetingReference: appState.meetingAssistant.latestFinalizedMeetingReference)
     })
+MeetingCoachInsightsSection(appState: appState)
 Toggle("Use Atlas AI for preparation and reviews I request", isOn: Binding(
     get: { appState.assistant.saved.cloudEnabled }, set: { appState.assistant.setCloudEnabled($0) }))
     .font(.callout).disabled(appState.assistant.busy)

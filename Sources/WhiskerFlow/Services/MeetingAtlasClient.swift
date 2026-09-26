@@ -2,6 +2,13 @@ import CryptoKit
 import Foundation
 import WhiskerFlowAppSupport
 
+struct MeetingAtlasCreatedMeeting: Sendable {
+    let meetingID: String
+    let created: Bool
+    /// Atlas's opaque `wm1_` reference, if the response carries one.
+    var meetingReference: String? = nil
+}
+
 struct MeetingAtlasRecordingCompletion: Sendable {
     let status: String
     let duplicate: Bool
@@ -21,7 +28,7 @@ protocol MeetingAtlasClient: Sendable {
         title: String,
         occurredAtMs: Int64,
         eventID: String?
-    ) async throws -> (meetingID: String, created: Bool)
+    ) async throws -> MeetingAtlasCreatedMeeting
     func prepareRecording(
         meetingID: String,
         captureSessionID: UUID,
@@ -60,9 +67,13 @@ protocol MeetingAtlasClient: Sendable {
         transcriptionState: String,
         status: String
     ) async throws
+    /// Atlas-generated notes for a delivered meeting (`notetaker.getMeeting`).
+    func meetingInsights(meetingReference: String) async throws -> AtlasMeetingInsights?
 }
 
 extension MeetingAtlasClient {
+    func meetingInsights(meetingReference: String) async throws -> AtlasMeetingInsights? { nil }
+
     func appendSegments(meetingID: String, artifactID: String, turns: [MeetingSpeakerTurn]) async throws {
         try await appendSegments(meetingID: meetingID, turns: turns)
     }
@@ -134,7 +145,7 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
         _ = try await call(tool: "notetaker.heartbeat", args: args)
     }
 
-    func createMeeting(captureSessionID: UUID, title: String, occurredAtMs: Int64, eventID: String?) async throws -> (meetingID: String, created: Bool) {
+    func createMeeting(captureSessionID: UUID, title: String, occurredAtMs: Int64, eventID: String?) async throws -> MeetingAtlasCreatedMeeting {
         var args: [String: Any] = [
             "externalRef": "create-\(captureSessionID.uuidString)",
             "captureSessionId": captureSessionID.uuidString,
@@ -150,7 +161,22 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
         guard let row = response as? [String: Any], let meetingID = row["meetingId"] as? String else {
             throw MeetingAtlasClientError.invalidResponse
         }
-        return (meetingID, row["created"] as? Bool ?? false)
+        let reference = row["meetingReference"] as? String
+        return MeetingAtlasCreatedMeeting(
+            meetingID: meetingID,
+            created: row["created"] as? Bool ?? false,
+            meetingReference: AtlasDeviceMeetingReference.isValid(reference) ? reference : nil
+        )
+    }
+
+    func meetingInsights(meetingReference: String) async throws -> AtlasMeetingInsights? {
+        guard AtlasDeviceMeetingReference.isValid(meetingReference) else { return nil }
+        // One transcript row keeps the read small; only the notes are used.
+        let value = try await call(
+            tool: "notetaker.getMeeting",
+            args: ["contractVersion": 1, "meetingId": meetingReference, "transcriptLimit": 1]
+        )
+        return AtlasMeetingInsights.parse(getMeetingValue: value, fetchedAt: Date())
     }
 
     func prepareRecording(

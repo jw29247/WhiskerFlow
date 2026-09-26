@@ -53,6 +53,17 @@ final class AppSettings {
     /// token returned after Clerk sign-in remains in Keychain.
     var atlasBaseURL: String { Self.atlasProductionURL }
     var meetingModeEnabled: Bool { didSet { defaults.set(meetingModeEnabled, forKey: Keys.meetingModeEnabled) } }
+    /// Show "Record this meeting?" when a call starts in a call app or browser.
+    var askToRecordCalls: Bool { didSet { defaults.set(askToRecordCalls, forKey: Keys.askToRecordCalls) } }
+    /// Speaking pace from on-device transcription of your microphone while coaching.
+    var coachLiveAnalysis: Bool { didSet { defaults.set(coachLiveAnalysis, forKey: Keys.coachLiveAnalysis) } }
+    /// Experimental on-device AI coaching suggestions. On by default; they run
+    /// only where Apple's on-device model is available.
+    var coachAISuggestions: Bool { didSet { defaults.set(coachAISuggestions, forKey: Keys.coachAISuggestions) } }
+    /// How long delivered meeting transcripts stay in the library on this Mac.
+    var meetingTranscriptRetention: MeetingTranscriptRetention {
+        didSet { defaults.set(meetingTranscriptRetention.rawValue, forKey: Keys.meetingTranscriptRetention) }
+    }
 
     /// Keychain reads are synchronous securityd IPC, and this token is read on
     /// every hotkey press and in several view bodies. Only this setter writes
@@ -177,6 +188,11 @@ final class AppSettings {
         // begin recording or download the large local meeting model until the
         // user pairs a device and explicitly enables it.
         meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? false
+        askToRecordCalls = defaults.object(forKey: Keys.askToRecordCalls) as? Bool ?? true
+        coachLiveAnalysis = defaults.object(forKey: Keys.coachLiveAnalysis) as? Bool ?? true
+        coachAISuggestions = defaults.object(forKey: Keys.coachAISuggestions) as? Bool ?? true
+        meetingTranscriptRetention = defaults.string(forKey: Keys.meetingTranscriptRetention)
+            .flatMap(MeetingTranscriptRetention.init(rawValue:)) ?? .defaultValue
         legacySelectedDeviceID = defaults.string(forKey: Keys.selectedDeviceID)
         launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
         defaults.removeObject(forKey: Keys.sharedVocabularyURL)
@@ -322,6 +338,10 @@ final class AppSettings {
         static let launchAtLogin = "launchAtLogin"
         static let atlasBaseURL = "atlasBaseURL"
         static let meetingModeEnabled = "meetingModeEnabled"
+        static let meetingTranscriptRetention = "meetingTranscriptRetention"
+        static let askToRecordCalls = "askToRecordCalls"
+        static let coachLiveAnalysis = "coachLiveAnalysis"
+        static let coachAISuggestions = "coachAISuggestions"
         static let cachedMeetingSchedule = "cachedMeetingSchedule"
     }
 }

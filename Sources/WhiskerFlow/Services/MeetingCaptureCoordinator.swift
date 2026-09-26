@@ -1,7 +1,9 @@
 import AppKit
+import AVFoundation
 import CoreGraphics
 import CryptoKit
 import Foundation
+import Logging
 import Observation
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
@@ -27,7 +29,18 @@ enum MeetingMenuBarStatus: String, Sendable {
 @MainActor
 @Observable
 final class MeetingCaptureCoordinator {
-  let assistant = MeetingAssistantController()
+  let assistant: MeetingAssistantController
+  /// Past and in-progress meetings kept on this Mac.
+  let library: MeetingLibraryController
+  /// Notices calls in call apps and browsers, to ask whether to record them.
+  let callDetector: CallDetectionService
+  /// The "Record this meeting?" question currently shown, if any.
+  private(set) var callPrompt: DetectedCallPrompt?
+  /// Calls already asked about; each call is asked about once.
+  private var promptedCallIDs: Set<String> = []
+  /// The call a prompt-started recording follows: it stops when the call ends.
+  private var activeDetectedCallID: String?
+  private var speechSampler: MeetingCoachSpeechSampler?
   private static let schedulePollSeconds: UInt64 = 60
   private static let scheduleWindowMs: Int64 = 7 * 24 * 60 * 60 * 1_000
   private static let preArmWindowMs: Int64 = 2 * 60 * 1_000
@@ -69,6 +82,8 @@ final class MeetingCaptureCoordinator {
   private var finishingCaptureTask: Task<Void, Error>?
   private var activeIntent: AtlasCaptureScheduleIntent?
   private var activeSessionID: UUID?
+  /// Wall-clock start of the active capture's timeline (chunk 0), in ms.
+  private var activeCaptureStartedAtMs: Int64?
   /// The newest capture owns user-visible delivery status even after its audio
   /// stream stops. Older recovery work may finish later, but must not replace
   /// that capture's progress or result.
@@ -114,6 +129,9 @@ final class MeetingCaptureCoordinator {
     transcription: TranscriptionService,
     store: EncryptedMeetingChunkStore? = nil,
     clientProvider: (() -> (any MeetingAtlasClient)?)? = nil,
+    library: MeetingLibraryController? = nil,
+    assistant: MeetingAssistantController? = nil,
+    callDetector: CallDetectionService? = nil,
     joinedMeetingProvider: (@Sendable (String?) async -> Bool)? = nil,
     tokenReader: @escaping @Sendable () -> String? = { MeetingCaptureTokenStore().read() },
     diskStateReader: @escaping @Sendable () -> String = { MeetingCaptureCoordinator.readLocalDiskState() }
@@ -125,12 +143,25 @@ final class MeetingCaptureCoordinator {
     self.joinedMeetingProvider = joinedMeetingProvider
     self.tokenReader = tokenReader
     self.diskStateReader = diskStateReader
+    // An injected chunk store is a test fixture: never touch the user's library.
+    self.library = library ?? (store == nil ? .production() : .ephemeral())
+    // An injected store is a test fixture: keep its coach state out of the
+    // user's private assistant file too.
+    self.assistant = assistant ?? (store == nil ? MeetingAssistantController() : MeetingAssistantController(
+      rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("WhiskerFlowAssistant-\(UUID().uuidString)")))
+    self.callDetector = callDetector ?? CallDetectionService()
     let root = StorageLocations.applicationSupportRootOrTemporary()
       .appendingPathComponent("MeetingRecordings", isDirectory: true)
     self.store = store ?? EncryptedMeetingChunkStore(
       rootURL: root,
       keyProvider: KeychainMeetingChunkKeyProvider()
     )
+    // Your words for pace and suggestions come from the dictation model's
+    // background preview path, which yields to any real dictation.
+    speechSampler = MeetingCoachSpeechSampler(assistant: self.assistant) { [transcription] samples in
+      await transcription.previewDictation(samples: samples, kind: .parakeetTDTv3, language: nil)
+    }
+    self.callDetector.onEvent = { [weak self] event in self?.handleCallEvent(event) }
   }
 
   var isBusy: Bool {
@@ -148,6 +179,8 @@ final class MeetingCaptureCoordinator {
   func start() {
     guard !didStart else { return }
     didStart = true
+    library.load()
+    updateCallDetection()
     recoveryTask = Task { @MainActor [weak self] in
       await self?.recoverLocalSessions()
     }
@@ -223,8 +256,135 @@ final class MeetingCaptureCoordinator {
     }
   }
 
+  /// Retry pressed on one meeting in the library.
+  func retryRecording(sessionID: UUID) {
+    guard sessionID != activeSessionID else { return }
+    guard activeSessionID == nil, !captureTransitionInProgress, uploadTask == nil, deliveringSessions.isEmpty else {
+      retryPendingRecordings()
+      return
+    }
+    let store = self.store
+    retryBackoff.succeeded(sessionID)
+    heldSessionIDs.remove(sessionID)
+    library.setStatus(sessionID, .queued, detail: "Retrying…")
+    _ = startRecoveryOperation { [weak self] in
+      _ = try? await Task.detached(priority: .utility) { try store.releaseManualRetryHold(sessionID: sessionID) }.value
+      await self?.deliver(sessionID: sessionID)
+    }
+  }
+
+  // MARK: Notes and dictation during a recording
+
+  var activeCaptureSessionID: UUID? { activeSessionID }
+
+  /// Elapsed time on the recording's timeline, matching transcript turns.
+  var activeCaptureElapsedMs: Int64? {
+    activeCaptureStartedAtMs.map { max(0, Self.nowMs() - $0) }
+  }
+
+  @discardableResult
+  func addNote(_ text: String) throws -> MeetingLibraryNote {
+    guard let sessionID = activeSessionID, let elapsed = activeCaptureElapsedMs else {
+      throw MeetingLibraryError.notRecording
+    }
+    return try library.addNote(sessionID: sessionID, text: text, elapsedMs: elapsed)
+  }
+
+  /// Push-to-talk began while this meeting records. The microphone is
+  /// shared: the meeting keeps recording and the transcript marks the span.
+  func dictationStarted() {
+    guard let sessionID = activeSessionID, let elapsed = activeCaptureElapsedMs else { return }
+    library.beginDictation(sessionID: sessionID, atMs: elapsed)
+  }
+
+  func dictationEnded() {
+    guard let sessionID = activeSessionID, let elapsed = activeCaptureElapsedMs else { return }
+    library.endDictation(sessionID: sessionID, atMs: elapsed)
+  }
+
+  /// Reads Atlas's generated notes for a delivered meeting. Atlas answers
+  /// only for its opaque `wm1_` device reference.
+  func refreshAtlasInsights(sessionID: UUID) async -> Bool {
+    guard let entry = library.entry(sessionID),
+          AtlasDeviceMeetingReference.isValid(entry.atlasMeetingReference),
+          let reference = entry.atlasMeetingReference,
+          let client = await atlasClient() else { return false }
+    do {
+      guard let insights = try await client.meetingInsights(meetingReference: reference) else { return false }
+      library.setInsights(sessionID, insights)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  nonisolated static func nowMs() -> Int64 { Int64((Date().timeIntervalSince1970 * 1_000).rounded()) }
+
   func refreshConfiguration() {
+    updateCallDetection()
     Task { @MainActor [weak self] in await self?.updateUnpairedStatus() }
+  }
+
+  // MARK: Detected calls
+
+  private func updateCallDetection() {
+    guard didStart else { return }
+    if settings.askToRecordCalls && Self.isSupportedMac {
+      callDetector.start()
+    } else {
+      callDetector.stop()
+      callPrompt = nil
+      promptedCallIDs.removeAll()
+    }
+  }
+
+  func handleCallEvent(_ event: CallSessionTracker.Event) {
+    switch event {
+    case .started(let call):
+      lifecycleLog("call_detected", platform: call.platform)
+      guard settings.askToRecordCalls, activeSessionID == nil, !captureTransitionInProgress,
+            canRecordDetectedCall(), promptedCallIDs.insert(call.id).inserted else { return }
+      let now = Self.nowMs()
+      let intents = scheduleIntents.isEmpty ? cachedSchedule(now: now) : scheduleIntents
+      let intent = CallCalendarMatcher.match(call, intents: intents, nowMs: now)
+      callPrompt = DetectedCallPrompt(call: call, intent: intent)
+    case .ended(let call):
+      lifecycleLog("call_ended", platform: call.platform)
+      promptedCallIDs.remove(call.id)
+      if callPrompt?.call.id == call.id { callPrompt = nil }
+      if activeDetectedCallID == call.id, activeSessionID != nil, !captureTransitionInProgress {
+        Task { @MainActor [weak self] in await self?.stopCapture() }
+      }
+    }
+  }
+
+  /// Asking is pointless if Record would fail: the microphone and Mac-audio
+  /// grants must already be in place. Tests inject this.
+  var canRecordDetectedCall: () -> Bool = {
+    CGPreflightScreenCaptureAccess() && AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+  }
+
+  /// "Record" on the prompt.
+  func acceptCallPrompt() {
+    guard let prompt = callPrompt else { return }
+    callPrompt = nil
+    guard activeSessionID == nil, !captureTransitionInProgress else { return }
+    if let intent = prompt.intent { suppressedEvents.release(eventID: intent.eventID) }
+    Task { @MainActor [weak self] in await self?.startCapture(intent: prompt.intent, detectedCall: prompt.call) }
+  }
+
+  /// "Not now": this call isn't asked about again.
+  func declineCallPrompt() {
+    callPrompt = nil
+  }
+
+  #if DEBUG
+  func showCallPromptForPreview(_ prompt: DetectedCallPrompt) { callPrompt = prompt }
+  #endif
+
+  private func lifecycleLog(_ event: String, platform: CallPlatform) {
+    // Fixed vocabulary only: never a window title, meeting code or name.
+    Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle").info("Call detection", metadata: ["event": "\(event)", "platform": "\(platform.rawValue)"])
   }
 
   private func scheduleLoop() async {
@@ -419,7 +579,7 @@ final class MeetingCaptureCoordinator {
     await stopCapture()
   }
 
-  private func startCapture(intent: AtlasCaptureScheduleIntent?) async {
+  private func startCapture(intent: AtlasCaptureScheduleIntent?, detectedCall: DetectedCall? = nil) async {
     guard Self.isSupportedMac else {
       status = .uncovered
       statusDetail = "Meeting Mode requires an Apple Silicon Mac."
@@ -465,6 +625,8 @@ final class MeetingCaptureCoordinator {
     prioritizeFreshCaptureOverRecovery()
 
     let sessionID = UUID()
+    callPrompt = nil
+    let captureTitle = intent?.title ?? detectedCall.map { "\($0.platform.displayName) call" } ?? "Ad hoc meeting"
     do {
       _ = try store.beginSession(
         sessionID: sessionID,
@@ -474,7 +636,7 @@ final class MeetingCaptureCoordinator {
           .system: Self.forecastChunkCount,
           .mixed: Self.forecastChunkCount,
         ],
-        title: intent?.title ?? "Ad hoc meeting",
+        title: captureTitle,
         calendarEventID: intent?.eventID,
         occurredAtMs: intent?.startMs ?? Int64(Date().timeIntervalSince1970 * 1_000)
       )
@@ -482,6 +644,8 @@ final class MeetingCaptureCoordinator {
       capture.onActivity = { [weak assistant] input in
         assistant?.recordActivity(input)
       }
+      speechSampler?.reset()
+      capture.onMicrophoneSamples = { [weak self] samples in self?.speechSampler?.append(samples) }
       capture.onFailure = { [weak self] error in
         Task { @MainActor [weak self] in
           guard let self, self.canPublishStatus(for: sessionID) else { return }
@@ -503,15 +667,24 @@ final class MeetingCaptureCoordinator {
         guard let self, self.speakerDetectionDetail != detail else { return }
         self.speakerDetectionDetail = detail
       }
-      speakerCapture.start(sessionID: sessionID, startMs: capture.captureStartedAtMs ?? Int64(Date().timeIntervalSince1970 * 1000), store: store, expectedMeetingURL: intent?.meetingURL)
+      let expectedMeetingURL = intent?.meetingURL ?? detectedCall?.meetingCode.map { "https://meet.google.com/\($0)" }
+      speakerCapture.start(sessionID: sessionID, startMs: capture.captureStartedAtMs ?? Int64(Date().timeIntervalSince1970 * 1000), store: store, expectedMeetingURL: expectedMeetingURL)
       self.audioCapture = capture
       self.activeSessionID = sessionID
       self.statusOwnerSessionID = sessionID
       self.activeIntent = intent
       self.activeOverlapDetected = intent?.overlapsPrevious ?? false
-      self.activeMeetingTitle = intent?.title ?? "Ad hoc meeting"
+      self.activeMeetingTitle = captureTitle
+      self.activeDetectedCallID = detectedCall?.id
       assistant.begin(sessionID: sessionID, title: self.activeMeetingTitle ?? "Ad hoc meeting",
                       scheduledEndAt: intent.map { Date(timeIntervalSince1970: Double($0.endMs) / 1_000) })
+      let timelineStartMs = capture.captureStartedAtMs ?? Self.nowMs()
+      activeCaptureStartedAtMs = timelineStartMs
+      library.beginRecording(
+        sessionID: sessionID, title: self.activeMeetingTitle ?? "Ad hoc meeting",
+        startedAt: Date(timeIntervalSince1970: Double(timelineStartMs) / 1_000),
+        calendarEventID: intent?.eventID
+      )
       lastFailureCode = nil
       if activeOverlapDetected {
         status = .attention
@@ -524,7 +697,9 @@ final class MeetingCaptureCoordinator {
         statusDetail = intent == nil ? "Recording ad hoc meeting." : "Recording scheduled meeting."
       }
 
-      if let endMs = intent?.endMs {
+      // A recording that follows a detected call stops when the call ends,
+      // not at the calendar event's end.
+      if detectedCall == nil, let endMs = intent?.endMs {
         scheduleCaptureStop(atMs: endMs + Self.stopGraceMs)
       } else {
         activeCaptureStopAtMs = nil
@@ -612,9 +787,20 @@ final class MeetingCaptureCoordinator {
     activeSessionID = nil
     audioCapture = nil
     activeIntent = nil
+    activeDetectedCallID = nil
+    capture.onMicrophoneSamples = nil
+    speechSampler?.reset()
     status = .uploading
     statusDetail = "Finishing local recording and transcription."
+    let endedAtMs = activeCaptureStartedAtMs.map { max(0, Self.nowMs() - $0) } ?? 0
+    activeCaptureStartedAtMs = nil
     assistant.end(sessionID: sessionID)
+    library.finishRecording(
+      sessionID, endedAtMs: endedAtMs,
+      coachRecap: assistant.localSummary(for: sessionID),
+      bookmarks: assistant.libraryBookmarks(for: sessionID),
+      coachSummary: assistant.coachSummary(for: sessionID)
+    )
 
     let store = self.store
     let speakerCapture = self.speakerCapture
@@ -633,6 +819,7 @@ final class MeetingCaptureCoordinator {
         // it keeps reading Chrome's AX tree for a dead session.
         await speakerCapture.stop()
         try? store.markState(sessionID: sessionID, state: .failed)
+        self?.library.setStatus(sessionID, .failed, detail: "The recording couldn’t be finished. The audio already written is kept on this Mac.")
         throw error
       }
       await speakerCapture.stop()
@@ -645,6 +832,7 @@ final class MeetingCaptureCoordinator {
           durationMs: durationMs,
           sourceGapDetected: capture.sourceGapDetected
         )
+        self?.library.setDuration(sessionID, durationMs: durationMs)
       } catch {
         try? store.markState(sessionID: sessionID, state: .failed)
         throw error
@@ -661,6 +849,7 @@ final class MeetingCaptureCoordinator {
     deliveringSessions.insert(sessionID)
     defer { deliveringSessions.remove(sessionID) }
     guard let client = await atlasClient() else {
+      library.setStatus(sessionID, .queued, detail: "Saved on this Mac. Connect Atlas to send it.")
       if canPublishStatus(for: sessionID) {
         status = .attention
         statusDetail = "Recording is saved on this Mac. Connect Atlas to send it."
@@ -670,6 +859,7 @@ final class MeetingCaptureCoordinator {
     }
     do {
       let delivery = MeetingDelivery(store: store, client: client)
+      let library = self.library
       let completion = try await delivery.deliver(sessionID: sessionID) {
         try self.store.markState(sessionID: sessionID, state: .awaitingTranscription)
         let processor = MeetingLocalProcessor(transcription: self.transcription)
@@ -679,6 +869,20 @@ final class MeetingCaptureCoordinator {
           self.status = .uploading
           self.statusDetail = detail
         }
+      } stage: { stage in
+        switch stage {
+        case .uploadingRecording:
+          library.setStatus(sessionID, .uploading, detail: "Sending the encrypted recording to Atlas.")
+        case .transcribing:
+          library.setStatus(sessionID, .transcribing, detail: "Making the transcript on this Mac.")
+        case .sendingTranscript:
+          library.setStatus(sessionID, .uploading, detail: "Sending the transcript to Atlas.")
+        }
+      } transcriptReady: { result in
+        library.recordTranscript(
+          sessionID, turns: result.turns,
+          untranscribedAudibleWindowCount: result.untranscribedAudibleWindowCount ?? 0
+        )
       }
       if canPublishStatus(for: sessionID) {
         let covered = completion.status == "recorded_pending_transcription" || completion.status == "covered"
@@ -697,11 +901,27 @@ final class MeetingCaptureCoordinator {
           durationMilliseconds: completedManifest.durationMs ?? 0
         )
       }
+      // Keep the transcript before the audio and checkpoint are removed.
+      let bookmarks = assistant.libraryBookmarks(for: sessionID)
+      library.markDelivered(
+        sessionID, atlasMeetingID: completedManifest.atlasMeetingID,
+        atlasMeetingReference: completedManifest.atlasMeetingReference,
+        bookmarks: bookmarks.isEmpty ? nil : bookmarks
+      )
+      if let meetingReference = completedManifest.atlasMeetingID {
+        await library.syncNotes(
+          sessionID: sessionID, meetingReference: meetingReference,
+          durationMs: completedManifest.durationMs
+        )
+      }
+      await library.flush()
       try store.removeSession(sessionID: sessionID)
       heldSessionIDs.remove(sessionID)
       retryBackoff.succeeded(sessionID)
+      library.applyRetention()
     } catch {
       if Task.isCancelled || error is CancellationError {
+        library.setStatus(sessionID, .queued, detail: "Paused for a new recording. It will resume automatically.")
         try? store.markState(sessionID: sessionID, state: .awaitingTranscription)
         scheduleUploadRetry()
         return
@@ -715,6 +935,13 @@ final class MeetingCaptureCoordinator {
         maximumAttempts: MeetingDeliveryFailurePolicy.maximumAutomaticAttempts
       )) ?? false
       if held { heldSessionIDs.insert(sessionID) }
+      library.setStatus(
+        sessionID, held ? .failed : .queued,
+        detail: held
+          ? "Couldn’t be processed. \(error.localizedDescription) Choose Retry to try again."
+          : "\(error.localizedDescription) It will retry automatically.",
+        awaitingManualRetry: held
+      )
       if canPublishStatus(for: sessionID) {
         lastFailureCode = "meeting_delivery"
         status = .attention
@@ -829,6 +1056,10 @@ final class MeetingCaptureCoordinator {
       worker.cancel()
     }
     heldSessionIDs = Set(sessions.filter { !$0.chunks.isEmpty && $0.awaitingManualRetry }.map(\.sessionID))
+    // Reconciling before the stored library is loaded would replace saved
+    // transcripts with empty entries.
+    await library.waitUntilLoaded()
+    library.reconcile(retained: sessions, activeSessionID: activeSessionID, delivering: deliveringSessions)
     return sessions
   }
 
@@ -1134,4 +1365,13 @@ private final class MeetingShutdownGate: @unchecked Sendable {
     lock.unlock()
     continuation.resume(returning: value)
   }
+}
+
+/// A call WhiskerFlow noticed, and the calendar event it matches, if any.
+struct DetectedCallPrompt: Equatable, Identifiable {
+  let call: DetectedCall
+  let intent: AtlasCaptureScheduleIntent?
+  var id: String { call.id }
+
+  var title: String { intent?.title ?? "\(call.platform.displayName) call" }
 }

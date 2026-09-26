@@ -3,6 +3,13 @@ import Foundation
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
+/// Delivery phases shown in the meeting library.
+enum MeetingDeliveryStage: Equatable, Sendable {
+  case uploadingRecording
+  case transcribing
+  case sendingTranscript
+}
+
 /// Delivers durable audio before loading local models. Transcript retries reuse
 /// an encrypted checkpoint so an Atlas outage cannot trigger transcription again.
 @MainActor
@@ -13,7 +20,9 @@ struct MeetingDelivery {
   func deliver(
     sessionID: UUID,
     process: () async throws -> MeetingLocalProcessingResult,
-    progress: (String) -> Void
+    progress: (String) -> Void,
+    stage: (MeetingDeliveryStage) -> Void = { _ in },
+    transcriptReady: (MeetingLocalProcessingResult) -> Void = { _ in }
   ) async throws -> MeetingAtlasRecordingCompletion {
     let store = self.store
     let (manifest, hash) = try await Self.offMain {
@@ -27,12 +36,14 @@ struct MeetingDelivery {
        saved.artifactID == manifest.atlasArtifactID {
       receipt = saved
     } else {
+      stage(.uploadingRecording)
       receipt = try await uploadRecording(sessionID: sessionID, progress: progress)
     }
     // Playback is a convenience copy. Its failure must not hold back local
     // transcription; the transcript is checkpointed and playback resumes.
     var playbackFailure: Error?
     if !receipt.isPlaybackComplete {
+      stage(.uploadingRecording)
       do {
         receipt = try await uploadPlayback(sessionID: sessionID, receipt: receipt)
       } catch {
@@ -48,10 +59,13 @@ struct MeetingDelivery {
       } else {
         // A resumable partial or unreadable checkpoint is not a transcript.
         // The durable source audio can always be processed again.
+        stage(.transcribing)
         result = try await process()
         try store.writeProcessingCheckpoint(sessionID: sessionID, data: JSONEncoder().encode(result))
       }
+      transcriptReady(result)
       if let playbackFailure { throw playbackFailure }
+      stage(.sendingTranscript)
       progress("Sending transcript to Atlas…")
       // No detected speech is a terminal, checkpointed outcome: finalize it so
       // a silent recording is not re-transcribed on every retry.
@@ -159,7 +173,8 @@ struct MeetingDelivery {
         try store.attachAtlasReferences(
           sessionID: sessionID,
           meetingID: created.meetingID,
-          artifactID: artifactID
+          artifactID: artifactID,
+          meetingReference: created.meetingReference
         )
         manifest = try store.loadManifest(sessionID: sessionID)
       }

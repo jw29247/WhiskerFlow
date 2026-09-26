@@ -147,6 +147,7 @@ final class AppState {
     static let quickCaptureShortcut = KeyCombo(keyCode: 45, modifiers: [.command, .option, .shift])
     static let bookmarkShortcut = KeyCombo(keyCode: 11, modifiers: [.command, .option, .shift])
     private var meetingCoachHUD: MeetingCoachHUDController?
+    private var callPromptHUD: CallPromptHUDController?
     private var hudController: RecordingHUDController?
     private var audioDeviceMonitor: AudioDeviceChangeMonitor?
     private var deviceRefreshTask: Task<Void, Never>?
@@ -222,15 +223,23 @@ final class AppState {
         self.meetingCapture = MeetingCaptureCoordinator(
             settings: resolvedSettings,
             microphonePermission: resolvedMicrophonePermission,
-            transcription: transcription
+            transcription: transcription,
+            // Tests and the UI preview must never read or write the user's meetings.
+            library: store == nil && !UIPreview.isEnabled ? .production() : .ephemeral(),
+            assistant: store == nil && !UIPreview.isEnabled ? nil : MeetingAssistantController(
+                rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("WhiskerFlowAssistant-\(UUID().uuidString)"))
         )
         self.live = LiveDictationSession(transcription: transcription)
         var defaultPasteService = PasteService()
         defaultPasteService.correctionMonitor = correctionMonitor
         self.pasteService = pasteService ?? defaultPasteService
-        if store == nil && !UIPreview.isEnabled {
+        if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "coach" {
             meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant)
         }
+        if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "call-prompt" {
+            callPromptHUD = CallPromptHUDController(appState: self)
+        }
+        applyCoachSettings()
         // Until the Keychain proves otherwise, the account is the one the
         // assistant state was last saved for.
         atlasAccountIdentity = assistant.saved.accountIdentity
@@ -251,6 +260,11 @@ final class AppState {
             let row = try await self.assistant.call("addBookmark", args)
             guard let reference = row["bookmarkReference"] as? String else { throw AssistantError.message("Atlas returned an invalid bookmark receipt.") }
             return reference
+        }
+        // Atlas has no note tool: typed notes travel as labelled bookmarks.
+        meetingCapture.library.noteSync = meetingCapture.assistant.bookmarkSync
+        meetingCapture.library.retention = { [weak resolvedSettings] in
+            resolvedSettings?.meetingTranscriptRetention ?? .defaultValue
         }
         correctionMonitor.isEnabled = { [weak self] in
             guard let self else { return false }
@@ -345,6 +359,89 @@ final class AppState {
     guard !UIPreview.isEnabled, let id = meetingCapture.lastAtlasMeetingID,
           let base = URL(string: settings.atlasBaseURL) else { return nil }
     return base.appendingPathComponent("meetings").appendingPathComponent(id)
+  }
+
+  var meetingLibrary: MeetingLibraryController { meetingCapture.library }
+  var activeMeetingSessionID: UUID? {
+    UIPreview.isEnabled ? (UIPreview.isRecordingMeeting ? UIPreview.recordingSessionID : nil) : meetingCapture.activeCaptureSessionID
+  }
+  var activeMeetingElapsedMs: Int64? { UIPreview.isEnabled ? 7 * 60_000 : meetingCapture.activeCaptureElapsedMs }
+
+  func atlasMeetingURL(for entry: MeetingLibraryEntry) -> URL? {
+    guard let id = entry.atlasMeetingID, let base = URL(string: settings.atlasBaseURL) else { return nil }
+    return base.appendingPathComponent("meetings").appendingPathComponent(id)
+  }
+
+  func addMeetingNote(_ text: String) throws -> MeetingLibraryNote {
+    try meetingCapture.addNote(text)
+  }
+
+  // MARK: Detected calls and coaching
+
+  var callPrompt: DetectedCallPrompt? { meetingCapture.callPrompt }
+
+  #if DEBUG
+  func showCallPromptForPreview() {
+    let call = DetectedCall(platform: .googleMeet, appBundleID: "com.google.Chrome", isBrowser: true, meetingCode: "abc-defg-hij")
+    let now = Int64(Date().timeIntervalSince1970 * 1_000)
+    let intent = AtlasCaptureScheduleIntent(eventID: "preview", title: "Weekly design sync", startMs: now - 60_000,
+                                            endMs: now + 1_800_000, meetingURL: "https://meet.google.com/abc-defg-hij",
+                                            location: nil, existingMeetingID: nil, overlapsPrevious: false)
+    meetingCapture.showCallPromptForPreview(DetectedCallPrompt(call: call, intent: intent))
+  }
+  #endif
+
+  func acceptCallPrompt() {
+    guard !UIPreview.isEnabled else { meetingCapture.declineCallPrompt(); return }
+    meetingCapture.acceptCallPrompt()
+  }
+
+  func declineCallPrompt() { meetingCapture.declineCallPrompt() }
+
+  func setAskToRecordCalls(_ enabled: Bool) {
+    settings.askToRecordCalls = enabled
+    meetingCapture.refreshConfiguration()
+  }
+
+  var isOnDeviceCoachModelAvailable: Bool { OnDeviceCoachModel.isAvailable }
+  var onDeviceCoachModelUnavailableReason: String { OnDeviceCoachModel.unavailableReason }
+
+  func setCoachLiveAnalysis(_ enabled: Bool) {
+    settings.coachLiveAnalysis = enabled
+    applyCoachSettings()
+  }
+
+  func setCoachAISuggestions(_ enabled: Bool) {
+    settings.coachAISuggestions = enabled
+    applyCoachSettings()
+  }
+
+  private func applyCoachSettings() {
+    let assistant = meetingCapture.assistant
+    assistant.isLiveAnalysisEnabled = settings.coachLiveAnalysis
+    let suggestions = settings.coachAISuggestions && OnDeviceCoachModel.isAvailable
+    if suggestions, assistant.suggester == nil { assistant.suggester = OnDeviceCoachModel.makeSuggester() }
+    assistant.isAISuggestionsEnabled = suggestions
+  }
+
+  var meetingCoachTrends: MeetingCoachTrends { meetingCapture.library.coachTrends }
+
+  func meetingLibraryExportFailed() {
+    status = .failure("The meeting couldn’t be exported. Choose another folder and try again.")
+  }
+
+  func retryMeeting(_ sessionID: UUID) {
+    guard !UIPreview.isEnabled else { return }
+    meetingCapture.retryRecording(sessionID: sessionID)
+  }
+
+  func setMeetingTranscriptRetention(_ retention: MeetingTranscriptRetention) {
+    settings.meetingTranscriptRetention = retention
+    meetingCapture.library.applyRetention()
+  }
+
+  func refreshAtlasInsights(_ sessionID: UUID) async -> Bool {
+    await meetingCapture.refreshAtlasInsights(sessionID: sessionID)
   }
 
   func retryMeetingDelivery() {
@@ -1154,6 +1251,7 @@ final class AppState {
             recordingStartedAt = Date()
             lastError = nil
             status = .recording
+            meetingCapture.dictationStarted()
             telemetryOutcome = "success"
             span.status = .ok
             if settings.playSounds { soundService.play(.recordingStarted) }
@@ -1257,6 +1355,7 @@ final class AppState {
 
         isRecording = false
         recordingStartedAt = nil
+        meetingCapture.dictationEnded()
         status = .transcribing
         DiagnosticsService.breadcrumb(
             category: "recording",

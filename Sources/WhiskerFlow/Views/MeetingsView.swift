@@ -5,6 +5,7 @@ struct MeetingsView: View {
     @Bindable var appState: AppState
     @State private var showSetup = false
     @State private var showPrevious = false
+    @State private var openMeetingID: UUID?
 
     private var needsSetup: Bool {
         !appState.isAtlasPaired || !appState.hasMicrophonePermission || !appState.hasScreenRecordingPermission
@@ -14,10 +15,30 @@ struct MeetingsView: View {
     }
 
     var body: some View {
+        Group {
+            if let openMeetingID {
+                MeetingDetailView(appState: appState, sessionID: openMeetingID) { self.openMeetingID = nil }
+            } else {
+                overview
+            }
+        }
+        .sheet(isPresented: $showSetup) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Text("Meeting setup").font(.system(size: 24, weight: .semibold, design: .rounded))
+                    Spacer()
+                    Button("Done") { showSetup = false }.keyboardShortcut(.cancelAction)
+                }.padding(26)
+                Form { MeetingSetupView(appState: appState) }.formStyle(.grouped)
+            }.frame(width: 570, height: 640).background(FlowStyle.canvas).tint(FlowStyle.accent)
+        }
+    }
+
+    private var overview: some View {
         // Evaluated once per body rather than once per meeting row.
         let startDisabled = self.startDisabled
         let needsSetup = self.needsSetup
-        VStack(spacing: 0) {
+        return VStack(spacing: 0) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Meetings").font(.system(size: 28, weight: .semibold, design: .rounded))
@@ -39,7 +60,6 @@ struct MeetingsView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
-                    MeetingAssistantSection(appState: appState)
                     if appState.isMeetingCapturing {
                         HStack(spacing: 18) {
                             Image(systemName: "record.circle.fill").font(.system(size: 28)).foregroundStyle(FlowStyle.recording)
@@ -49,8 +69,16 @@ struct MeetingsView: View {
                                 Text(appState.meetingSpeakerDetectionDetail).font(.caption).foregroundStyle(FlowStyle.muted)
                             }
                             Spacer()
-                            Text("RECORDING").font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(FlowStyle.recording)
+                            VStack(alignment: .trailing, spacing: 10) {
+                                Text("RECORDING").font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(FlowStyle.recording)
+                                if let sessionID = appState.activeMeetingSessionID {
+                                    Button("Open meeting") { openMeetingID = sessionID }
+                                }
+                            }
                         }.padding(22).background(FlowStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                        if let sessionID = appState.activeMeetingSessionID {
+                            MeetingNotepadView(appState: appState, sessionID: sessionID)
+                        }
                     }
 
                     if appState.meetingStatus == .attention || appState.meetingStatus == .uploading || (appState.isAtlasPaired && appState.meetingStatus == .uncovered) || !appState.isMeetingStorageAvailable {
@@ -64,6 +92,10 @@ struct MeetingsView: View {
                         }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
                             .background(FlowStyle.selection, in: RoundedRectangle(cornerRadius: 10))
                     }
+                    if !appState.meetingLibrary.entries.isEmpty || appState.isAtlasPaired {
+                        MeetingLibraryList(appState: appState) { openMeetingID = $0 }
+                    }
+                    MeetingAssistantSection(appState: appState)
                     if !appState.isAtlasPaired {
                         VStack(alignment: .leading, spacing: 18) {
                             Image(systemName: "calendar.badge.plus").font(.system(size: 32, weight: .light)).foregroundStyle(FlowStyle.accent)
@@ -134,16 +166,6 @@ struct MeetingsView: View {
                 Spacer()
                 Button("Manage") { showSetup = true }.buttonStyle(.plain).foregroundStyle(FlowStyle.accent)
             }.font(.system(size: 12)).foregroundStyle(FlowStyle.muted).padding(.horizontal, 32).padding(.vertical, 21)
-        }
-        .sheet(isPresented: $showSetup) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("Meeting setup").font(.system(size: 24, weight: .semibold, design: .rounded))
-                    Spacer()
-                    Button("Done") { showSetup = false }.keyboardShortcut(.cancelAction)
-                }.padding(26)
-                Form { MeetingSetupView(appState: appState) }.formStyle(.grouped)
-            }.frame(width: 570, height: 590).background(FlowStyle.canvas).tint(FlowStyle.accent)
         }
         .task {
             // Free space changes slowly; poll only while this screen is visible.
@@ -231,7 +253,23 @@ struct MeetingSetupView: View {
         Section("Automatic recording") {
             Toggle("Record scheduled meetings automatically", isOn: $appState.settings.meetingModeEnabled)
                 .onChange(of: appState.settings.meetingModeEnabled) { _, _ in appState.refreshMeetingConfiguration() }
-            Text("Records eligible Atlas calendar meetings with a secure meeting link. You can stop a recording at any time in Meetings.")
+            Text("Off by default: WhiskerFlow asks before recording any call. Turn this on to skip the question for Atlas calendar meetings in Google Meet and start recording as soon as you join. You can stop a recording at any time in Meetings.")
+                .font(.caption).foregroundStyle(FlowStyle.muted)
+        }
+        Section("Calls") {
+            Toggle("Ask to record when a call starts", isOn: Binding(
+                get: { appState.settings.askToRecordCalls }, set: { appState.setAskToRecordCalls($0) }))
+            Text("Works with Zoom, Microsoft Teams, Slack huddles and Webex, and with Google Meet, Teams, Zoom and Webex in Chrome, Safari, Edge, Arc, Brave, Firefox and other browsers. WhiskerFlow notices an app using the microphone and reads its window titles through Accessibility, on this Mac. Nothing to install, and recording never starts without your answer.")
+                .font(.caption).foregroundStyle(FlowStyle.muted)
+        }
+        Section("Transcripts on this Mac") {
+            Picker("Keep delivered transcripts", selection: Binding(
+                get: { appState.settings.meetingTranscriptRetention },
+                set: { appState.setMeetingTranscriptRetention($0) }
+            )) {
+                ForEach(MeetingTranscriptRetention.allCases) { Text($0.displayName).tag($0) }
+            }
+            Text("Transcripts, notes and bookmarks stay encrypted on this Mac. Audio is deleted once Atlas has the meeting. Meetings that haven’t reached Atlas, or have notes that haven’t, are always kept.")
                 .font(.caption).foregroundStyle(FlowStyle.muted)
         }
     }

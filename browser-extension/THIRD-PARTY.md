@@ -1,1 +1,0 @@
-meet-protocol.js is adapted from Kuali (Apache-2.0), https://github.com/igarrux/kuali/blob/main/browser-extension/src/meet-protocol.js, retrieved 2026-09-15. WhiskerFlow adds a 4 MiB decompressed-packet bound. See KUALI-LICENSE and KUALI-NOTICE. Other bridge files are WhiskerFlow code.

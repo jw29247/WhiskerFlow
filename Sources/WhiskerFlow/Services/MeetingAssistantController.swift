@@ -70,6 +70,25 @@ final class MeetingAssistantController {
     private var lastActivityElapsedSeconds: TimeInterval?
     private var syncingSessions: Set<UUID> = []
     private var storageFailure: MeetingAssistantError?
+    // Whole-meeting coaching, measured only while the coach is on.
+    private var talkTime = MeetingTalkTime()
+    private var monologues = MeetingMonologueTracker()
+    private var pace = MeetingSpeakingPace()
+    private var recentStates: [(start: TimeInterval, end: TimeInterval, state: MeetingSpeechState)] = []
+    private var pendingMonologueAlert = false
+    private var lastPacePromptElapsed: TimeInterval?
+    private var lastTalkSharePromptElapsed: TimeInterval?
+    private var promptsShown = 0
+    // Your recent words, in memory only, for the experimental suggestions.
+    private var ownWordFragments: [String] = []
+    private var newWordsSinceSuggestion = 0
+    private var lastSuggestionElapsed: TimeInterval?
+    private var suggestionTask: Task<Void, Never>?
+    private var pendingSuggestion: String?
+    private var aiShown = 0
+    private var aiHelpful = 0
+    private var aiNotHelpful = 0
+    private var finishedSummaries: [UUID: MeetingCoachSummary] = [:]
 
     private(set) var isActive = false
     var isCoachEnabled = false { didSet { clearSuppressedCoaching() } }
@@ -81,6 +100,18 @@ final class MeetingAssistantController {
     var goal = ""
     var agenda = ""
     var bookmarkSync: MeetingBookmarkSync?
+    /// Speaking pace from on-device transcription of your microphone.
+    var isLiveAnalysisEnabled = true { didSet { if !isLiveAnalysisEnabled { clearOwnWords() } } }
+    /// Experimental suggestions from the on-device model. AppState turns this on
+    /// from settings (on by default) when the model is available.
+    var isAISuggestionsEnabled = false { didSet { if !isAISuggestionsEnabled { clearOwnWords() } } }
+    var suggester: (any MeetingCoachSuggesting)?
+    private(set) var livePromptIsAI = false
+    private(set) var didRateSuggestion = false
+    private(set) var talkShare: Double?
+    private(set) var recentTalkShare: Double?
+    private(set) var currentTurnSeconds: TimeInterval = 0
+    private(set) var wordsPerMinute: Double?
     var accountIdentityProvider: (() -> String?)?
     private(set) var activeTitle: String?
     private(set) var elapsedSeconds: TimeInterval = 0
@@ -90,6 +121,18 @@ final class MeetingAssistantController {
     private(set) var storageError: String?
 
     var shouldShowHUD: Bool { isActive && isCoachEnabled && isCoachVisible }
+
+    /// The private recap for one recording, if this account's coach wrote one.
+    func localSummary(for sessionID: UUID) -> String? {
+        storage.sessions.first { $0.id == sessionID && $0.coachAccountIdentity == currentAccountIdentity }?.localSummary
+    }
+
+    /// Library copies of one recording's bookmarks, with their Atlas sync state.
+    func libraryBookmarks(for sessionID: UUID) -> [MeetingLibraryBookmark] {
+        storage.bookmarks.filter { $0.sessionID == sessionID }.map {
+            MeetingLibraryBookmark(id: $0.id, elapsedMs: $0.elapsedMilliseconds, label: $0.label, syncState: $0.syncState)
+        }
+    }
 
     var bookmarks: [LocalMeetingBookmark] { storage.bookmarks }
     var activityInputsCount: Int { activityInputs.count }
@@ -134,6 +177,7 @@ final class MeetingAssistantController {
         activity = MeetingCoachMetrics.accumulate(inputs: [])
         livePrompt = nil
         lastPromptElapsedSeconds = nil
+        resetMeetingCoaching()
         if let index = storage.sessions.firstIndex(where: { $0.id == sessionID }) {
             storage.sessions[index].title = title
         } else {
@@ -194,6 +238,7 @@ final class MeetingAssistantController {
         elapsedSeconds = max(elapsedSeconds, input.elapsedSeconds + max(0, input.durationSeconds))
         guard isCoachEnabled, !isCoachPaused, isCoachVisible else { return }
         activityInputs.append(input)
+        ingestMeetingCoaching(input)
         let cutoff = max(0, elapsedSeconds - MeetingCoachMetrics.windowSeconds)
         activityInputs.removeAll { $0.elapsedSeconds + $0.durationSeconds <= cutoff }
         if activityInputs.count > 60 { activityInputs.removeFirst(activityInputs.count - 60) }
@@ -201,20 +246,79 @@ final class MeetingAssistantController {
         updatePrompt()
     }
 
-    func dismissPrompt() { livePrompt = nil }
+    func dismissPrompt() {
+        livePrompt = nil
+        livePromptIsAI = false
+    }
+
+    /// Your rating of an AI suggestion, kept as a count on this Mac so its
+    /// usefulness can be judged across meetings.
+    func rateSuggestion(helpful: Bool) {
+        guard livePromptIsAI, !didRateSuggestion else { return }
+        didRateSuggestion = true
+        if helpful { aiHelpful += 1 } else { aiNotHelpful += 1 }
+    }
+
+    /// Coaching numbers for a recording that ended during this launch.
+    func coachSummary(for sessionID: UUID) -> MeetingCoachSummary? { finishedSummaries[sessionID] }
+
+    /// Whether a window of your microphone should be transcribed on this Mac
+    /// for pace and suggestions.
+    func shouldTranscribeOwnSpeech(from start: TimeInterval, to end: TimeInterval) -> Bool {
+        guard wantsOwnSpeech else { return false }
+        let seconds = speechSeconds(from: start, to: end)
+        return MeetingLiveTranscriptionPolicy.shouldTranscribe(
+            youSeconds: seconds.you, bothSeconds: seconds.both, othersSeconds: seconds.others
+        )
+    }
+
+    var wantsOwnSpeech: Bool {
+        isActive && isCoachEnabled && !isCoachPaused && isCoachVisible && (isLiveAnalysisEnabled || isAISuggestionsEnabled)
+    }
+
+    func recordOwnSpeech(_ text: String, from start: TimeInterval, to end: TimeInterval) {
+        guard wantsOwnSpeech else { return }
+        let words = MeetingSpeakingPace.wordCount(text)
+        let seconds = speechSeconds(from: start, to: end)
+        if isLiveAnalysisEnabled {
+            pace.ingest(words: words, speechSeconds: seconds.you + seconds.both, at: end)
+            let rate = pace.recentWordsPerMinute
+            if wordsPerMinute != rate { wordsPerMinute = rate }
+        }
+        guard isAISuggestionsEnabled else { return }
+        ownWordFragments.append(text)
+        let context = MeetingCoachSuggestionPolicy.context(from: ownWordFragments)
+        ownWordFragments = [context]
+        newWordsSinceSuggestion += words
+        requestSuggestionIfDue()
+    }
 
     func end(sessionID: UUID) {
         guard activeSessionID == sessionID else { return }
+        let measured = talkTime.youSeconds + talkTime.othersSeconds + talkTime.overlapSeconds + talkTime.silenceSeconds
+            + talkTime.unknownSeconds
+        let summary = measured > 0
+            ? MeetingCoachSummary(durationSeconds: elapsedSeconds, talkTime: talkTime, monologues: monologues, pace: pace,
+                                  promptsShown: promptsShown, aiSuggestionsShown: aiShown,
+                                  aiHelpfulCount: aiHelpful, aiNotHelpfulCount: aiNotHelpful)
+            : nil
+        if let summary { finishedSummaries[sessionID] = summary }
         if let index = storage.sessions.firstIndex(where: { $0.id == sessionID }) {
             let duration = max(0, now().timeIntervalSince(storage.sessions[index].startedAt))
             let minutes = Int(duration) / 60
             let seconds = Int(duration) % 60
-            let detail = activity.windowDurationSeconds > 0
-                ? "Microphone activity was estimated at \(Int(activity.ownMicActiveSeconds)) seconds in the final \(Int(activity.windowDurationSeconds)) seconds observed. This is an audio estimate, not a speaker assessment."
-                : "No live activity estimate was retained; coaching was off, paused, or unavailable."
+            let detail: String
+            if let summary {
+                detail = Self.recap(summary)
+            } else if activity.windowDurationSeconds > 0 {
+                detail = "Microphone activity was estimated at \(Int(activity.ownMicActiveSeconds)) seconds in the final \(Int(activity.windowDurationSeconds)) seconds observed. This is an audio estimate, not a speaker assessment."
+            } else {
+                detail = "No live activity estimate was retained; coaching was off, paused, or unavailable."
+            }
             storage.sessions[index].localSummary = "Recording lasted \(minutes)m \(seconds)s. \(detail) Review the transcript to assess decisions and next steps."
             persistOrRecordError()
         }
+        resetMeetingCoaching()
         activeSessionID = nil
         activeStartedAt = nil
         activeTitle = nil
@@ -324,6 +428,113 @@ final class MeetingAssistantController {
         activityInputs.removeAll(keepingCapacity: false)
         activity = MeetingCoachMetrics.accumulate(inputs: [])
         livePrompt = nil
+        livePromptIsAI = false
+        pendingMonologueAlert = false
+        clearOwnWords()
+    }
+
+    private func clearOwnWords() {
+        ownWordFragments.removeAll(keepingCapacity: false)
+        newWordsSinceSuggestion = 0
+        pendingSuggestion = nil
+        suggestionTask?.cancel()
+        suggestionTask = nil
+    }
+
+    private func resetMeetingCoaching() {
+        talkTime = MeetingTalkTime()
+        monologues = MeetingMonologueTracker()
+        pace = MeetingSpeakingPace()
+        recentStates.removeAll(keepingCapacity: false)
+        pendingMonologueAlert = false
+        lastPacePromptElapsed = nil
+        lastTalkSharePromptElapsed = nil
+        lastSuggestionElapsed = nil
+        promptsShown = 0
+        aiShown = 0
+        aiHelpful = 0
+        aiNotHelpful = 0
+        livePromptIsAI = false
+        didRateSuggestion = false
+        talkShare = nil
+        recentTalkShare = nil
+        currentTurnSeconds = 0
+        wordsPerMinute = nil
+        clearOwnWords()
+    }
+
+    private func ingestMeetingCoaching(_ input: MeetingActivityInput) {
+        talkTime.ingest(input)
+        if monologues.ingest(input) { pendingMonologueAlert = true }
+        if monologues.currentRunSeconds == 0 { pendingMonologueAlert = false }
+        recentStates.append((input.elapsedSeconds, input.elapsedSeconds + input.durationSeconds, MeetingSpeechState(input)))
+        recentStates.removeAll { $0.end < elapsedSeconds - 120 }
+        // Publish only changes: the HUD redraws on every published write.
+        if talkShare != talkTime.talkShare { talkShare = talkTime.talkShare }
+        if recentTalkShare != talkTime.recentTalkShare { recentTalkShare = talkTime.recentTalkShare }
+        if currentTurnSeconds != monologues.currentRunSeconds { currentTurnSeconds = monologues.currentRunSeconds }
+    }
+
+    private func speechSeconds(from start: TimeInterval, to end: TimeInterval) -> (you: TimeInterval, both: TimeInterval, others: TimeInterval) {
+        var result = (you: 0.0, both: 0.0, others: 0.0)
+        for entry in recentStates {
+            let overlap = max(0, min(end, entry.end) - max(start, entry.start))
+            guard overlap > 0 else { continue }
+            switch entry.state {
+            case .you: result.you += overlap
+            case .both: result.both += overlap
+            case .others: result.others += overlap
+            case .silence, .unknown: break
+            }
+        }
+        return result
+    }
+
+    private func requestSuggestionIfDue() {
+        guard suggestionTask == nil, pendingSuggestion == nil, let suggester,
+              MeetingCoachSuggestionPolicy.shouldRequest(
+                elapsedSeconds: elapsedSeconds, lastRequestElapsedSeconds: lastSuggestionElapsed,
+                newWords: newWordsSinceSuggestion) else { return }
+        lastSuggestionElapsed = elapsedSeconds
+        newWordsSinceSuggestion = 0
+        let request = MeetingCoachSuggestionRequest(
+            recentOwnWords: MeetingCoachSuggestionPolicy.context(from: ownWordFragments),
+            goal: goal,
+            talkSharePercent: talkTime.talkShare.map { Int(($0 * 100).rounded()) },
+            currentTurnSeconds: Int(monologues.currentRunSeconds),
+            wordsPerMinute: pace.recentWordsPerMinute.map { Int($0.rounded()) }
+        )
+        let session = activeSessionID
+        suggestionTask = Task { @MainActor [weak self] in
+            let advice = await suggester.advice(for: request)
+            guard let self, !Task.isCancelled else { return }
+            self.suggestionTask = nil
+            guard self.activeSessionID == session, self.isAISuggestionsEnabled else { return }
+            self.pendingSuggestion = advice.message(goal: self.goal)
+        }
+    }
+
+    static func recap(_ summary: MeetingCoachSummary) -> String {
+        var parts: [String] = []
+        if let share = summary.talkShare {
+            parts.append("You spoke for about \(Int((share * 100).rounded()))% of the talking time.")
+        }
+        if summary.longestMonologueSeconds >= 30 {
+            parts.append("Your longest uninterrupted turn was \(duration(summary.longestMonologueSeconds)).")
+        }
+        if summary.monologueCount > 0 {
+            parts.append("\(summary.monologueCount) turn\(summary.monologueCount == 1 ? "" : "s") ran past 90 seconds.")
+        }
+        if let wpm = summary.averageWordsPerMinute {
+            parts.append("Your pace averaged about \(Int(wpm.rounded())) words a minute.")
+        }
+        parts.append("These are audio estimates from your microphone and Mac audio, not a speaker assessment.")
+        return parts.joined(separator: " ")
+    }
+
+    static func duration(_ seconds: TimeInterval) -> String {
+        let value = Int(seconds.rounded())
+        return value >= 60 ? "\(value / 60) min \(value % 60) s" : "\(value) s"
     }
 
     private func updatePrompt() {
@@ -336,12 +547,35 @@ final class MeetingAssistantController {
         } else if elapsedSeconds - lastBreakElapsedSeconds >= 1_800 {
             livePrompt = "You’ve been in this meeting for a while. Consider a short break when there’s a suitable pause."
             lastBreakElapsedSeconds = elapsedSeconds
+        } else if pendingMonologueAlert {
+            pendingMonologueAlert = false
+            livePrompt = "You’ve been talking for \(Self.duration(monologues.currentRunSeconds)) without a break. Pause and invite the others in?"
         } else if activity.windowDurationSeconds >= 30, activity.ownMicActiveSeconds >= 45 {
             let uncertainty = activity.certainty == .reliable ? "" : " Audio overlap or a missing track makes this estimate uncertain."
             livePrompt = "You’ve been speaking for much of the last minute. A pause may make room for the next turn.\(uncertainty)"
+        } else if let rate = pace.recentWordsPerMinute, MeetingPaceBand.band(wordsPerMinute: rate) == .fast,
+                  lastPacePromptElapsed.map({ elapsedSeconds - $0 >= 300 }) ?? true {
+            lastPacePromptElapsed = elapsedSeconds
+            livePrompt = "You’re speaking quickly, about \(Int(rate.rounded())) words a minute. A slightly slower pace is easier to follow."
+        } else if elapsedSeconds >= 300, talkTime.recentSpeechSeconds >= 120,
+                  let share = talkTime.recentTalkShare, share >= 0.7,
+                  lastTalkSharePromptElapsed.map({ elapsedSeconds - $0 >= 600 }) ?? true {
+            lastTalkSharePromptElapsed = elapsedSeconds
+            livePrompt = "You’ve done about \(Int((share * 100).rounded()))% of the talking in the last five minutes. Ask for the others’ views?"
+        } else if let suggestion = pendingSuggestion {
+            pendingSuggestion = nil
+            livePrompt = suggestion
+            livePromptIsAI = true
+            didRateSuggestion = false
+            aiShown += 1
+            promptsShown += 1
+            lastPromptElapsedSeconds = elapsedSeconds
+            return
         } else {
             return
         }
+        livePromptIsAI = false
+        promptsShown += 1
         lastPromptElapsedSeconds = elapsedSeconds
     }
 

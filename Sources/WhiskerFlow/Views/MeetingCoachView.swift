@@ -27,7 +27,7 @@ struct MeetingCoachView: View {
                 Spacer()
                 Toggle("Coach", isOn: $controller.isCoachEnabled).toggleStyle(.switch)
             }
-            Text("Coaching stays private to you. Live estimates use only microphone and Mac-audio activity.")
+            Text("Coaching stays private to you and on this Mac. Talk share and long turns come from your microphone and Mac-audio activity; pace from on-device transcription of your microphone.")
                 .font(.caption).foregroundStyle(FlowStyle.muted)
 
             TextField("What do you want from this meeting?", text: $controller.goal)
@@ -56,16 +56,9 @@ struct MeetingCoachView: View {
                 }
                 if controller.isCoachEnabled {
                     if controller.isCoachVisible {
-                        Text("Own-microphone activity estimate: \(Int(controller.activity.ownMicActiveSeconds))s of the last \(Int(controller.activity.windowDurationSeconds))s")
-                            .font(.callout)
+                        MeetingCoachLiveMetrics(controller: controller)
                         Text(Self.certaintyLabel(controller.activity.certainty)).font(.caption).foregroundStyle(FlowStyle.muted)
-                        if let prompt = controller.livePrompt {
-                            HStack(alignment: .top) {
-                                Text(prompt).font(.callout)
-                                Spacer()
-                                Button("Dismiss") { controller.dismissPrompt() }.buttonStyle(.plain)
-                            }
-                        }
+                        MeetingCoachPromptView(controller: controller)
                     }
                     HStack {
                         Button(controller.isCoachPaused ? "Resume coaching" : "Pause coaching") {

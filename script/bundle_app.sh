@@ -48,7 +48,6 @@ fi
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$BINARY" "$APP_BINARY"
-cp "$BUILD_ROOT/$CONFIGURATION/WhiskerFlowMeetBridge" "$APP_BUNDLE/Contents/MacOS/WhiskerFlowMeetBridge"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 BUILD_REVISION="$(git rev-parse --short=12 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
 /usr/libexec/PlistBuddy -c "Add :WhiskerFlowBuildRevision string $BUILD_REVISION" "$APP_BUNDLE/Contents/Info.plist"
@@ -140,7 +139,6 @@ if [[ -d "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework" ]]; then
   sign_sparkle_framework "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
 fi
 
-codesign_one "$APP_BUNDLE/Contents/MacOS/WhiskerFlowMeetBridge"
 
 if [[ -n "$SIGN_IDENTITY" ]]; then
   echo "Signing with: $SIGN_IDENTITY (hardened runtime)"

@@ -134,7 +134,7 @@ private final class DeliveryStub: MeetingAtlasClient, @unchecked Sendable {
     var finalized = false
     func schedule(fromMs: Int64, toMs: Int64) async throws -> [AtlasCaptureScheduleIntent] { [] }
     func heartbeat(appVersion: String, permissionState: [String: String], diskState: String, captureState: String, lastFailureReason: String?) async throws {}
-    func createMeeting(captureSessionID: UUID, title: String, occurredAtMs: Int64, eventID: String?) async throws -> (meetingID: String, created: Bool) { events.append("create"); return ("meeting", true) }
+    func createMeeting(captureSessionID: UUID, title: String, occurredAtMs: Int64, eventID: String?) async throws -> MeetingAtlasCreatedMeeting { events.append("create"); return MeetingAtlasCreatedMeeting(meetingID: "meeting", created: true) }
     func prepareRecording(meetingID: String, captureSessionID: UUID, trackChunkCounts: [MeetingAudioTrack: Int], sourceManifestHash: String?, playbackChunkCount: Int?) async throws -> String { events.append("prepare"); return "artifact" }
     func uploadChunk(artifactID: String, descriptor: MeetingRecordingChunkDescriptor, body: Data) async throws { events.append("chunk") }
     func uploadPlaybackChunk(artifactID: String, descriptor: MeetingRecordingChunkDescriptor, body: Data) async throws {

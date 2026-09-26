@@ -8,7 +8,6 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "WhiskerFlowMeetBridge", targets: ["WhiskerFlowMeetBridge"]),
         .executable(name: "WhiskerFlow", targets: ["WhiskerFlow"]),
         .library(name: "WhiskerFlowCore", targets: ["WhiskerFlowCore"]),
         .library(name: "WhiskerFlowAppSupport", targets: ["WhiskerFlowAppSupport"])
@@ -39,8 +38,8 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.3")
     ],
     targets: [
-        .executableTarget(name: "WhiskerFlowMeetBridge", dependencies: ["WhiskerFlowAppSupport"]),
         .target(name: "WhiskerFlowCore"),
+        .target(name: "WhiskerFlowObjCSupport"),
         .target(
             name: "WhiskerFlowAppSupport",
             dependencies: [
@@ -60,6 +59,7 @@ let package = Package(
             dependencies: [
                 "WhiskerFlowCore",
                 "WhiskerFlowAppSupport",
+                "WhiskerFlowObjCSupport",
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
                 .product(name: "SpeakerKit", package: "argmax-oss-swift"),
@@ -69,7 +69,10 @@ let package = Package(
                 .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
                 .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core")
             ],
-            resources: [.copy("Resources/shared-vocabulary.json")]
+            resources: [.copy("Resources/shared-vocabulary.json")],
+            // The on-device coach model ships with macOS 26. Weak-link it so the
+            // app still launches on macOS 14 and 15, where the feature is hidden.
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-weak_framework", "-Xlinker", "FoundationModels"])]
         ),
         .testTarget(
             name: "WhiskerFlowCoreTests",
@@ -81,7 +84,7 @@ let package = Package(
         ),
         .testTarget(
             name: "WhiskerFlowTests",
-            dependencies: ["WhiskerFlow", .product(name: "FluidAudio", package: "FluidAudio")]
+            dependencies: ["WhiskerFlow", "WhiskerFlowObjCSupport", .product(name: "FluidAudio", package: "FluidAudio")]
         )
     ]
 )

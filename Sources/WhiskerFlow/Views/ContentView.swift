@@ -3,7 +3,7 @@ import WhiskerFlowCore
 
 struct ContentView: View {
     @Bindable var appState: AppState
-    @State private var destination: FlowDestination = .dictate
+    @State private var destination: FlowDestination = UIPreview.initialDestination.flatMap(FlowDestination.init(rawValue:)) ?? .dictate
     @State private var showOnboarding = false
     @State private var draft = TranscriptDraft()
     @State private var selectedSnapshot: TranscriptRecord?

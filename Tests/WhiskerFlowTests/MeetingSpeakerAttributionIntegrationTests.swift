@@ -5,7 +5,7 @@ import WhiskerFlowAppSupport
 import WhiskerFlowCore
 @testable import WhiskerFlow
 
-final class MeetingCaptionIntegrationTests: XCTestCase {
+final class MeetingSpeakerAttributionIntegrationTests: XCTestCase {
     func testProcessorUsesNativeAccessibilityEvidenceWithoutCaptionsAndPreservesAudioText() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -34,22 +34,5 @@ final class MeetingCaptionIntegrationTests: XCTestCase {
         XCTAssertEqual(result.turns.first?.speaker.displayName, "Example Person")
         XCTAssertEqual(result.turns.first?.speaker.resolution, .googleMeet)
         XCTAssertEqual(result.turns.first?.text, text)
-    }
-
-    /// Explicit opt-in product evidence capture for the current supervised meeting.
-    @MainActor
-    func testCaptureCurrentMeetEvidence() async throws {
-        guard let value = ProcessInfo.processInfo.environment["WHISKERFLOW_CAPTURE_CAPTION_SESSION"], let id = UUID(uuidString: value) else { throw XCTSkip("Explicit meeting required") }
-        let pids = NSWorkspace.shared.runningApplications.filter {
-            $0.bundleIdentifier == "com.google.Chrome" || $0.bundleIdentifier == "com.google.Chrome.app.kjgfgldnnfoeklkmfkjfagphfepbbdan"
-        }.map(\.processIdentifier)
-        let rows = await Task.detached { MeetingCaptionReader.read(pids: pids, report: { print("CAPTION_READER: \($0)") }) }.value
-        XCTAssertFalse(rows.isEmpty, "Chrome must expose named caption rows")
-        let root = StorageLocations.applicationSupportRootOrTemporary().appendingPathComponent("MeetingRecordings")
-        let store = EncryptedMeetingChunkStore(rootURL: root, keyProvider: KeychainMeetingChunkKeyProvider())
-        try store.saveCaptionEvidence(sessionID: id, evidence: rows)
-        let saved = try store.loadCaptionEvidence(sessionID: id)
-        XCTAssertTrue(rows.allSatisfy { saved.contains($0) })
-        print("CAPTION_CAPTURE: rows=\(rows.count), named_labels=\(Set(rows.map(\.speaker)).count)")
     }
 }
