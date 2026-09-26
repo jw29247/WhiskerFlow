@@ -1613,6 +1613,9 @@ final class AppState {
             var inputSelection: AudioInputSelection?
             var lastStartError: Error?
             live.voiceProcessing = settings.ignoreSpeakerAudio
+            lifecycleLogger.info("Opening microphone", metadata: [
+                "event": "capture_opening", "session": "\(sessionID)"
+            ])
             for candidate in MicrophoneSelection.captureCandidates(
                 for: preferredInputSelection,
                 devices: currentDevices

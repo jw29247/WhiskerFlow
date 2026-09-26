@@ -440,6 +440,7 @@ final class AudioCaptureService {
     /// A healthy build takes well under a second, and a few seconds while
     /// CoreAudio churns through a device change. Longer is a deadlock.
     nonisolated private static let engineBuildTimeoutSeconds = 6.0
+    private static let timingLogger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
     private let logger = Logging.Logger(
         label: "agency.thatworks.WhiskerFlow.AudioCapture"
     )
@@ -517,8 +518,11 @@ final class AudioCaptureService {
         }
 
         let voiceProcessing = voiceProcessing
+        let startedAt = ProcessInfo.processInfo.systemUptime
         var prepared = takeReadyCapture(selection: selection, deviceID: descriptor.transientID)
+        var enginePath = prepared == nil ? "built" : "ready"
         if prepared == nil, let inFlight = claimPreparation(selection: selection) {
+            enginePath = "claimed"
             // A press soon after launch or a device change: use the engine
             // being built. Building a second voice-processing unit while that
             // one still initializes is what deadlocks AudioDSP.
@@ -550,6 +554,8 @@ final class AudioCaptureService {
             )
             throw AudioCaptureServiceError.deviceAssignmentFailed(status)
         }
+        if let prepared, capture !== prepared { enginePath = "rebuilt" }
+        let engineReadyAt = ProcessInfo.processInfo.systemUptime
         guard generation == startGeneration else {
             // Stopped, or started again, while the engine was being built.
             Self.retire(capture)
@@ -607,6 +613,14 @@ final class AudioCaptureService {
 
         do {
             try capture.engine.start()
+            let now = ProcessInfo.processInfo.systemUptime
+            Self.timingLogger.info("Capture engine started", metadata: [
+                "event": "capture_start_timing",
+                "engine_path": "\(enginePath)",
+                "engine_ms": "\((engineReadyAt - startedAt) * 1000)",
+                "engine_start_ms": "\((now - engineReadyAt) * 1000)",
+                "elapsed_ms": "\((now - startedAt) * 1000)"
+            ])
             active = capture
             Observability.setAudioCaptureActive(true, source: captureActivitySource)
             started = true
