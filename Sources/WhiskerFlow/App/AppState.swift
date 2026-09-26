@@ -1635,8 +1635,10 @@ final class AppState {
                 } catch {
                     live.cancel()
                     lastStartError = error
-                    // The capture was stopped while it started; another device won't help.
+                    // Stopped while it started, or CoreAudio is stuck: another
+                    // device won't help.
                     if error is CancellationError { break }
+                    if case AudioCaptureServiceError.engineTimedOut = error { break }
                 }
             }
             guard let inputSelection else {
