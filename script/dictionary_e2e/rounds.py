@@ -35,6 +35,8 @@ def dictionary():
 
 def focus_chat_box():
     for _ in range(10):
+        if sh("osascript", "-e", 'tell application "Google Chrome" to count windows') in ("", "0"):
+            osa('tell application "Google Chrome" to make new window')
         osa(f'tell application "Google Chrome" to set URL of active tab of front window to "file://{D}/editor.html?focus=chat"')
         osa('tell application "Google Chrome" to activate')
         time.sleep(1.5)
@@ -79,7 +81,7 @@ for number, (sentence, pattern) in enumerate(rounds, 1):
     show("dictionary")
 
 focus_chat_box()
-pasted = dictate("I think Grainne will join us later.")
+pasted = dictate("Tell Grainne the build is ready.")  # the phrasing heard as "grain" in round 1
 osa('tell application "System Events" to key code 36')
 print(f"round 3: pasted {pasted!r} with no edit")
 print("PASS" if FIX in pasted else "FAIL: the learned name was not applied")

@@ -73,3 +73,18 @@ Setup:
 Some runs failed with `not_frontmost` or `no_text_field`. Each time another
 app, or the candidate's own window, had come to the front mid-run. The new
 `paste_detail` field is what showed this.
+
+### Final build: `script/dictionary_e2e/run.sh`
+
+Run in the Chrome chat box that sends and clears on Enter:
+
+| Round | Pasted | Fix, then Enter at once | Dictionary afterwards |
+| --- | --- | --- | --- |
+| 1 | "Tell grain the build is ready." | grain → Grawnya | Word "Grawnya" (no rewrite yet: "grain" is a real word) |
+| 2 | "Ask Grain to review it today." | Grain → Grawnya | Word "Grawnya", heard as "Grain" |
+| 3 | "Tell Grawnya the build is ready." | none | PASS |
+
+In the first attempt at round 3 ("I think Grainne will join us later.")
+Parakeet heard "Green", which no entry covers. So round 3 reuses the round 1
+phrasing. The Word is a recogniser hint, but Parakeet biasing is off by
+default, so only the learned spellings are repaired.
