@@ -104,8 +104,17 @@ public enum CallDetectionRules {
 
     static let webKitProcessMarker = "com.apple.WebKit"
 
-    /// Apps whose window titles a detector needs to read.
-    public static var titleSources: Set<String> { browsers.union(nativeApps.keys) }
+    /// The browser whose microphone capture a running app's windows belong
+    /// to: the browser itself, or one of its installed web apps. Chromium
+    /// web apps (such as the Google Meet app) run as `<browser>.app.<id>`
+    /// but capture audio in the browser's helper; Safari's Dock web apps
+    /// (`com.apple.Safari.WebApp.<id>`) capture in shared WebKit processes.
+    public static func titleSourceOwner(forAppBundleID bundleID: String?) -> String? {
+        guard let bundleID, !bundleID.isEmpty else { return nil }
+        if browsers.contains(bundleID) { return bundleID }
+        if bundleID.hasPrefix("com.apple.Safari.WebApp") { return "com.apple.Safari" }
+        return browsers.first { bundleID.hasPrefix($0 + ".app.") }
+    }
 
     /// The app bundle a (possibly helper) process belongs to, if it is one
     /// WhiskerFlow knows. `nil` for everything else.

@@ -119,3 +119,30 @@ The scenarios are few and written by us, so this shows the approach is plausible
   - `21-coach-hud.png`
   - `22-meetings-coach.png`
   - `23-meetings-trends.png` (coach settings and trends)
+
+## Live check, 26 September (06:42–06:57 UTC)
+
+Jacob ran real Google Meet calls with the Meet web app (Chrome's installed web app) while the branch build was installed over `/Applications/WhiskerFlow.app`. His previous build was backed up to `~/WhiskerFlow-backups/`.
+
+**What went wrong first, and the fixes:**
+1. **No prompt.** The microphone signal was right (`com.google.Chrome.helper`), but the reader looked only at Chrome's own windows. The call was in the Meet web app (`com.google.Chrome.app.kjgf…`, window owner "Google Meet"), off the current Space. Accessibility lists only current-Space windows and exposed no tab strip; `AXManualAccessibility` is unsupported by this Chrome.
+   - **Fix:** browser web apps (Chromium `<browser>.app.<id>`, Safari `WebApp`) now count as their browser (`CallDetectionRules.titleSourceOwner`).
+   - **Fix:** window names now also come from the window server (`CGWindowListCopyWindowInfo`, all Spaces, using Meeting Mode's Screen Recording access), alongside Accessibility tab titles.
+   - **Result:** after the fix, the call was detected 3.3 s after launch.
+2. **Content-free detection events were dropped.** The local diagnostic log keeps only allowlisted events.
+   - **Fix:** `call_detection_started`, `call_detected`, `call_ended` and `call_unrecognised` are now allowlisted. Their fields are counts, `accessibility` true/false, `platform` and `source` (app, browser or webkit). A unit test checks that titles and bundle IDs are dropped.
+3. **A recording stopped early.** Safari's WebKit process used the microphone next to the Chrome call. The prompt switched to that second call, the recording followed it, and it stopped at 06:53:15 when that call went quiet, although the Meet call carried on.
+   - **Fix:** a prompt-started recording now stops only when no detected call remains.
+   - **Fix:** a second call no longer replaces a prompt already showing.
+
+**Worked:**
+- prompt, then Record;
+- auto-stop when the Meet ended (06:56:14);
+- both recordings delivered (audio removed, encrypted library entries kept);
+- transcription quality was good by Jacob's account.
+
+**Still open for Monday:**
+- calls with other people (talk share, turns, pace and AI tips on real speech);
+- a Slack huddle;
+- Safari Meet on purpose;
+- why `call_detected` was logged twice at 06:51:57. The new `source` field should explain it.

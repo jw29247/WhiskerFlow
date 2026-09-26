@@ -61,6 +61,18 @@ final class CallDetectionTests: XCTestCase {
         XCTAssertEqual(calls.first?.meetingCode, "xyz-abcd-efg")
     }
 
+    func testBrowserWebAppsCountAsTheirBrowser() {
+        XCTAssertEqual(CallDetectionRules.titleSourceOwner(forAppBundleID: "com.google.Chrome.app.kjgfgldnnfoeklkmfkjfagphfepbbdan"), "com.google.Chrome")
+        XCTAssertEqual(CallDetectionRules.titleSourceOwner(forAppBundleID: "com.microsoft.edgemac.app.abc"), "com.microsoft.edgemac")
+        XCTAssertEqual(CallDetectionRules.titleSourceOwner(forAppBundleID: "com.apple.Safari.WebApp.1234"), "com.apple.Safari")
+        XCTAssertEqual(CallDetectionRules.titleSourceOwner(forAppBundleID: "com.google.Chrome"), "com.google.Chrome")
+        XCTAssertNil(CallDetectionRules.titleSourceOwner(forAppBundleID: "com.google.Chrome.helper"), "Helpers have no windows to read")
+        XCTAssertNil(CallDetectionRules.titleSourceOwner(forAppBundleID: "us.zoom.xos"))
+        // The Meet app's window, filed under Chrome, is matched to Chrome's helper capture.
+        let meetApp = AppWindowTitles(bundleID: "com.google.Chrome", titles: ["Meet - abc-defg-hij"])
+        XCTAssertEqual(detect(["com.google.Chrome.helper"], [meetApp]).map(\.platform), [.googleMeet])
+    }
+
     func testCapturingTabIsPreferredOverBackgroundCallTabs() {
         let chrome = AppWindowTitles(bundleID: "com.google.Chrome", titles: [
             "Weekly | Microsoft Teams", "Meet – abc-defg-hij – Microphone recording",

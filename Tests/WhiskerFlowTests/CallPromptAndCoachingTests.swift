@@ -1,3 +1,5 @@
+import ApplicationServices
+import AppKit
 import AVFoundation
 import CryptoKit
 import Foundation
@@ -49,6 +51,16 @@ final class CallPromptAndCoachingTests: XCTestCase {
         XCTAssertNotNil(coordinator.callPrompt, "A new call asks again")
         coordinator.handleCallEvent(.ended(meet))
         XCTAssertNil(coordinator.callPrompt, "The question disappears when the call ends")
+    }
+
+    func testASecondCallDoesNotReplaceTheQuestionShowing() {
+        let (coordinator, _) = coordinator()
+        let safari = DetectedCall(platform: .googleMeet, appBundleID: "com.apple.Safari", isBrowser: true)
+        coordinator.handleCallEvent(.started(meet))
+        coordinator.handleCallEvent(.started(safari))
+        XCTAssertEqual(coordinator.callPrompt?.call, meet)
+        coordinator.handleCallEvent(.ended(meet))
+        XCTAssertNil(coordinator.callPrompt)
     }
 
     func testCallsNotOnTheCalendarAreAskedAboutToo() {
@@ -228,6 +240,26 @@ final class CallSignalProbeTests: XCTestCase {
             let t = Date(); _ = NativeCallSignalReader.read(); repeats.append(Int(Date().timeIntervalSince(t) * 1_000_000))
         }
         print("CALL_PROBE_REPEAT_US: \(repeats)")
+        // Bundle identifiers and owners only: never window titles.
+        for input in signals.inputs {
+            print("CALL_PROBE_INPUT: bundle=\(input.bundleID ?? "nil") owner=\(CallDetectionRules.owningApp(ofProcessBundleID: input.bundleID) ?? "unknown")")
+        }
+        for window in signals.windows {
+            let recognised = window.titles.compactMap { CallDetectionRules.webCall(inTitle: $0)?.platform.rawValue }
+            print("CALL_PROBE_WINDOWS: app=\(window.bundleID) titles=\(window.titles.count) recognised=\(recognised)")
+        }
+        // Every running browser, whether or not it uses the microphone.
+        for app in NSWorkspace.shared.runningApplications {
+            guard let owner = CallDetectionRules.titleSourceOwner(forAppBundleID: app.bundleIdentifier) else { continue }
+            let bundleID = "\(owner) via \(app.bundleIdentifier == owner ? "browser" : "web app")"
+            do {
+                let titles = NativeCallSignalReader.titles(pid: app.processIdentifier)
+                let recognised = titles.compactMap { CallDetectionRules.webCall(inTitle: $0) }.map { "\($0.platform.rawValue)\($0.meetingCode == nil ? "" : "+code")" }
+                let shapes = titles.map { title in title.lowercased().contains("meet") ? "meet-word(\(title.count) chars, code=\(CallDetectionRules.meetCode(in: title) != nil))" : "other" }
+                print("CALL_PROBE_BROWSER: app=\(bundleID) titles=\(titles.count) recognised=\(recognised) shapes=\(shapes.filter { $0 != "other" })")
+            }
+        }
+        print("CALL_PROBE_AX_TRUSTED: \(AXIsProcessTrusted())")
         print("CALL_PROBE: inputs=\(signals.inputs.count) browser_windows=\(signals.windows.count) titles=\(signals.windows.reduce(0) { $0 + $1.titles.count }) calls=\(calls.map(\.platform.rawValue)) ms=\(Int(Date().timeIntervalSince(start) * 1000))")
     }
 }

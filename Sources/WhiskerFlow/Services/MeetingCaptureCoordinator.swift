@@ -38,7 +38,9 @@ final class MeetingCaptureCoordinator {
   private(set) var callPrompt: DetectedCallPrompt?
   /// Calls already asked about; each call is asked about once.
   private var promptedCallIDs: Set<String> = []
-  /// The call a prompt-started recording follows: it stops when the call ends.
+  /// A prompt-started recording follows the detected calls: it stops once
+  /// none is active, not when one of several ends (for example a Safari tab
+  /// using the microphone next to the Meet call being recorded).
   private var activeDetectedCallID: String?
   private var speechSampler: MeetingCoachSpeechSampler?
   private static let schedulePollSeconds: UInt64 = 60
@@ -341,18 +343,20 @@ final class MeetingCaptureCoordinator {
   func handleCallEvent(_ event: CallSessionTracker.Event) {
     switch event {
     case .started(let call):
-      lifecycleLog("call_detected", platform: call.platform)
+      lifecycleLog("call_detected", call: call)
       guard settings.askToRecordCalls, activeSessionID == nil, !captureTransitionInProgress,
             canRecordDetectedCall(), promptedCallIDs.insert(call.id).inserted else { return }
+      // One question at a time: a second call doesn't replace the one asked about.
+      guard callPrompt == nil else { return }
       let now = Self.nowMs()
       let intents = scheduleIntents.isEmpty ? cachedSchedule(now: now) : scheduleIntents
       let intent = CallCalendarMatcher.match(call, intents: intents, nowMs: now)
       callPrompt = DetectedCallPrompt(call: call, intent: intent)
     case .ended(let call):
-      lifecycleLog("call_ended", platform: call.platform)
+      lifecycleLog("call_ended", call: call)
       promptedCallIDs.remove(call.id)
       if callPrompt?.call.id == call.id { callPrompt = nil }
-      if activeDetectedCallID == call.id, activeSessionID != nil, !captureTransitionInProgress {
+      if activeDetectedCallID != nil, callDetector.activeCalls.isEmpty, activeSessionID != nil, !captureTransitionInProgress {
         Task { @MainActor [weak self] in await self?.stopCapture() }
       }
     }
@@ -382,9 +386,13 @@ final class MeetingCaptureCoordinator {
   func showCallPromptForPreview(_ prompt: DetectedCallPrompt) { callPrompt = prompt }
   #endif
 
-  private func lifecycleLog(_ event: String, platform: CallPlatform) {
+  private func lifecycleLog(_ event: String, call: DetectedCall) {
     // Fixed vocabulary only: never a window title, meeting code or name.
-    Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle").info("Call detection", metadata: ["event": "\(event)", "platform": "\(platform.rawValue)"])
+    let source = !call.isBrowser ? "app"
+      : (CallDetectionRules.webKitBrowsers.contains(call.appBundleID) ? "webkit" : "browser")
+    Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle").info("Call detection", metadata: [
+      "event": "\(event)", "platform": "\(call.platform.rawValue)", "source": "\(source)",
+    ])
   }
 
   private func scheduleLoop() async {

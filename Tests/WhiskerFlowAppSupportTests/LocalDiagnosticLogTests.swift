@@ -113,3 +113,23 @@ final class LocalDiagnosticLogTests: XCTestCase {
     }
 
 }
+
+final class CallDetectionDiagnosticsTests: XCTestCase {
+    func testCallEventsKeepOnlyCountsFlagsAndPlatform() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sink = LocalDiagnosticLog(directory: root)
+        var logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle", factory: { LocalDiagnosticLogHandler(label: $0, sink: sink) })
+        logger.logLevel = .info
+        logger.info("Meet – abc-defg-hij", metadata: [
+            "event": "call_unrecognised", "titles": "3", "titles_with_code": "1", "accessibility": "true",
+            "platform": "googleMeet", "title": "Meet – abc-defg-hij", "owners": "com.google.Chrome",
+        ])
+        sink.flush()
+        let text = String(decoding: try Data(contentsOf: root.appendingPathComponent("diagnostics.jsonl")), as: UTF8.self)
+        XCTAssertTrue(text.contains("\"event\":\"call_unrecognised\""))
+        XCTAssertTrue(text.contains("\"titles\":\"3\"") && text.contains("\"accessibility\":\"true\"") && text.contains("\"platform\":\"googleMeet\""))
+        XCTAssertFalse(text.contains("abc-defg-hij"), "Titles and meeting codes never reach the log")
+        XCTAssertFalse(text.contains("com.google.Chrome"))
+    }
+}
