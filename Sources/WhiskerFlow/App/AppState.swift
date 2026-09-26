@@ -1618,7 +1618,7 @@ final class AppState {
                 devices: currentDevices
             ) {
                 do {
-                    try live.start(
+                    try await live.start(
                         selection: candidate,
                         language: configuration.language,
                         model: configuration.model,
@@ -1635,6 +1635,8 @@ final class AppState {
                 } catch {
                     live.cancel()
                     lastStartError = error
+                    // The capture was stopped while it started; another device won't help.
+                    if error is CancellationError { break }
                 }
             }
             guard let inputSelection else {

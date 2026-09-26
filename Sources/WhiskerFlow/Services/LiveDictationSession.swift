@@ -88,7 +88,7 @@ final class LiveDictationSession {
         recognizeCorrections: Bool = false,
         hints: RecognizerHints = .none,
         previewEngine: TranscriptionEngineKind? = nil
-    ) throws {
+    ) async throws {
         self.language = language
         self.model = model
         self.vocabulary = vocabulary
@@ -104,7 +104,7 @@ final class LiveDictationSession {
         currentAudioURL = nil
         do {
             let audioURL = try AudioFileWriter.makeRecordingURL()
-            try audioCapture.start(selection: selection, spoolTo: audioURL)
+            try await audioCapture.start(selection: selection, spoolTo: audioURL)
             currentAudioURL = audioURL
             isRunning = true
         } catch {
