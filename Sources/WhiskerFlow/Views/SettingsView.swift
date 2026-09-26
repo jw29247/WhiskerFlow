@@ -77,20 +77,6 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                Toggle("Ignore audio from speakers", isOn: $appState.settings.ignoreSpeakerAudio)
-                    .onChange(of: appState.settings.ignoreSpeakerAudio) { _, _ in appState.microphoneProcessingChanged() }
-                Text("Cancels videos, music and calls playing on this Mac out of your dictation, so only your voice is transcribed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if appState.settings.ignoreSpeakerAudio {
-                    LabeledContent("Other voices in the room") {
-                        Button("Microphone Mode…") { AVCaptureDevice.showSystemUserInterface(.microphoneModes) }
-                    }
-                    Text("While dictating, choose Voice Isolation to filter out people talking nearby.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
                 Picker("Microphone", selection: $appState.settings.selectedInputUID) {
                     Text("System Default").tag("system-default")
                     if appState.settings.selectedInputUID != "system-default",

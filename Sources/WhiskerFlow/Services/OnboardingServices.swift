@@ -61,9 +61,8 @@ final class OnboardingMicrophoneProbe {
         didSet { capture.onLevel = onLevel }
     }
 
-    func start(selection: AudioInputSelection, voiceProcessing: Bool) async throws {
+    func start(selection: AudioInputSelection) async throws {
         stop()
-        capture.voiceProcessing = voiceProcessing
         capture.onLevel = onLevel
         // Running from the start, so a `stop()` while the engine builds cancels it.
         isRunning = true

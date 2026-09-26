@@ -202,12 +202,6 @@ final class LiveDictationSession {
         self.tone = tone
     }
 
-    /// Echo cancellation for engines built from now on; see `AudioCaptureService.voiceProcessing`.
-    var voiceProcessing: Bool {
-        get { audioCapture.voiceProcessing }
-        set { audioCapture.voiceProcessing = newValue }
-    }
-
     /// Build the next capture's engine in the background so a hotkey press only
     /// has to start it.
     func prepareCapture(selection: AudioInputSelection) {

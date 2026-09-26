@@ -953,14 +953,7 @@ final class AppState {
         guard !UIPreview.isEnabled, settings.legacySelectedDeviceID == nil,
               microphonePermission.authorizationState == .authorized,
               recordingCoordinator.phase == .idle else { return }
-        live.voiceProcessing = settings.ignoreSpeakerAudio
         live.prepareCapture(selection: settings.selectedInput)
-    }
-
-    /// The speaker-audio preference changed: rebuild the ready engine to match.
-    func microphoneProcessingChanged() {
-        live.invalidatePreparedCapture()
-        prepareNextCapture()
     }
 
     private func startAudioDeviceMonitor() {
@@ -1612,7 +1605,6 @@ final class AppState {
             streamingActive = configuration.engine == .whisperKit && settings.liveTranscription
             var inputSelection: AudioInputSelection?
             var lastStartError: Error?
-            live.voiceProcessing = settings.ignoreSpeakerAudio
             lifecycleLogger.info("Opening microphone", metadata: [
                 "event": "capture_opening", "session": "\(sessionID)"
             ])

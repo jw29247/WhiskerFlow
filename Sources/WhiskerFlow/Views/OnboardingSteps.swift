@@ -233,7 +233,7 @@ struct OnboardingMicrophoneStep: View {
         Task { @MainActor in
             await Task.yield()
             do {
-                try await probe.start(selection: selection, voiceProcessing: appState.settings.ignoreSpeakerAudio)
+                try await probe.start(selection: selection)
             } catch is CancellationError {
             } catch {
                 startError = "This microphone couldn’t be opened: \(CaptureErrorPresentation.message(for: error)) Pick another one."
