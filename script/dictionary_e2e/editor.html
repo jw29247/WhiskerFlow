@@ -1,0 +1,12 @@
+<!doctype html><title>WF E2E editor</title>
+<body style="font:16px -apple-system;margin:40px">
+<h3>WhiskerFlow dictionary E2E (local test page)</h3>
+<p>textarea</p><textarea id="t" rows="4" cols="80"></textarea>
+<p>contenteditable</p><div id="c" contenteditable="true" role="textbox" aria-multiline="true" style="border:1px solid #999;min-height:60px;width:640px;padding:6px"></div>
+<p>chat box (Enter sends and clears)</p><div id="chat" contenteditable="true" role="textbox" style="border:1px solid #06c;min-height:30px;width:640px;padding:6px"></div>
+<ul id="sent"></ul>
+<script>
+const params = new URLSearchParams(location.search); const f = document.getElementById(params.get('focus') || 't'); f.focus();
+document.getElementById('chat').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const li = document.createElement('li'); li.textContent = e.target.innerText; document.getElementById('sent').append(li); e.target.innerHTML = ''; } });
+</script>
+</body>

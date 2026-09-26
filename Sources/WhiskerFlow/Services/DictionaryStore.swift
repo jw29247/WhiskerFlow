@@ -22,6 +22,10 @@ final class DictionaryStore {
         if let fileURL, FileManager.default.fileExists(atPath: fileURL.path) {
             do {
                 dictionary = try JSONDecoder().decode(UserDictionary.self, from: Data(contentsOf: fileURL))
+                // Earlier builds migrated a blank legacy rule as an empty entry.
+                var cleaned = dictionary
+                cleaned.entries.removeAll { $0.origin == .migrated && $0.heard.isEmpty && $0.written.isEmpty }
+                if cleaned != dictionary { save(cleaned) }
             } catch {
                 loadFailed = true
                 dictionary = .migrating(from: legacyVocabulary, at: now)

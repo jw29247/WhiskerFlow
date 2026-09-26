@@ -144,6 +144,8 @@ final class AppState {
     var assistantVoiceInstruction = ""
     var meetingAssistant: MeetingAssistantController { meetingCapture.assistant }
     private var correctionEditBaselines: [UUID: String] = [:]
+    /// What the latest paste or History edit added to the Dictionary.
+    private var learnedThisSession: (id: UUID, changes: [DictionaryChange])?
     let assistant: AssistantController
     let corrections: CorrectionStore
     let dictionary: DictionaryStore
@@ -313,7 +315,7 @@ final class AppState {
         }
         correctionMonitor.onCorrections = { [weak self] changes, sessionID, application in
             self?.corrections.record(changes, sessionID: sessionID, application: application)
-            self?.learnFromCorrections(changes)
+            self?.learnFromCorrections(changes, sessionID: sessionID)
         }
         live.onLevel = { [weak self] level, peak in
             guard let self else { return }
@@ -828,17 +830,31 @@ final class AppState {
         )
     }
 
-    /// Promotes corrections that have now been seen often enough.
-    private func learnFromCorrections(_ changes: [VocabularyCorrection]) {
-        guard settings.rememberCorrections, settings.autoAddLearnedWords, !changes.isEmpty else { return }
+    /// Promotes corrections that have now been seen often enough. `changes` is
+    /// the whole of the edit in one paste or History record so far, so anything
+    /// that edit added earlier and no longer contains (a half-typed fix, an
+    /// edit the user took back) is removed again.
+    private func learnFromCorrections(_ changes: [VocabularyCorrection], sessionID: UUID) {
+        guard settings.rememberCorrections, settings.autoAddLearnedWords else { return }
         let pairs = changes.map { DictionaryPair(heard: $0.find, written: $0.replaceWith) }
+        var earlier = learnedThisSession?.id == sessionID ? learnedThisSession?.changes ?? [] : []
+        let superseded = earlier.filter { !pairs.contains($0.pair) }
+        earlier.removeAll { !pairs.contains($0.pair) }
         var learned: [DictionaryChange] = []
         let observations = correctionObservations
         let readOnly = readOnlyDictionaryRules
         dictionary.update { dictionary in
+            for change in superseded.reversed() { DictionaryLearning.revert(change, in: &dictionary) }
             learned = DictionaryLearning.learn(from: pairs, observations: observations, dictionary: &dictionary,
-                                               readOnly: readOnly)
+                                               readOnly: readOnly, isKnownWord: Self.isKnownWord)
         }
+        learnedThisSession = (sessionID, earlier + learned)
+        if let notice = dictionaryNotice, !superseded.isEmpty {
+            let kept = notice.changes.filter { change in !superseded.contains { $0.after.id == change.after.id } }
+            dictionaryNotice = kept.isEmpty ? nil : DictionaryNotice(changes: kept)
+        }
+        lifecycleLogger.info("Dictionary learning ran", metadata: ["event": "dictionary_learned", "corrections": "\(pairs.count)",
+                                                                   "learned": "\(learned.count)"])
         guard !learned.isEmpty else { return }
         dictionaryNotice = DictionaryNotice(changes: learned)
         // A short HUD note for users who fixed the word in another app; Undo lives
@@ -846,6 +862,19 @@ final class AppState {
         if !isRecording, !isTranscribing, status == .idle || status.hudNotificationMessage != nil, status != .delivering {
             status = .success(dictionaryNotice?.hudMessage ?? "Added to Dictionary")
         }
+    }
+
+    /// A correctly spelled word or common name, per the system spell checker.
+    static func isKnownWord(_ word: String) -> Bool {
+        NSSpellChecker.shared.checkSpelling(of: word, startingAt: 0, language: nil, wrap: false,
+                                            inSpellDocumentWithTag: 0, wordCount: nil).location == NSNotFound
+    }
+
+    /// The suggestion's rewrite is added automatically once it is corrected again.
+    func dictionaryRewriteWaits(for suggestion: DictionarySuggestion) -> Bool {
+        suggestion.demotedAt == nil && suggestion.issues.isEmpty && settings.autoAddLearnedWords
+            && DictionaryLearning.waitsForAnotherSighting(suggestion.pair, sightings: suggestion.sightings,
+                                                          isKnownWord: Self.isKnownWord)
     }
 
     func undoDictionaryNotice() {
@@ -1066,7 +1095,7 @@ final class AppState {
                 let changes = VocabularyCorrectionDetector.corrections(original: baseline, edited: text,
                                                                        maxSuggestions: 20, allowShortCorrections: true)
                 corrections.record(changes, sessionID: record.id, application: "WhiskerFlow")
-                learnFromCorrections(changes)
+                learnFromCorrections(changes, sessionID: record.id)
             }
         } catch {
             handleStorageError(error, message: "Could not save transcript changes")
@@ -1361,39 +1390,56 @@ final class AppState {
 
     // MARK: - Recording
 
-    private func startHotkeyMonitor() {
-        let monitor = HotkeyMonitor(combo: settings.activeHotkeyCombo) { [weak self] pressed in
-            guard let self else { return }
-            switch self.settings.recordingMode {
-            case .holdToTalk:
-                if pressed {
-                    self.recordingIntentActive = true
-                    self.pasteTargetApplication = NSWorkspace.shared.frontmostApplication
-                    if self.assistant.capturePurpose == .selectionInstruction, !self.assistant.captureSelection() {
-                        self.recordingIntentActive = false
-                        self.status = .failure(self.assistant.message ?? "Capture a selection first")
-                        return
-                    }
-                    Task { await self.beginRecording() }
-                } else {
-                    self.recordingIntentActive = false
-                    Task { await self.finishRecording() }
+    private func handleDictationKey(_ pressed: Bool) {
+        switch settings.recordingMode {
+        case .holdToTalk:
+            if pressed {
+                recordingIntentActive = true
+                capturePasteTarget()
+                if assistant.capturePurpose == .selectionInstruction, !assistant.captureSelection() {
+                    recordingIntentActive = false
+                    status = .failure(assistant.message ?? "Capture a selection first")
+                    return
                 }
-            case .toggle:
-                guard pressed else { return }
-                if self.isRecording {
-                    Task { await self.finishRecording() }
-                } else {
-                    self.recordingIntentActive = true
-                    self.pasteTargetApplication = NSWorkspace.shared.frontmostApplication
-                    if self.assistant.capturePurpose == .selectionInstruction, !self.assistant.captureSelection() {
-                        self.recordingIntentActive = false
-                        self.status = .failure(self.assistant.message ?? "Capture a selection first")
-                        return
-                    }
-                    Task { await self.beginRecording() }
-                }
+                Task { await beginRecording() }
+            } else {
+                recordingIntentActive = false
+                Task { await finishRecording() }
             }
+        case .toggle:
+            guard pressed else { return }
+            if isRecording {
+                Task { await finishRecording() }
+            } else {
+                recordingIntentActive = true
+                capturePasteTarget()
+                if assistant.capturePurpose == .selectionInstruction, !assistant.captureSelection() {
+                    recordingIntentActive = false
+                    status = .failure(assistant.message ?? "Capture a selection first")
+                    return
+                }
+                Task { await beginRecording() }
+            }
+        }
+    }
+
+    /// Remembers where the dictation goes and asks it for its text fields now,
+    /// so an Electron destination has built them by the time the text lands.
+    private func capturePasteTarget() {
+        pasteTargetApplication = NSWorkspace.shared.frontmostApplication
+        guard let pid = pasteTargetApplication?.processIdentifier, !UIPreview.isEnabled else { return }
+        DispatchQueue.global(qos: .userInitiated).async { TextFieldSnapshot.exposeAccessibilityTree(pid) }
+    }
+
+    private func startHotkeyMonitor() {
+        #if DEBUG
+        if DebugDictationTrigger.isEnabled {
+            DebugDictationTrigger.install { [weak self] pressed in self?.handleDictationKey(pressed) }
+            return
+        }
+        #endif
+        let monitor = HotkeyMonitor(combo: settings.activeHotkeyCombo) { [weak self] pressed in
+            self?.handleDictationKey(pressed)
         }
         monitor.start()
         hotkeyMonitor = monitor
@@ -1409,7 +1455,7 @@ final class AppState {
                     self.assistant.capturePurpose = purpose
                     self.assistantShortcutActive = true
                     self.recordingIntentActive = true
-                    self.pasteTargetApplication = NSWorkspace.shared.frontmostApplication
+                    self.capturePasteTarget()
                     Task { await self.beginRecording() }
                 } else if self.assistantShortcutActive {
                     self.assistantShortcutActive = false
@@ -2539,6 +2585,7 @@ final class AppState {
         let deliveryStarted = ProcessInfo.processInfo.systemUptime
         let deliveryID = UUID()
         var deliveryOutcome = "failed"
+        var deliveryDetail = PasteDeliveryReceipt.Detail.none
         // Recognition has completed. Destination verification is separate work
         // and must not keep dictation controls in their transcription state.
         if mayUpdateStatus && canUpdateLifecycleUI(for: sessionID) {
@@ -2547,7 +2594,7 @@ final class AppState {
             status = .delivering
         }
         lifecycleLogger.info("Text delivery started", metadata: ["event": "paste_started", "session": "\(sessionID?.uuidString ?? "")"])
-        defer { lifecycleLogger.info("Text delivery returned", metadata: ["event": "paste_returned", "session": "\(sessionID?.uuidString ?? "")", "outcome": "\(deliveryOutcome)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - deliveryStarted) * 1000)"]) }
+        defer { lifecycleLogger.info("Text delivery returned", metadata: ["event": "paste_returned", "session": "\(sessionID?.uuidString ?? "")", "outcome": "\(deliveryOutcome)", "paste_detail": "\(deliveryDetail.rawValue)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - deliveryStarted) * 1000)"]) }
         if purpose != .dictation {
             switch purpose {
             case .quickCapture:
@@ -2578,6 +2625,7 @@ final class AppState {
                 self.status = .success("Pasted")
             }
             deliveryOutcome = receipt.state.rawValue
+            deliveryDetail = receipt.detail
             hasAccessibilityPermission = pasteService.hasAccessibilityPermission
             if mayUpdateStatus && latestDeliveryID == deliveryID && canUpdateLifecycleUI(for: sessionID) {
                 lastPasteReceipt = receipt

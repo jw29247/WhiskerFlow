@@ -35,3 +35,20 @@ extension PastedTextScopeTests {
         XCTAssertNil(scope.editedText(in: "e\u{301}Marc!"))
     }
 }
+
+extension PastedTextScopeTests {
+    /// Measured in the Claude desktop composer: empty reads "\n", and after the
+    /// paste the value is the text alone.
+    func testEmptyRichTextEditorParagraphBreakIsNotPartOfTheScope() throws {
+        let scope = try XCTUnwrap(PastedTextScope(before: "\n", selection: NSRange(location: 0, length: 0), pasted: "Ask Neve"))
+        XCTAssertTrue(scope.confirmsInsertion("Ask Neve"))
+        XCTAssertTrue(scope.confirmsInsertion("Ask Neve\n"), "editors that keep the break")
+        XCTAssertFalse(scope.confirmsInsertion("Ask Neve later"))
+        XCTAssertEqual(scope.editedText(in: "Ask Neeve"), "Ask Neeve")
+        XCTAssertEqual(scope.editedText(in: "Ask Neeve\n"), "Ask Neeve")
+        XCTAssertEqual(scope.editedText(in: "\n"), "", "sent and cleared")
+
+        let afterBreak = try XCTUnwrap(PastedTextScope(before: "\n", selection: NSRange(location: 1, length: 0), pasted: "Hi"))
+        XCTAssertTrue(afterBreak.confirmsInsertion("\nHi"), "a real line break before the caret is kept")
+    }
+}

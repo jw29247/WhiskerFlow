@@ -186,6 +186,13 @@ enum UIPreview {
             if mode == "coach" { seedCoach(state.meetingAssistant) }
             return state
         }
+        // End-to-end runs beside the installed app: same bundle ID (so the
+        // TCC grants apply) but its own preferences, so nothing it changes
+        // reaches the real settings.
+        if let suite = DebugDictationTrigger.defaultsSuite, let defaults = UserDefaults(suiteName: suite) {
+            return AppState(settings: AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: suite)),
+                            onboardingStore: UserDefaultsOnboardingStore(defaults: defaults))
+        }
         #endif
         return AppState()
     }

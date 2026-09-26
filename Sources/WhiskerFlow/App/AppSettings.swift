@@ -35,7 +35,7 @@ final class AppSettings {
     /// Echo-cancel speaker playback out of dictation audio.
     var ignoreSpeakerAudio: Bool { didSet { defaults.set(ignoreSpeakerAudio, forKey: Keys.ignoreSpeakerAudio) } }
     var rememberCorrections: Bool { didSet { defaults.set(rememberCorrections, forKey: "rememberCorrections") } }
-    /// Add a remembered correction to the Dictionary once it has been seen twice.
+    /// Add a remembered correction to the Dictionary as soon as it is seen.
     var autoAddLearnedWords: Bool { didSet { defaults.set(autoAddLearnedWords, forKey: Keys.autoAddLearnedWords) } }
     /// Per-engine recogniser hints from the Dictionary. Each can be turned off
     /// independently; post-recognition replacement applies either way.
