@@ -73,11 +73,27 @@ final class MeetingActivityProbeTests: XCTestCase {
                 print("ACTIVITY_PROBE_SCORE: \(name) you_seconds_true=\(tp + fn) predicted=\(tp + fp) precision=\(String(format: "%.2f", precision)) recall=\(String(format: "%.2f", recall)) others_seconds_called_you=\(fp) of \(fp + tn)")
             }
             score({ active(mic, $0) }, "fixed_threshold")
-            score({ adaptiveYou[$0] }, "adaptive")
+            score({ adaptiveYou[$0] }, "adaptive_default")
+            // A small grid, to tune against the transcript.
+            for margin in [4.0, 8.0, 16.0] {
+                for percentile in [0.25, 0.5] {
+                    for before in [2, 4] {
+                        var candidate = MeetingSpeakerActivityClassifier(bleedMargin: margin, bleedPercentile: percentile, leakFramesBefore: before, leakFramesAfter: 1)
+                        var youByCandidate: [Bool] = []
+                        for second in 0..<seconds {
+                            let range = (second * 16_000)..<((second + 1) * 16_000)
+                            youByCandidate.append(candidate.classify(microphone: Array(mic[range]), system: Array(system[range])).you == true)
+                        }
+                        score({ youByCandidate[$0] }, "margin=\(Int(margin)) pct=\(percentile) before=\(before)")
+                    }
+                }
+            }
             let refYou = reference.compactMap { $0 }.filter { $0 }.count, refAll = reference.compactMap { $0 }.count
             print("ACTIVITY_PROBE_REFERENCE: transcript_you_share=\(refAll == 0 ? "-" : String(format: "%.2f", Double(refYou) / Double(refAll))) labelled_seconds=\(refAll)")
         } else {
-            print("ACTIVITY_PROBE_REFERENCE: no transcript yet")
+            let entry = try? EncryptedMeetingLibraryStore(rootURL: libraryRoot, keyProvider: KeychainMeetingChunkKeyProvider())
+                .loadAll().entries.first(where: { $0.sessionID == id })
+            print("ACTIVITY_PROBE_REFERENCE: no transcript yet; status=\(entry?.status.rawValue ?? "-") detail=\(entry?.statusDetail ?? "-")")
         }
         func pct(_ v: [Double], _ p: Double) -> String { v.isEmpty ? "-" : String(format: "%.4f", v.sorted()[min(v.count - 1, Int(Double(v.count) * p))]) }
         print("ACTIVITY_PROBE: seconds=\(seconds) states=\(states)")

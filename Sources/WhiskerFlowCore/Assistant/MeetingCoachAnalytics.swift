@@ -469,8 +469,11 @@ public struct MeetingSpeakerActivityClassifier: Equatable, Sendable {
     static let micMinimumMeanSquare: Double = 0.015 * 0.015
     /// About 6 dB above the room's noise floor.
     static let noiseMargin: Double = 4
-    /// About 6 dB above the leak predicted from the Mac audio.
-    static let bleedMargin: Double = 4
+    /// How far above the predicted leak your microphone must be (8 ≈ 9 dB).
+    public let bleedMargin: Double
+    /// Which low percentile of observed microphone/Mac-audio ratios is taken
+    /// as the leak (moments when only the others speak sit at the low end).
+    public let bleedPercentile: Double
     /// Frames in a second that must be active.
     static let framesPerActiveSecond = 2
 
@@ -483,16 +486,24 @@ public struct MeetingSpeakerActivityClassifier: Equatable, Sendable {
     /// The speakers reach the microphone late, and the room echoes: compare
     /// each microphone frame with the loudest Mac audio from 200 ms before
     /// to 100 ms after it.
-    static let leakFramesBefore = 2
-    static let leakFramesAfter = 1
+    public let leakFramesBefore: Int
+    public let leakFramesAfter: Int
 
-    public init() {}
+    /// Defaults tuned on a 25-minute Meet on the Mac's speakers against its
+    /// transcript's You/others labels: 9 % of the others' speech counted as
+    /// you (was 96 % with a fixed threshold), precision 0.95, recall 0.85.
+    public init(bleedMargin: Double = 8, bleedPercentile: Double = 0.5, leakFramesBefore: Int = 2, leakFramesAfter: Int = 1) {
+        self.bleedMargin = bleedMargin
+        self.bleedPercentile = min(0.9, max(0.05, bleedPercentile))
+        self.leakFramesBefore = max(0, leakFramesBefore)
+        self.leakFramesAfter = max(0, leakFramesAfter)
+    }
 
     /// Current estimates, for diagnostics and tests.
     public var noiseFloorMeanSquare: Double? { recentMicSecondMedians.min() }
     public var bleedGain: Double? {
         guard bleedRatios.count >= 20 else { return nil }
-        return bleedRatios.sorted()[bleedRatios.count / 4]
+        return bleedRatios.sorted()[Int(Double(bleedRatios.count) * bleedPercentile)]
     }
 
     /// Classifies one second. Either side is `nil` when its track delivered
@@ -518,21 +529,21 @@ public struct MeetingSpeakerActivityClassifier: Equatable, Sendable {
             let offset = previousSystemTail.count
             for (index, m) in mic.enumerated() {
                 guard m >= floor else { continue }
-                let lower = max(0, offset + index - Self.leakFramesBefore)
-                let upper = min(window.count - 1, offset + index + Self.leakFramesAfter)
+                let lower = max(0, offset + index - leakFramesBefore)
+                let upper = min(window.count - 1, offset + index + leakFramesAfter)
                 let s = lower <= upper ? window[lower...upper].max() ?? 0 : 0
                 if s >= Self.systemFloorMeanSquare {
                     // Learn the leak from frames where the others sound and the
                     // microphone is no louder than a leak plausibly is.
                     bleedRatios.append(m / s)
                     if bleedRatios.count > 600 { bleedRatios.removeFirst(bleedRatios.count - 600) }
-                    guard let gain = bleedGain, m > Self.bleedMargin * gain * s else { continue }
+                    guard let gain = bleedGain, m > bleedMargin * gain * s else { continue }
                 }
                 youFrames += 1
             }
         }
         if let sys { othersFrames = sys.filter { $0 >= Self.systemFloorMeanSquare }.count }
-        previousSystemTail = Array((sys ?? []).suffix(Self.leakFramesBefore))
+        previousSystemTail = Array((sys ?? []).suffix(leakFramesBefore))
         return (
             mic == nil ? nil : youFrames >= Self.framesPerActiveSecond,
             sys == nil ? nil : othersFrames >= Self.framesPerActiveSecond
