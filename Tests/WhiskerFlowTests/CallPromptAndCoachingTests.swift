@@ -197,6 +197,16 @@ final class CallPromptAndCoachingTests: XCTestCase {
         XCTAssertFalse(controller.wantsOwnSpeech, "Nothing is transcribed after the meeting ends")
     }
 
+    func testCoachSwitchReportsChangesSoTheAppCanRememberThem() throws {
+        let controller = try coach()
+        var reported: [Bool] = []
+        controller.onCoachEnabledChange = { reported.append($0) }
+        controller.isCoachEnabled = true
+        controller.isCoachEnabled = false
+        controller.isCoachEnabled = false
+        XCTAssertEqual(reported, [false], "Only real changes are reported (it started on)")
+    }
+
     func testNoSummaryWhenCoachingWasOff() throws {
         let controller = try coach()
         controller.isCoachEnabled = false
@@ -271,6 +281,7 @@ final class CoachSettingsDefaultsTests: XCTestCase {
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
         let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        XCTAssertTrue(settings.coachEnabled, "The coach is on by default")
         XCTAssertTrue(settings.coachAISuggestions)
         XCTAssertTrue(settings.coachLiveAnalysis)
         XCTAssertTrue(settings.askToRecordCalls)

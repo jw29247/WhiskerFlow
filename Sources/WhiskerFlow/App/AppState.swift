@@ -470,6 +470,11 @@ final class AppState {
 
   private func applyCoachSettings() {
     let assistant = meetingCapture.assistant
+    assistant.isCoachEnabled = settings.coachEnabled
+    assistant.onCoachEnabledChange = { [weak self] enabled in
+      guard let self, self.settings.coachEnabled != enabled else { return }
+      self.settings.coachEnabled = enabled
+    }
     assistant.isLiveAnalysisEnabled = settings.coachLiveAnalysis
     let suggestions = settings.coachAISuggestions && OnDeviceCoachModel.isAvailable
     if suggestions, assistant.suggester == nil { assistant.suggester = OnDeviceCoachModel.makeSuggester() }

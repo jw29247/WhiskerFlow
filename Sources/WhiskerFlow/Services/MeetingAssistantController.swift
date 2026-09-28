@@ -91,7 +91,14 @@ final class MeetingAssistantController {
     private var finishedSummaries: [UUID: MeetingCoachSummary] = [:]
 
     private(set) var isActive = false
-    var isCoachEnabled = false { didSet { clearSuppressedCoaching() } }
+    var isCoachEnabled = false {
+        didSet {
+            clearSuppressedCoaching()
+            if isCoachEnabled != oldValue { onCoachEnabledChange?(isCoachEnabled) }
+        }
+    }
+    /// Lets the app remember the Coach switch.
+    var onCoachEnabledChange: ((Bool) -> Void)?
     var isCoachPaused = false { didSet { clearSuppressedCoaching() } }
     var isCoachVisible = true { didSet { clearSuppressedCoaching() } }
     /// An ad hoc wrap reminder is only enabled by an explicit duration selection.

@@ -75,6 +75,8 @@ final class AppSettings {
     var meetingModeEnabled: Bool { didSet { defaults.set(meetingModeEnabled, forKey: Keys.meetingModeEnabled) } }
     /// Show "Record this meeting?" when a call starts in a call app or browser.
     var askToRecordCalls: Bool { didSet { defaults.set(askToRecordCalls, forKey: Keys.askToRecordCalls) } }
+    /// The private meeting coach. On by default and remembered.
+    var coachEnabled: Bool { didSet { defaults.set(coachEnabled, forKey: Keys.coachEnabled) } }
     /// Speaking pace from on-device transcription of your microphone while coaching.
     var coachLiveAnalysis: Bool { didSet { defaults.set(coachLiveAnalysis, forKey: Keys.coachLiveAnalysis) } }
     /// Experimental on-device AI coaching suggestions. On by default; they run
@@ -222,6 +224,7 @@ final class AppSettings {
         // user pairs a device and explicitly enables it.
         meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? false
         askToRecordCalls = defaults.object(forKey: Keys.askToRecordCalls) as? Bool ?? true
+        coachEnabled = defaults.object(forKey: Keys.coachEnabled) as? Bool ?? true
         coachLiveAnalysis = defaults.object(forKey: Keys.coachLiveAnalysis) as? Bool ?? true
         coachAISuggestions = defaults.object(forKey: Keys.coachAISuggestions) as? Bool ?? true
         meetingTranscriptRetention = defaults.string(forKey: Keys.meetingTranscriptRetention)
@@ -405,6 +408,7 @@ final class AppSettings {
         static let meetingModeEnabled = "meetingModeEnabled"
         static let meetingTranscriptRetention = "meetingTranscriptRetention"
         static let askToRecordCalls = "askToRecordCalls"
+        static let coachEnabled = "coachEnabled"
         static let coachLiveAnalysis = "coachLiveAnalysis"
         static let coachAISuggestions = "coachAISuggestions"
         static let cachedMeetingSchedule = "cachedMeetingSchedule"
