@@ -41,6 +41,8 @@ File-backed and in-memory Parakeet decodes take the same time (`DictationPerform
 
 ## Follow-up: speaker echo and live HUD text
 
+> **Removed on 2026-09-26.** Voice processing was taken out along with its setting. After waking at a desk with a C920 webcam mic, its builds spun forever inside AVAudioIOUnit or deadlocked in AudioDSP, leaving dictation on "opening mic". Without it the mic started in 0.24 s instead of 0.6 s. Speed wins over echo cancellation.
+
 - **Ignore audio from speakers** (Settings, on by default) turns on Apple voice processing for the dictation microphone.
   - It cancels what this Mac is playing out of the mic signal.
   - It enables the system Mic Mode picker (Settings → Microphone Mode…), where Voice Isolation suppresses other voices nearby.

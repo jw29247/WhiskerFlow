@@ -109,7 +109,7 @@ struct DictionaryView: View {
                     Button("Allow Accessibility") { appState.requestAccessibilityPermission() }
                 }
             }
-            Text("Fix a word after WhiskerFlow pastes it, or edit a transcript in History. A correction seen twice is added automatically unless it would change everyday words or clash with another entry. Learned entries left unused for 90 days go back to Suggestions unless starred. Everything stays on this Mac.")
+            Text("Fix a word after WhiskerFlow pastes it, or edit a transcript in History. A correction adds the word automatically. When what was heard is itself a real word, it is only rewritten after you fix it a second time. Nothing is added that would change everyday words or clash with another entry. Learned entries left unused for 90 days go back to Suggestions unless starred. Everything stays on this Mac.")
                 .font(.caption).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -232,9 +232,8 @@ struct DictionaryView: View {
         if suggestion.demotedAt == nil, let last = suggestion.lastSeen {
             parts.append(last.formatted(date: .abbreviated, time: .omitted))
         }
-        if suggestion.demotedAt == nil, suggestion.issues.isEmpty,
-           suggestion.sightings < DictionaryLearning.autoAddThreshold, appState.settings.autoAddLearnedWords {
-            parts.append("Added automatically if seen again")
+        if appState.dictionaryRewriteWaits(for: suggestion) {
+            parts.append("Rewritten automatically if you fix it again")
         }
         return parts.joined(separator: " · ")
     }

@@ -39,6 +39,8 @@ enum AudioCaptureServiceError: LocalizedError {
     case invalidInputFormat
     case converterUnavailable
     case conversionFailed(String)
+    /// Building the engine never finished: CoreAudio is stuck.
+    case engineTimedOut
 
     var errorDescription: String? {
         switch self {
@@ -52,6 +54,8 @@ enum AudioCaptureServiceError: LocalizedError {
             return "The microphone audio format could not be converted."
         case .conversionFailed(let message):
             return "Microphone audio conversion failed: \(message)"
+        case .engineTimedOut:
+            return "macOS audio stopped responding. Quit and reopen WhiskerFlow to use the microphone."
         }
     }
 }
@@ -327,18 +331,71 @@ private final class PreparedCapture: @unchecked Sendable {
     let deviceID: AudioDeviceID
     let inputFormat: AVAudioFormat
     let sink: CaptureSink
-    /// What was requested, so a changed preference rebuilds the engine even if
-    /// the device refused voice processing and this engine fell back.
-    let requestedVoiceProcessing: Bool
+    /// Installs the tap for `inputFormat`. Stopping a capture removes it, so a
+    /// reused engine installs it again before starting.
+    let installTap: () throws -> Void
+    /// Touched only on the engine queue, or on the main actor while no engine
+    /// queue work holds this capture.
+    var tapInstalled = true
 
     init(engine: AVAudioEngine, selection: AudioInputSelection, deviceID: AudioDeviceID,
-         inputFormat: AVAudioFormat, sink: CaptureSink, requestedVoiceProcessing: Bool) {
+         inputFormat: AVAudioFormat, sink: CaptureSink, installTap: @escaping () throws -> Void) {
         self.engine = engine
         self.selection = selection
         self.deviceID = deviceID
         self.inputFormat = inputFormat
         self.sink = sink
-        self.requestedVoiceProcessing = requestedVoiceProcessing
+        self.installTap = installTap
+    }
+}
+
+/// The serial queue engines are built and torn down on. CoreAudio can keep an
+/// engine's format query busy for seconds, or forever, after a device change.
+/// A build that never returns has its queue abandoned for a fresh one, so later
+/// captures are not queued behind it.
+private final class CaptureEngineQueue: @unchecked Sendable {
+    static let shared = CaptureEngineQueue()
+
+    private let lock = NSLock()
+    private var queue = CaptureEngineQueue.makeQueue()
+    private var generation = 0
+
+    var current: (queue: DispatchQueue, generation: Int) { lock.withLock { (queue, generation) } }
+
+    func isCurrent(_ generation: Int) -> Bool { lock.withLock { self.generation == generation } }
+
+    /// Returns false when that queue was already abandoned.
+    @discardableResult
+    func abandon(_ generation: Int) -> Bool {
+        lock.withLock {
+            guard self.generation == generation else { return false }
+            self.generation += 1
+            queue = Self.makeQueue()
+            return true
+        }
+    }
+
+    private static func makeQueue() -> DispatchQueue {
+        DispatchQueue(label: "WhiskerFlow.capture-engine", qos: .userInitiated)
+    }
+}
+
+/// Resumes a continuation exactly once, whichever of the work and its timeout
+/// finishes first.
+private final class ResumeOnce<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Error>?
+
+    init(_ continuation: CheckedContinuation<T, Error>) { self.continuation = continuation }
+
+    @discardableResult
+    func resume(with result: Result<T, Error>) -> Bool {
+        let continuation = lock.withLock { () -> CheckedContinuation<T, Error>? in
+            defer { self.continuation = nil }
+            return self.continuation
+        }
+        continuation?.resume(with: result)
+        return continuation != nil
     }
 }
 
@@ -346,7 +403,11 @@ private final class PreparedCapture: @unchecked Sendable {
 final class AudioCaptureService {
     nonisolated private static let targetSampleRate = 16_000.0
     /// Builds and tears down engines away from the main actor.
-    nonisolated private static let engineQueue = DispatchQueue(label: "WhiskerFlow.capture-engine", qos: .userInitiated)
+    nonisolated private static var engineQueue: DispatchQueue { CaptureEngineQueue.shared.current.queue }
+    /// A healthy build takes well under a second, and a few seconds while
+    /// CoreAudio churns through a device change. Longer is a deadlock.
+    nonisolated private static let engineBuildTimeoutSeconds = 6.0
+    private static let timingLogger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
     private let logger = Logging.Logger(
         label: "agency.thatworks.WhiskerFlow.AudioCapture"
     )
@@ -360,8 +421,20 @@ final class AudioCaptureService {
     /// sampler's "audio is live" set needs a per-instance key.
     private let captureActivitySource = "microphone-\(UUID().uuidString)"
     private var ready: PreparedCapture?
+    /// Bumped by every stop, so a start still waiting for its engine knows it
+    /// was superseded.
+    private var startGeneration = 0
     private var readyObserver: NSObjectProtocol?
     private var readyGeneration = 0
+    /// A background build for the next capture, until it becomes `ready` or a
+    /// press claims it.
+    private var preparation: Preparation?
+
+    private struct Preparation {
+        let selection: AudioInputSelection
+        let generation: Int
+        let task: Task<PreparedCapture?, Never>
+    }
     private var configurationObserver: NSObjectProtocol?
     private var interruptionWatchdog: Task<Void, Never>?
     private var configurationObservationGate = AudioConfigurationObservationGate()
@@ -369,11 +442,6 @@ final class AudioCaptureService {
     /// Keep a prepared engine for the next capture. Dictation opts in; the
     /// meeting microphone starts rarely enough not to need one.
     var keepsCaptureReady = false
-    /// Apple voice processing: cancels what this Mac plays through its speakers
-    /// (videos, calls) out of the microphone signal, and makes the system Mic
-    /// Mode (e.g. Voice Isolation, which suppresses other voices) available.
-    /// Applies to engines built after it changes.
-    var voiceProcessing = false
     /// Normalized 0...1 RMS level plus the buffer's absolute peak.
     var onLevel: ((Float, Float) -> Void)?
     /// Normalized 16 kHz mono samples for Meeting Mode's durable writer.
@@ -389,18 +457,20 @@ final class AudioCaptureService {
         selection: AudioInputSelection,
         spoolTo audioURL: URL? = nil,
         retainSamples: Bool = true
-    ) throws {
+    ) async throws {
         stopEngine()
+        let generation = startGeneration
         samples.reset()
         capturedSampleCount.reset()
         deliveredBufferCount.reset()
-        spool = try audioURL.map(OrdinaryAudioSpool.init)
+        let ownSpool = try audioURL.map(OrdinaryAudioSpool.init)
+        spool = ownSpool
         conversionFailures.reset()
         var started = false
         defer {
             if !started {
-                try? spool?.discard()
-                spool = nil
+                try? ownSpool?.discard()
+                if spool === ownSpool { spool = nil }
             }
         }
 
@@ -408,27 +478,43 @@ final class AudioCaptureService {
             throw AudioCaptureServiceError.deviceUnavailable
         }
 
-        let capture: PreparedCapture
-        if let prepared = takeReadyCapture(selection: selection, deviceID: descriptor.transientID) {
-            capture = prepared
-        } else {
-            do {
-                // Build on the engine queue, after any preparation already in
-                // flight. Two voice-processing units instantiated at once
-                // deadlock inside AudioDSP (seen when push-to-talk raced a
-                // re-preparation while a Meet call reconfigured the mic).
-                let voiceProcessing = voiceProcessing
-                capture = try Self.engineQueue.sync {
-                    try Self.buildCapture(
-                        selection: selection, descriptor: descriptor, voiceProcessing: voiceProcessing)
-                }
-            } catch AudioCaptureServiceError.deviceAssignmentFailed(let status) {
-                logger.error(
-                    "Device assignment failed",
-                    metadata: ["core_audio.status": "\(status)"]
-                )
-                throw AudioCaptureServiceError.deviceAssignmentFailed(status)
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        var prepared = takeReadyCapture(selection: selection, deviceID: descriptor.transientID)
+        var enginePath = prepared == nil ? "built" : "ready"
+        if prepared == nil, let inFlight = claimPreparation(selection: selection) {
+            enginePath = "claimed"
+            // A press soon after launch or a device change: use the engine
+            // being built rather than queueing a second build behind it.
+            prepared = await inFlight.value
+            if let claimed = prepared, claimed.deviceID != descriptor.transientID {
+                Self.retire(claimed)
+                prepared = nil
             }
+        }
+        let capture: PreparedCapture
+        do {
+            do {
+                capture = try await Self.makeCapture(
+                    reusing: prepared, selection: selection, descriptor: descriptor)
+            } catch AudioCaptureServiceError.engineTimedOut {
+                // The stuck queue was abandoned; try once more on a fresh one.
+                logger.error("Capture engine build timed out")
+                capture = try await Self.makeCapture(
+                    reusing: nil, selection: selection, descriptor: descriptor)
+            }
+        } catch AudioCaptureServiceError.deviceAssignmentFailed(let status) {
+            logger.error(
+                "Device assignment failed",
+                metadata: ["core_audio.status": "\(status)"]
+            )
+            throw AudioCaptureServiceError.deviceAssignmentFailed(status)
+        }
+        if let prepared, capture !== prepared { enginePath = "rebuilt" }
+        let engineReadyAt = ProcessInfo.processInfo.systemUptime
+        guard generation == startGeneration else {
+            // Stopped, or started again, while the engine was being built.
+            Self.retire(capture)
+            throw CancellationError()
         }
 
         // Observe before starting: a change posted while the engine starts
@@ -482,6 +568,14 @@ final class AudioCaptureService {
 
         do {
             try capture.engine.start()
+            let now = ProcessInfo.processInfo.systemUptime
+            Self.timingLogger.info("Capture engine started", metadata: [
+                "event": "capture_start_timing",
+                "engine_path": "\(enginePath)",
+                "engine_ms": "\((engineReadyAt - startedAt) * 1000)",
+                "engine_start_ms": "\((now - engineReadyAt) * 1000)",
+                "elapsed_ms": "\((now - startedAt) * 1000)"
+            ])
             active = capture
             Observability.setAudioCaptureActive(true, source: captureActivitySource)
             started = true
@@ -501,29 +595,70 @@ final class AudioCaptureService {
         }
     }
 
+    /// Every format query and build waits on the engine's I/O unit queue, which
+    /// CoreAudio can keep busy for seconds after a device change, so none of it
+    /// may block the main actor. The engine queue also serializes builds with
+    /// any preparation in flight.
+    nonisolated private static func makeCapture(
+        reusing prepared: PreparedCapture?,
+        selection: AudioInputSelection,
+        descriptor: AudioInputDescriptor
+    ) async throws -> PreparedCapture {
+        try await onEngineQueue(timeout: engineBuildTimeoutSeconds, discardLate: { retire($0) }) {
+            if let prepared {
+                if prepared.engine.inputNode.inputFormat(forBus: 0) == prepared.inputFormat {
+                    if !prepared.tapInstalled {
+                        try prepared.installTap()
+                        prepared.tapInstalled = true
+                        prepared.engine.prepare()
+                    }
+                    return prepared
+                }
+                prepared.engine.inputNode.removeTap(onBus: 0)
+                prepared.engine.stop()
+            }
+            return try buildCapture(selection: selection, descriptor: descriptor)
+        }
+    }
+
     /// Prepares an engine for the next capture on `selection` in the background.
     func prepareCapture(for selection: AudioInputSelection) {
         guard keepsCaptureReady, active == nil else { return }
-        if let ready, ready.selection == selection, ready.requestedVoiceProcessing == voiceProcessing { return }
+        if let ready, ready.selection == selection { return }
+        if let preparation, preparation.selection == selection { return }
         discardReadyCapture()
         let generation = readyGeneration
-        let voiceProcessing = voiceProcessing
-        Self.engineQueue.async { [weak self] in
-            guard let descriptor = CoreAudioDeviceCatalog.resolve(selection),
-                  let capture = try? Self.buildCapture(
-                    selection: selection, descriptor: descriptor, voiceProcessing: voiceProcessing)
-            else { return }
-            Task { @MainActor [weak self] in
-                // A press that raced this preparation built its own engine;
-                // the next one is prepared once that capture ends.
-                guard let self, self.readyGeneration == generation, self.ready == nil,
-                      self.active == nil else {
-                    Self.retire(capture)
-                    return
-                }
-                self.adoptReadyCapture(capture)
+        let task = Task.detached(priority: .userInitiated) { () -> PreparedCapture? in
+            guard let descriptor = CoreAudioDeviceCatalog.resolve(selection) else { return nil }
+            return try? await Self.onEngineQueue(
+                timeout: Self.engineBuildTimeoutSeconds, discardLate: { Self.retire($0) }
+            ) {
+                try Self.buildCapture(selection: selection, descriptor: descriptor)
             }
         }
+        preparation = Preparation(selection: selection, generation: generation, task: task)
+        Task { @MainActor [weak self] in
+            let capture = await task.value
+            // Claimed by a press or discarded: that path owns the result.
+            guard let self, self.preparation?.generation == generation else {
+                if self == nil, let capture { Self.retire(capture) }
+                return
+            }
+            self.preparation = nil
+            guard let capture else { return }
+            guard self.ready == nil, self.active == nil else {
+                Self.retire(capture)
+                return
+            }
+            self.adoptReadyCapture(capture)
+        }
+    }
+
+    /// Takes over a matching build in flight; the caller owns its result.
+    private func claimPreparation(selection: AudioInputSelection) -> Task<PreparedCapture?, Never>? {
+        guard let preparation, preparation.selection == selection else { return nil }
+        self.preparation = nil
+        return preparation.task
     }
 
     /// The device list changed: a prepared engine may point at stale hardware.
@@ -540,20 +675,23 @@ final class AudioCaptureService {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self, self.ready === capture else { return }
-                // The hardware changed under the idle engine; rebuild it lazily.
+                // The hardware changed under the idle engine. Rebuild once the
+                // change has settled, rather than querying it mid-change.
                 let selection = capture.selection
                 self.discardReadyCapture()
+                let generation = self.readyGeneration
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard self.readyGeneration == generation else { return }
                 self.prepareCapture(for: selection)
             }
         }
     }
 
-    /// The prepared engine, if it still matches the device and its format.
+    /// The prepared engine, if it still matches the device. The caller checks
+    /// its format off the main actor.
     private func takeReadyCapture(selection: AudioInputSelection, deviceID: AudioDeviceID) -> PreparedCapture? {
         guard let ready else { return nil }
-        guard ready.selection == selection, ready.deviceID == deviceID,
-              ready.requestedVoiceProcessing == voiceProcessing,
-              ready.engine.inputNode.inputFormat(forBus: 0) == ready.inputFormat else {
+        guard ready.selection == selection, ready.deviceID == deviceID else {
             discardReadyCapture()
             return nil
         }
@@ -565,6 +703,10 @@ final class AudioCaptureService {
 
     private func discardReadyCapture() {
         readyGeneration &+= 1
+        if let preparation {
+            self.preparation = nil
+            Task { if let capture = await preparation.task.value { Self.retire(capture) } }
+        }
         removeReadyObserver()
         if let ready { Self.retire(ready) }
         ready = nil
@@ -577,42 +719,12 @@ final class AudioCaptureService {
         }
     }
 
-    /// Voice processing is best effort: a device or route that refuses it still
-    /// records, just without echo cancellation.
     nonisolated private static func buildCapture(
         selection: AudioInputSelection,
-        descriptor: AudioInputDescriptor,
-        voiceProcessing: Bool
-    ) throws -> PreparedCapture {
-        guard voiceProcessing else {
-            return try buildCapture(selection: selection, descriptor: descriptor,
-                                    enableVoiceProcessing: false, requested: false)
-        }
-        do {
-            return try buildCapture(selection: selection, descriptor: descriptor,
-                                    enableVoiceProcessing: true, requested: true)
-        } catch {
-            return try buildCapture(selection: selection, descriptor: descriptor,
-                                    enableVoiceProcessing: false, requested: true)
-        }
-    }
-
-    nonisolated private static func buildCapture(
-        selection: AudioInputSelection,
-        descriptor: AudioInputDescriptor,
-        enableVoiceProcessing: Bool,
-        requested: Bool
+        descriptor: AudioInputDescriptor
     ) throws -> PreparedCapture {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
-        if enableVoiceProcessing {
-            // Must precede device assignment and the format query: it swaps the
-            // node's I/O unit for the voice-processing unit.
-            try inputNode.setVoiceProcessingEnabled(true)
-            // Dictation must not turn down the video or call the user is playing.
-            inputNode.voiceProcessingOtherAudioDuckingConfiguration =
-                AVAudioVoiceProcessingOtherAudioDuckingConfiguration(enableAdvancedDucking: false, duckingLevel: .min)
-        }
         if case .device = selection {
             guard let audioUnit = inputNode.audioUnit else {
                 throw AudioCaptureServiceError.deviceUnavailable
@@ -650,26 +762,13 @@ final class AudioCaptureService {
             interleaved: false
         ) else { throw AudioCaptureServiceError.converterUnavailable }
 
-        // The voice-processing unit reports every hardware channel (9 on a
-        // MacBook Pro array) but carries the processed voice on the first;
-        // downmixing would blend it with the unprocessed channels.
-        let usesFirstChannel = enableVoiceProcessing && inputFormat.channelCount > 1
-        // Any other multichannel float input is mixed to mono in the tap; see `mixDown`.
-        let mixFormat: AVAudioFormat? = !usesFirstChannel && inputFormat.channelCount > 1
+        // Multichannel float input is mixed to mono in the tap; see `mixDown`.
+        let mixFormat: AVAudioFormat? = inputFormat.channelCount > 1
             && inputFormat.commonFormat == .pcmFormatFloat32 && !inputFormat.isInterleaved
             ? AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: inputFormat.sampleRate,
                             channels: 1, interleaved: false)
             : nil
-        let converterInput: AVAudioFormat
-        if usesFirstChannel {
-            guard let mono = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: inputFormat.sampleRate,
-                                           channels: 1, interleaved: false) else {
-                throw AudioCaptureServiceError.converterUnavailable
-            }
-            converterInput = mono
-        } else {
-            converterInput = mixFormat ?? inputFormat
-        }
+        let converterInput = mixFormat ?? inputFormat
         let converter: AVAudioConverter?
         if converterInput.sampleRate == targetFormat.sampleRate,
            converterInput.channelCount == targetFormat.channelCount,
@@ -686,15 +785,14 @@ final class AudioCaptureService {
         // hardware format after the query above; AVFAudio then raises an
         // Objective-C exception, which would abort the app. Fail this build
         // instead so the caller retries or falls back.
+        let installTap = {
         var tapError: NSError?
         let tapInstalled = WFPerformCatchingObjCException({
         inputNode.installTap(onBus: 0, bufferSize: 1_600, format: inputFormat) { buffer, _ in
             guard let session = sink.current else { return }
             session.deliveredBuffers.add(1)
             do {
-                let source = usesFirstChannel
-                    ? try Self.firstChannel(of: buffer, format: converterInput)
-                    : try mixFormat.map { try Self.mixDown(buffer, to: $0) } ?? buffer
+                let source = try mixFormat.map { try Self.mixDown(buffer, to: $0) } ?? buffer
                 let converted = try Self.convert(
                     source,
                     converter: converterBox.converter,
@@ -727,10 +825,12 @@ final class AudioCaptureService {
             ])
             throw AudioCaptureServiceError.invalidInputFormat
         }
+        }
+        try installTap()
         engine.prepare()
         return PreparedCapture(
             engine: engine, selection: selection, deviceID: descriptor.transientID,
-            inputFormat: inputFormat, sink: sink, requestedVoiceProcessing: requested
+            inputFormat: inputFormat, sink: sink, installTap: installTap
         )
     }
 
@@ -789,6 +889,37 @@ final class AudioCaptureService {
         return output
     }
 
+    /// Runs `work` on the engine queue. Past `timeout` the queue is abandoned
+    /// and this throws `engineTimedOut`; a result that arrives later goes to
+    /// `discardLate`.
+    nonisolated private static func onEngineQueue<T: Sendable>(
+        timeout: Double,
+        discardLate: @escaping @Sendable (T) -> Void,
+        _ work: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        let engineQueue = CaptureEngineQueue.shared.current
+        return try await withCheckedThrowingContinuation { continuation in
+            let once = ResumeOnce(continuation)
+            engineQueue.queue.async {
+                // Queued behind a build that wedged: running now would
+                // instantiate a unit next to the replacement queue's.
+                guard CaptureEngineQueue.shared.isCurrent(engineQueue.generation) else {
+                    once.resume(with: .failure(CancellationError()))
+                    return
+                }
+                let result = Result { try work() }
+                if !once.resume(with: result), case .success(let late) = result { discardLate(late) }
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                if once.resume(with: .failure(AudioCaptureServiceError.engineTimedOut)) {
+                    CaptureEngineQueue.shared.abandon(engineQueue.generation)
+                    Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
+                        .error("Capture engine build timed out", metadata: ["event": "capture_engine_timeout"])
+                }
+            }
+        }
+    }
+
     /// Engine teardown and deallocation take ~10–15 ms; keep them off the caller.
     nonisolated private static func retire(_ capture: PreparedCapture) {
         engineQueue.async {
@@ -811,7 +942,7 @@ final class AudioCaptureService {
     }
 
     func stop(reason: CaptureStopReason) -> CapturedAudio {
-        stopEngine()
+        stopEngine(reusable: reason == .userReleased)
         onLevel?(0, 0)
         var completedSpool = spool
         spool = nil
@@ -858,7 +989,10 @@ final class AudioCaptureService {
         onLevel?(0, 0)
     }
 
-    private func stopEngine() {
+    /// `reusable`: the capture ended normally, so its engine can serve the next
+    /// one and only a device change costs a build.
+    private func stopEngine(reusable: Bool = false) {
+        startGeneration &+= 1
         stopObservingConfigurationChanges()
         guard let active else { return }
         self.active = nil
@@ -866,9 +1000,14 @@ final class AudioCaptureService {
         // Stop synchronously so every delivered buffer is in the spool before the
         // caller reads it; only deallocation is deferred.
         active.engine.inputNode.removeTap(onBus: 0)
+        active.tapInstalled = false
         active.engine.stop()
         active.sink.end()
-        Self.engineQueue.async { _ = active }
+        if reusable, keepsCaptureReady, ready == nil {
+            adoptReadyCapture(active)
+        } else {
+            Self.engineQueue.async { _ = active }
+        }
     }
 
     /// AVAudioEngine stops itself when a hardware change really affects it,
@@ -949,19 +1088,6 @@ final class AudioCaptureService {
             NotificationCenter.default.removeObserver(configurationObserver)
             self.configurationObserver = nil
         }
-    }
-
-    nonisolated private static func firstChannel(of buffer: AVAudioPCMBuffer, format: AVAudioFormat) throws -> AVAudioPCMBuffer {
-        guard let source = buffer.floatChannelData?[0],
-              let mono = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: max(1, buffer.frameLength)),
-              let destination = mono.floatChannelData?[0] else {
-            throw AudioCaptureServiceError.conversionFailed("voice-processed channel unavailable")
-        }
-        mono.frameLength = buffer.frameLength
-        // Interleaved data strides across channels; non-interleaved has stride 1.
-        let stride = buffer.stride
-        for frame in 0..<Int(buffer.frameLength) { destination[frame] = source[frame * stride] }
-        return mono
     }
 
     nonisolated private static func convert(

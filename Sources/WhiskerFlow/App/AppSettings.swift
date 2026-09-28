@@ -32,10 +32,8 @@ final class AppSettings {
     /// Stream and transcribe while speaking so the transcript pastes instantly on
     /// release. Applies to the WhisperKit engine; other engines stay file-based.
     var liveTranscription: Bool { didSet { defaults.set(liveTranscription, forKey: Keys.liveTranscription) } }
-    /// Echo-cancel speaker playback out of dictation audio.
-    var ignoreSpeakerAudio: Bool { didSet { defaults.set(ignoreSpeakerAudio, forKey: Keys.ignoreSpeakerAudio) } }
     var rememberCorrections: Bool { didSet { defaults.set(rememberCorrections, forKey: "rememberCorrections") } }
-    /// Add a remembered correction to the Dictionary once it has been seen twice.
+    /// Add a remembered correction to the Dictionary as soon as it is seen.
     var autoAddLearnedWords: Bool { didSet { defaults.set(autoAddLearnedWords, forKey: Keys.autoAddLearnedWords) } }
     /// Per-engine recogniser hints from the Dictionary. Each can be turned off
     /// independently; post-recognition replacement applies either way.
@@ -195,7 +193,6 @@ final class AppSettings {
         customHotkey = Self.loadCustomHotkey(from: defaults) ?? .default
         recordingMode = defaults.string(forKey: Keys.recordingMode).flatMap(RecordingMode.init) ?? .holdToTalk
         liveTranscription = defaults.object(forKey: Keys.liveTranscription) as? Bool ?? true
-        ignoreSpeakerAudio = defaults.object(forKey: Keys.ignoreSpeakerAudio) as? Bool ?? true
         rememberCorrections = defaults.object(forKey: "rememberCorrections") as? Bool ?? true
         autoAddLearnedWords = defaults.object(forKey: Keys.autoAddLearnedWords) as? Bool ?? true
         biasAppleSpeech = defaults.object(forKey: Keys.biasAppleSpeech) as? Bool ?? Self.defaultBiasAppleSpeech
@@ -232,6 +229,10 @@ final class AppSettings {
         legacySelectedDeviceID = defaults.string(forKey: Keys.selectedDeviceID)
         launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
         defaults.removeObject(forKey: Keys.sharedVocabularyURL)
+        // Echo cancellation was removed: it slowed every mic start and could
+        // hang CoreAudio. Drop its setting and the hang record it kept.
+        defaults.removeObject(forKey: Keys.ignoreSpeakerAudio)
+        defaults.removeObject(forKey: Keys.voiceProcessingHungInputs)
     }
 
     static let atlasProductionURL = "https://atlas.thatworks.agency"
@@ -379,6 +380,7 @@ final class AppSettings {
         static let recordingMode = "recordingMode"
         static let liveTranscription = "liveTranscription"
         static let ignoreSpeakerAudio = "ignoreSpeakerAudio"
+        static let voiceProcessingHungInputs = "voiceProcessingHungInputs"
         static let delivery = "delivery"
         static let playSounds = "playSounds"
         static let allowAppleFallback = "allowAppleFallback"

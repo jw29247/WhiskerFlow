@@ -55,18 +55,19 @@ struct PasteService: TextDeliveryService {
                onPosted: @escaping @MainActor () -> Void) async -> PasteDeliveryReceipt {
         correctionMonitor?.stop()
         let normalized = text.normalizedForDelivery
-        func receipt(_ state: PasteDeliveryReceipt.State, _ message: String, retry: TextFieldSnapshot? = nil) -> PasteDeliveryReceipt {
-            PasteDeliveryReceipt(state: state, text: normalized, message: message, retrySelection: retry)
+        func receipt(_ state: PasteDeliveryReceipt.State, _ message: String, retry: TextFieldSnapshot? = nil,
+                     _ detail: PasteDeliveryReceipt.Detail = .none) -> PasteDeliveryReceipt {
+            PasteDeliveryReceipt(state: state, text: normalized, message: message, retrySelection: retry, detail: detail)
         }
         guard hasAccessibilityPermission else {
             copy(normalized)
             requestAccessibilityPermission()
-            return receipt(.copied, "Copied — allow Accessibility to paste automatically")
+            return receipt(.copied, "Copied — allow Accessibility to paste automatically", .noPermission)
         }
         guard let destination = selection?.application ?? application ?? NSWorkspace.shared.frontmostApplication,
               !destination.isTerminated,
               destination.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
-            return receipt(.failed, "Destination unavailable. Your text is ready to copy.")
+            return receipt(.failed, "Destination unavailable. Your text is ready to copy.", .noDestination)
         }
         // One delivery at a time: an overlapping Retry/Replace would otherwise
         // post its Cmd+V while the previous one is still being handled.
@@ -81,16 +82,16 @@ struct PasteService: TextDeliveryService {
         let activationSeconds = ProcessInfo.processInfo.systemUptime - activationStarted
         guard !Task.isCancelled, !destination.isTerminated,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == destination.processIdentifier else {
-            return receipt(.failed, "Could not reach the destination. Your text is ready to copy.")
+            return receipt(.failed, "Could not reach the destination. Your text is ready to copy.", .notFrontmost)
         }
         if let selection, !(await selection.restoreSelectionWhenReady()) {
-            return receipt(.failed, "The original selection changed. Copy the preview instead.")
+            return receipt(.failed, "The original selection changed. Copy the preview instead.", .selectionChanged)
         }
         let context: TextFieldSnapshot?
         if let selection { context = selection } else { context = await TextFieldSnapshot.captureOffMain() }
         guard !Task.isCancelled,
               NSWorkspace.shared.frontmostApplication?.processIdentifier == destination.processIdentifier else {
-            return receipt(.failed, "Could not reach the destination. Your text is ready to copy.", retry: selection)
+            return receipt(.failed, "Could not reach the destination. Your text is ready to copy.", retry: selection, .notFrontmost)
         }
         let scope = context?.scope(for: normalized)
         // Every AX read is a synchronous round trip to the destination app, so
@@ -101,7 +102,7 @@ struct PasteService: TextDeliveryService {
         pasteboard.clearContents()
         guard pasteboard.setString(normalized, forType: .string) else {
             Self.clipboard.finish(on: pasteboard, changeCount: pasteboard.changeCount, after: 0)
-            return receipt(.failed, "Could not prepare the clipboard. Try Copy or retry the unchanged selection.", retry: context)
+            return receipt(.failed, "Could not prepare the clipboard. Try Copy or retry the unchanged selection.", retry: context, .clipboardFailed)
         }
         // Clipboard managers skip transient, app-generated items, so private
         // dictation is not added to their history.
@@ -110,7 +111,7 @@ struct PasteService: TextDeliveryService {
         Self.clipboard.delivered(changeCount: deliveryChangeCount)
         guard Self.sendPasteKeyEvent(to: destination) else {
             Self.clipboard.finish(on: pasteboard, changeCount: deliveryChangeCount, after: 0)
-            return receipt(.failed, "The paste key could not be sent. Retry or copy your text.", retry: context)
+            return receipt(.failed, "The paste key could not be sent. Retry or copy your text.", retry: context, .keyFailed)
         }
         let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
         logger.info("Paste event posted", metadata: ["event": "paste_posted"])
@@ -131,7 +132,10 @@ struct PasteService: TextDeliveryService {
         let restoreDelay = Self.unverifiedRestoreDelay(activationSeconds: activationSeconds)
         Self.clipboard.finish(on: pasteboard, changeCount: deliveryChangeCount, after: restoreDelay)
         Self.unverifiedPasteSettlesAt = ProcessInfo.processInfo.systemUptime + restoreDelay
-        return receipt(.unverified, "Pasted")
+        // A slow field may show the text after verification gave up; the
+        // monitor confirms the exact insertion itself before reading any edit.
+        correctionMonitor?.observe(correctionTarget)
+        return receipt(.unverified, "Pasted", target == nil ? .noTextField : .insertionNotSeen)
     }
 
     /// Uptime until which an unverified paste may still read the pasteboard.

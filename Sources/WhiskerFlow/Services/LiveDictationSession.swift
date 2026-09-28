@@ -88,7 +88,7 @@ final class LiveDictationSession {
         recognizeCorrections: Bool = false,
         hints: RecognizerHints = .none,
         previewEngine: TranscriptionEngineKind? = nil
-    ) throws {
+    ) async throws {
         self.language = language
         self.model = model
         self.vocabulary = vocabulary
@@ -104,7 +104,7 @@ final class LiveDictationSession {
         currentAudioURL = nil
         do {
             let audioURL = try AudioFileWriter.makeRecordingURL()
-            try audioCapture.start(selection: selection, spoolTo: audioURL)
+            try await audioCapture.start(selection: selection, spoolTo: audioURL)
             currentAudioURL = audioURL
             isRunning = true
         } catch {
@@ -200,12 +200,6 @@ final class LiveDictationSession {
     /// partials from now on and to `finish()`.
     func setTone(_ tone: WritingTone) {
         self.tone = tone
-    }
-
-    /// Echo cancellation for engines built from now on; see `AudioCaptureService.voiceProcessing`.
-    var voiceProcessing: Bool {
-        get { audioCapture.voiceProcessing }
-        set { audioCapture.voiceProcessing = newValue }
     }
 
     /// Build the next capture's engine in the background so a hotkey press only

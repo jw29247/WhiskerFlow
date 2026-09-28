@@ -49,19 +49,13 @@ final class DictionaryStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: url), original)
     }
 
-    func testHistoryCorrectionSeenTwiceIsLearnedAppliedAndUndoable() throws {
+    func testHistoryCorrectionIsLearnedAppliedAndUndoable() throws {
         let store = TranscriptStore(fileURL: root.appendingPathComponent("history.json"))
         let first = TranscriptRecord(text: "Ask zorbit about the launch.", audioFilePath: "", status: .transcribed)
-        let second = TranscriptRecord(text: "Zorbit wants the launch moved.", audioFilePath: "", status: .transcribed)
         try store.add(first)
-        try store.add(second)
         let state = makeState(store: store)
 
         state.updateText(first, to: "Ask Zorblet about the launch.")
-        XCTAssertTrue(state.dictionary.entries.isEmpty, "one sighting is only a suggestion")
-        XCTAssertEqual(state.dictionarySuggestions.map(\.pair.written), ["Zorblet"])
-
-        state.updateText(second, to: "Zorblet wants the launch moved.")
         XCTAssertEqual(state.dictionary.entries.map(\.written), ["Zorblet"])
         XCTAssertEqual(state.dictionary.entries.first?.origin, .learned)
         XCTAssertNotNil(state.dictionaryNotice)
@@ -71,6 +65,38 @@ final class DictionaryStoreTests: XCTestCase {
         state.undoDictionaryNotice()
         XCTAssertTrue(state.dictionary.entries.isEmpty)
         XCTAssertTrue(state.dictionarySuggestions.isEmpty, "undo also stops it being suggested again")
+    }
+
+    func testALaterEditOfTheSameTranscriptReplacesWhatItLearned() throws {
+        let store = TranscriptStore(fileURL: root.appendingPathComponent("history.json"))
+        let record = TranscriptRecord(text: "Ask zorbit about the launch.", audioFilePath: "", status: .transcribed)
+        try store.add(record)
+        let state = makeState(store: store)
+
+        state.updateText(record, to: "Ask Zorb about the launch.")
+        XCTAssertEqual(state.dictionary.entries.map(\.written), ["Zorb"], "the half-typed fix was learned")
+        let edited = try XCTUnwrap(state.records.first { $0.id == record.id })
+        state.updateText(edited, to: "Ask Zorblet about the launch.")
+        XCTAssertEqual(state.dictionary.entries.map(\.written), ["Zorblet"], "the finished fix replaces it")
+        XCTAssertEqual(state.dictionaryNotice?.changes.map(\.after.written), ["Zorblet"])
+
+        let finished = try XCTUnwrap(state.records.first { $0.id == record.id })
+        state.updateText(finished, to: "Ask zorbit about the launch.")
+        XCTAssertTrue(state.dictionary.entries.isEmpty, "taking the edit back takes the entry back")
+        XCTAssertNil(state.dictionaryNotice)
+    }
+
+    func testBlankMigratedEntryIsDroppedOnLoad() throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("dictionary.json")
+        let blank = DictionaryEntry(id: UUID(), kind: .replacement, heard: "", written: "", caseSensitive: false,
+                                    wholeWord: true, origin: .migrated, addedAt: Date())
+        try JSONEncoder().encode(UserDictionary(entries: [blank, .word("Figma")])).write(to: url)
+        XCTAssertEqual(DictionaryStore(fileURL: url).entries.map(\.written), ["Figma"])
+        XCTAssertEqual(DictionaryStore(fileURL: url).entries.count, 1, "the cleanup was saved")
+        XCTAssertTrue(DictionaryStore(fileURL: root.appendingPathComponent("fresh.json"),
+                                      legacyVocabulary: Vocabulary(rules: [VocabularyRule(find: "", replaceWith: "")]))
+                        .entries.isEmpty, "a blank legacy rule is not migrated")
     }
 
     func testAutoAddOffLeavesCorrectionsAsSuggestions() throws {

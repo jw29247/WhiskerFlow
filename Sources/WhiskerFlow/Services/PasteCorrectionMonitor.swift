@@ -1,5 +1,6 @@
 import AppKit
 @preconcurrency import ApplicationServices
+import Logging
 import WhiskerFlowCore
 
 /// Observes one verified paste, never general typing or clipboard changes.
@@ -35,15 +36,28 @@ final class PasteCorrectionMonitor {
         generation == token && isEnabled()
     }
 
+    private let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
+
     private func report(_ changes: [VocabularyCorrection], sessionID: UUID, application: String, token: UUID) {
         guard generation == token else { return }
+        logReport(changes)
         onCorrections(changes, sessionID, application)
+    }
+
+    /// Counts only; the words themselves never reach the diagnostic log.
+    private func logReport(_ changes: [VocabularyCorrection]) {
+        logger.info("Correction observed", metadata: ["event": "correction_observed", "corrections": "\(changes.count)"])
+    }
+
+    private func logWatchEnded(_ outcome: String) {
+        logger.info("Correction watch ended", metadata: ["event": "correction_watch", "outcome": "\(outcome)"])
     }
 
     /// The session is ending (field sent or cleared, focus moved, next paste or
     /// deadline), so the last observed edit is final even inside the debounce.
     private func flush(_ changes: [VocabularyCorrection], sessionID: UUID, application: String) {
         guard isEnabled(), !changes.isEmpty else { return }
+        logReport(changes)
         onCorrections(changes, sessionID, application)
     }
 
@@ -67,7 +81,11 @@ final class PasteCorrectionMonitor {
                 }
                 try? await Task.sleep(for: .milliseconds(75))
             }
-            guard confirmed else { return }
+            guard confirmed else {
+                await self?.logWatchEnded("unconfirmed")
+                return
+            }
+            await self?.logWatchEnded("confirmed")
             let deadline = Date().addingTimeInterval(120)
             var latest = target.scope.original
             var changedAt = Date()

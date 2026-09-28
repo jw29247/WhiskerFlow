@@ -262,7 +262,9 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
             try Task.checkCancellation()
             do {
                 // An unplugged device throws here; continue to the fallbacks.
-                try microphone.start(selection: candidate, retainSamples: false)
+                try await microphone.start(selection: candidate, retainSamples: false)
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 lastError = error
                 continue
@@ -275,7 +277,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
         }
         guard let firstStarted else { throw lastError }
         try Task.checkCancellation()
-        try microphone.start(selection: firstStarted, retainSamples: false)
+        try await microphone.start(selection: firstStarted, retainSamples: false)
         return (firstStarted, false)
     }
 

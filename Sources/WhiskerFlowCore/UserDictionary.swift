@@ -253,7 +253,9 @@ public struct UserDictionary: Codable, Equatable, Sendable {
     /// so it becomes one; everything else stays a replacement with its flags, its
     /// id and its text untouched, including anything over the new length limit.
     public static func migrating(from vocabulary: Vocabulary, at date: Date = Date()) -> UserDictionary {
-        UserDictionary(entries: vocabulary.rules.map { rule in
+        // The old editor saved a blank row as an empty rule; it rewrote nothing
+        // and would show as an empty entry.
+        UserDictionary(entries: vocabulary.rules.filter { !$0.find.isEmpty || !$0.replaceWith.isEmpty }.map { rule in
             let wordShaped = !rule.caseSensitive && rule.wholeWord && !rule.find.isEmpty
                 && rule.find.lowercased() == rule.replaceWith.lowercased()
             return DictionaryEntry(

@@ -162,8 +162,29 @@ public struct DictionaryChange: Equatable, Sendable {
 }
 
 public enum DictionaryLearning {
-    /// Distinct sightings before a pair is added without asking.
-    public static let autoAddThreshold = 2
+    /// Distinct sightings before a pair is added without asking. One fix is
+    /// enough: the lint, conflict and chain checks keep ordinary rewording out,
+    /// and every addition can be undone.
+    public static let autoAddThreshold = 1
+    /// When the recogniser heard real words ("grain" for "Gráinne"), rewriting
+    /// them waits for a second fix, since a one-off edit may not mean "always".
+    /// The first fix still adds the written term as a Word.
+    public static let realWordRewriteThreshold = 2
+
+    /// Every word of the heard side is a real, correctly spelled word, so a
+    /// rule keyed on it would fire in ordinary speech.
+    public static func heardIsRealWords(_ pair: DictionaryPair, isKnownWord: (String) -> Bool) -> Bool {
+        let words = pair.heard.split(whereSeparator: \.isWhitespace)
+            .map { $0.trimmingCharacters(in: .punctuationCharacters) }
+            .filter { !$0.isEmpty }
+        return !words.isEmpty && words.allSatisfy(isKnownWord)
+    }
+
+    /// Whether the rewrite for `pair` is held until it is corrected again.
+    public static func waitsForAnotherSighting(_ pair: DictionaryPair, sightings: Int,
+                                               isKnownWord: (String) -> Bool) -> Bool {
+        !pair.isCasingOnly && sightings < realWordRewriteThreshold && heardIsRealWords(pair, isKnownWord: isKnownWord)
+    }
     /// Unstarred auto-added entries unused this long go back to Suggestions.
     public static let staleInterval: TimeInterval = 90 * 24 * 60 * 60
 
@@ -222,7 +243,9 @@ public enum DictionaryLearning {
         let isCovered = CompiledVocabulary(effective).apply(to: pair.heard) == pair.written
         var proposed = proposedEntry(for: pair, at: date)
         var updates: DictionaryEntry?
-        if proposed.kind == .word, !proposed.variants.isEmpty,
+        // A new way of mishearing a word already in the dictionary becomes
+        // another spelling of that word rather than a separate Replacement.
+        if !pair.isCasingOnly,
            let existing = dictionary.entries.first(where: { $0.kind == .word && $0.written == pair.written }) {
             updates = existing
             proposed = existing
@@ -250,7 +273,8 @@ public enum DictionaryLearning {
         observations: [CorrectionObservation],
         dictionary: inout UserDictionary,
         readOnly: [DictionaryRule],
-        at date: Date = Date()
+        at date: Date = Date(),
+        isKnownWord: (String) -> Bool = { _ in false }
     ) -> [DictionaryChange] {
         var changes: [DictionaryChange] = []
         var considered: Set<DictionaryPair> = []
@@ -258,6 +282,17 @@ public enum DictionaryLearning {
             let evaluation = evaluate(pair, observations: observations, dictionary: dictionary,
                                       readOnly: readOnly, at: date)
             guard evaluation.canAutoAdd else { continue }
+            if waitsForAnotherSighting(pair, sightings: evaluation.sightings, isKnownWord: isKnownWord) {
+                // Only the written term for now: a hint to the recogniser that
+                // rewrites nothing the user says.
+                guard evaluation.updates == nil else { continue }
+                let word = DictionaryEntry.word(pair.written, origin: .learned, addedAt: date)
+                let others = DictionaryRule.personal(dictionary) + readOnly
+                guard DictionaryLint.issues(for: word, against: others).isEmpty else { continue }
+                dictionary.entries.append(word)
+                changes.append(DictionaryChange(pair: pair, before: nil, after: word))
+                continue
+            }
             if let before = evaluation.updates, let index = dictionary.entries.firstIndex(where: { $0.id == before.id }) {
                 dictionary.entries[index] = evaluation.proposed
             } else {
@@ -270,12 +305,18 @@ public enum DictionaryLearning {
 
     /// Reverts a learned change and makes sure it is not learned again.
     public static func undo(_ change: DictionaryChange, in dictionary: inout UserDictionary) {
+        revert(change, in: &dictionary)
+        dictionary.reject(change.pair)
+    }
+
+    /// Takes a learned change back out without rejecting its pair, for when the
+    /// user kept editing and the pair was only a step on the way.
+    public static func revert(_ change: DictionaryChange, in dictionary: inout UserDictionary) {
         if let before = change.before, let index = dictionary.entries.firstIndex(where: { $0.id == before.id }) {
             dictionary.entries[index] = before
         } else {
             dictionary.entries.removeAll { $0.id == change.after.id }
         }
-        dictionary.reject(change.pair)
     }
 
     /// Pairs waiting for a decision: seen but not in the dictionary, plus

@@ -104,18 +104,39 @@ struct TextFieldSnapshot {
     private nonisolated static func value(_ element: AXUIElement) -> String? {
         guard let role = attribute(element, kAXRoleAttribute) as? String,
               [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role),
-              attribute(element, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole,
-              let value = attribute(element, kAXValueAttribute) as? String,
+              attribute(element, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else { return nil }
+        // An empty Messages composer answers with no value rather than "".
+        guard let value = attribute(element, kAXValueAttribute) as? String
+                ?? (attribute(element, kAXNumberOfCharactersAttribute) as? Int == 0 ? "" : nil),
               value.utf16.count <= 65_536 else { return nil }
         return value
     }
     private static func focusedElement(_ app: NSRunningApplication) -> AXUIElement? {
         focusedElement(app.processIdentifier)
     }
+    /// Chromium-based apps (Slack, Claude, VS Code and other Electron apps)
+    /// publish no accessibility tree, so no focused text field, until a client
+    /// sets `AXManualAccessibility`. Without it a paste there can't be
+    /// verified and corrections made there are never seen. The tree is built
+    /// asynchronously, so this runs when dictation starts, well before the paste.
+    nonisolated static func exposeAccessibilityTree(_ pid: pid_t) {
+        let application = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(application, 0.2)
+        if attribute(application, "AXManualAccessibility") as? Bool == false {
+            AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        }
+    }
+
     private nonisolated static func focusedElement(_ pid: pid_t, timeout: Float = 0.2) -> AXUIElement? {
         let application = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(application, timeout)
-        guard let value = attribute(application, kAXFocusedUIElementAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        var focused = attribute(application, kAXFocusedUIElementAttribute)
+        if focused == nil, attribute(application, "AXManualAccessibility") as? Bool == false {
+            exposeAccessibilityTree(pid)
+            usleep(100_000)
+            focused = attribute(application, kAXFocusedUIElementAttribute)
+        }
+        guard let value = focused, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         let element = unsafeBitCast(value, to: AXUIElement.self)
         AXUIElementSetMessagingTimeout(element, timeout)
         return element
@@ -147,6 +168,17 @@ struct PasteDeliveryReceipt {
     let text: String
     let message: String
     var retrySelection: TextFieldSnapshot?
+    /// Why delivery ended this way, for the local diagnostic log.
+    var detail: Detail = .none
+
+    enum Detail: String {
+        case none, noPermission = "no_permission", noDestination = "no_destination", notFrontmost = "not_frontmost"
+        case selectionChanged = "selection_changed", clipboardFailed = "clipboard_failed", keyFailed = "key_failed"
+        /// No readable text field was focused, so nothing could be checked.
+        case noTextField = "no_text_field"
+        /// A text field was focused but the text never appeared in it.
+        case insertionNotSeen = "insertion_not_seen"
+    }
 }
 
 /// Immutable AX handles used solely by the verification worker. No AppKit or
