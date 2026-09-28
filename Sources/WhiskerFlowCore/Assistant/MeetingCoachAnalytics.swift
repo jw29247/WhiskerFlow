@@ -12,9 +12,11 @@ public enum MeetingSpeechState: Equatable, Sendable {
     public init(_ input: MeetingActivityInput) {
         switch (input.ownMicActivity, input.systemActivity) {
         case (true, true): self = .both
-        case (true, _): self = .you
+        case (true, false): self = .you
         case (_, true): self = .others
         case (false, false): self = .silence
+        // Without the Mac-audio track, microphone sound can't be told apart
+        // from the others coming through the speakers.
         default: self = .unknown
         }
     }
@@ -449,5 +451,99 @@ public struct MeetingCoachJudgement: Equatable, Sendable {
         if judgement?.heavyJargon == true { return .simplifyLanguage }
         if wordCount >= 120, MeetingCoachTextSignals.questionCount(recentWords) == 0 { return .askForInput }
         return .none
+    }
+}
+
+/// Decides, second by second, whether you and the others are speaking,
+/// from the microphone and Mac-audio tracks. It works without headphones:
+/// on the Mac's speakers the others reach your microphone too, so a fixed
+/// loudness threshold would count their speech as yours. Instead it learns
+/// the room's noise floor on your microphone and how loudly the speakers
+/// leak into it, and counts you only when your microphone is clearly louder
+/// than that expected leak.
+public struct MeetingSpeakerActivityClassifier: Equatable, Sendable {
+    public static let frameSamples = 1_600
+    /// RMS 0.01: the Mac-audio track is digital, so any real sound clears it.
+    static let systemFloorMeanSquare: Double = 0.01 * 0.01
+    /// RMS 0.015, the long-standing audibility floor.
+    static let micMinimumMeanSquare: Double = 0.015 * 0.015
+    /// About 6 dB above the room's noise floor.
+    static let noiseMargin: Double = 4
+    /// About 6 dB above the leak predicted from the Mac audio.
+    static let bleedMargin: Double = 4
+    /// Frames in a second that must be active.
+    static let framesPerActiveSecond = 2
+
+    /// Each recent second's quiet level (its 20th-percentile frame).
+    private var recentMicSecondMedians: [Double] = []
+    private var bleedRatios: [Double] = []
+    /// The last Mac-audio frames of the previous second, so the leak window
+    /// spans second boundaries.
+    private var previousSystemTail: [Double] = []
+    /// The speakers reach the microphone late, and the room echoes: compare
+    /// each microphone frame with the loudest Mac audio from 200 ms before
+    /// to 100 ms after it.
+    static let leakFramesBefore = 2
+    static let leakFramesAfter = 1
+
+    public init() {}
+
+    /// Current estimates, for diagnostics and tests.
+    public var noiseFloorMeanSquare: Double? { recentMicSecondMedians.min() }
+    public var bleedGain: Double? {
+        guard bleedRatios.count >= 20 else { return nil }
+        return bleedRatios.sorted()[bleedRatios.count / 4]
+    }
+
+    /// Classifies one second. Either side is `nil` when its track delivered
+    /// no samples. Frames are 100 ms (1,600 samples at 16 kHz).
+    public mutating func classify(microphone: [Float]?, system: [Float]?) -> (you: Bool?, others: Bool?) {
+        let mic = microphone.map(Self.frameMeanSquares)
+        let sys = system.map(Self.frameMeanSquares)
+        var youFrames = 0
+        var othersFrames = 0
+        if let mic {
+            // Judge this second against the floor learnt from earlier ones.
+            let floor = max(Self.micMinimumMeanSquare, (noiseFloorMeanSquare ?? 0) * Self.noiseMargin)
+            defer {
+                // A second's quietest frames (the pauses between words) show the
+                // room; the quietest of the last minute is its floor.
+                let sortedMic = mic.sorted()
+                if !sortedMic.isEmpty {
+                    recentMicSecondMedians.append(sortedMic[sortedMic.count / 5])
+                    if recentMicSecondMedians.count > 60 { recentMicSecondMedians.removeFirst() }
+                }
+            }
+            let window = previousSystemTail + (sys ?? [])
+            let offset = previousSystemTail.count
+            for (index, m) in mic.enumerated() {
+                guard m >= floor else { continue }
+                let lower = max(0, offset + index - Self.leakFramesBefore)
+                let upper = min(window.count - 1, offset + index + Self.leakFramesAfter)
+                let s = lower <= upper ? window[lower...upper].max() ?? 0 : 0
+                if s >= Self.systemFloorMeanSquare {
+                    // Learn the leak from frames where the others sound and the
+                    // microphone is no louder than a leak plausibly is.
+                    bleedRatios.append(m / s)
+                    if bleedRatios.count > 600 { bleedRatios.removeFirst(bleedRatios.count - 600) }
+                    guard let gain = bleedGain, m > Self.bleedMargin * gain * s else { continue }
+                }
+                youFrames += 1
+            }
+        }
+        if let sys { othersFrames = sys.filter { $0 >= Self.systemFloorMeanSquare }.count }
+        previousSystemTail = Array((sys ?? []).suffix(Self.leakFramesBefore))
+        return (
+            mic == nil ? nil : youFrames >= Self.framesPerActiveSecond,
+            sys == nil ? nil : othersFrames >= Self.framesPerActiveSecond
+        )
+    }
+
+    static func frameMeanSquares(_ samples: [Float]) -> [Double] {
+        stride(from: 0, to: samples.count - frameSamples + 1, by: frameSamples).map { start in
+            var sum = 0.0
+            for value in samples[start..<(start + frameSamples)] { sum += Double(value) * Double(value) }
+            return sum / Double(frameSamples)
+        }
     }
 }

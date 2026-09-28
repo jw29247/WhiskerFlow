@@ -68,6 +68,12 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
     private var systemActivity = false
     private var sawMicrophoneSamples = false
     private var sawSystemSamples = false
+    /// This second's samples of each track, for the coach's speaker-activity
+    /// decision. Kept in memory for one second only.
+    private var microphoneSecond: [Float] = []
+    private var systemSecond: [Float] = []
+    private var activityClassifier = MeetingSpeakerActivityClassifier()
+    private static let activitySecondCap = 32_000
     private var sleepActivity: NSObjectProtocol?
     private var sleepObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
@@ -145,6 +151,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
               self.onMicrophoneConfirmed?()
           }
           self.microphoneActivity = self.microphoneActivity || Self.hasAudibleActivity(samples)
+          if self.microphoneSecond.count < Self.activitySecondCap { self.microphoneSecond.append(contentsOf: samples) }
           if self.microphoneNeedsAlignment {
               self.microphoneNeedsAlignment = false
               self.alignAfterInterruption(.microphone)
@@ -542,6 +549,7 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
             guard acceptingSamples else { return }
             sawSystemSamples = true
             systemActivity = systemActivity || Self.hasAudibleActivity(samples)
+            if systemSecond.count < Self.activitySecondCap { systemSecond.append(contentsOf: samples) }
             if systemNeedsAlignment {
                 systemNeedsAlignment = false
                 alignAfterInterruption(.system)
@@ -603,6 +611,9 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
 
     private func startActivityUpdates() {
         activityTask?.cancel()
+        activityClassifier = MeetingSpeakerActivityClassifier()
+        microphoneSecond.removeAll(keepingCapacity: true)
+        systemSecond.removeAll(keepingCapacity: true)
         activityStartedAt = ProcessInfo.processInfo.systemUptime
         microphoneActivity = false
         systemActivity = false
@@ -613,10 +624,18 @@ final class MeetingAudioCaptureService: NSObject, SCStreamOutput, SCStreamDelega
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled, let self, let startedAt = self.activityStartedAt else { return }
                 let elapsed = max(0, ProcessInfo.processInfo.systemUptime - startedAt)
+                // Adaptive: on the Mac's speakers the others reach the
+                // microphone too, so loudness alone would count them as you.
+                let activity = self.activityClassifier.classify(
+                    microphone: self.sawMicrophoneSamples ? self.microphoneSecond : nil,
+                    system: self.sawSystemSamples ? self.systemSecond : nil
+                )
+                self.microphoneSecond.removeAll(keepingCapacity: true)
+                self.systemSecond.removeAll(keepingCapacity: true)
                 self.onActivity?(.init(
                     elapsedSeconds: max(0, elapsed - 1), durationSeconds: min(1, elapsed),
-                    ownMicActivity: self.sawMicrophoneSamples ? self.microphoneActivity : nil,
-                    systemActivity: self.sawSystemSamples ? self.systemActivity : nil
+                    ownMicActivity: activity.you,
+                    systemActivity: activity.others
                 ))
                 self.microphoneActivity = false
                 self.systemActivity = false

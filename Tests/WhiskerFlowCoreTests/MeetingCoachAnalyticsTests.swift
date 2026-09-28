@@ -188,3 +188,56 @@ final class MeetingCoachTextSignalTests: XCTestCase {
         XCTAssertEqual(MeetingCoachJudgement.advice(judgement: .init(heavyJargon: true), recentWords: fillers, goal: ""), .reduceFillerWords)
     }
 }
+
+final class MeetingSpeakerActivityClassifierTests: XCTestCase {
+    /// One second of constant-level frames (RMS = amplitude).
+    private func second(_ amplitudes: [Float]) -> [Float] {
+        amplitudes.flatMap { Array(repeating: $0, count: MeetingSpeakerActivityClassifier.frameSamples) }
+    }
+    private func constant(_ amplitude: Float) -> [Float] { second(Array(repeating: amplitude, count: 10)) }
+
+    func testOthersOnTheMacSpeakersAreNotCountedAsYou() {
+        var classifier = MeetingSpeakerActivityClassifier()
+        let noise: Float = 0.02, others: Float = 0.08, bleed: Float = 0.06, you: Float = 0.25
+        // Warm up: room noise, then the others talking through the speakers.
+        for _ in 0..<5 { _ = classifier.classify(microphone: constant(noise), system: constant(0)) }
+        var counted = 0
+        for _ in 0..<20 {
+            let result = classifier.classify(microphone: constant(bleed), system: constant(others))
+            if result.you == true { counted += 1 }
+            XCTAssertEqual(result.others, true)
+        }
+        XCTAssertLessThanOrEqual(counted, 2, "Speaker leak alone isn't you (the first seconds may still be learning)")
+        let alone = classifier.classify(microphone: constant(you), system: constant(0))
+        XCTAssertEqual(alone.you, true)
+        XCTAssertEqual(alone.others, false)
+        let both = classifier.classify(microphone: constant(you), system: constant(others))
+        XCTAssertEqual(both.you, true, "You talking over the others is still you")
+        XCTAssertEqual(both.others, true)
+        let quiet = classifier.classify(microphone: constant(noise), system: constant(0))
+        XCTAssertEqual(quiet.you, false, "A noisy room isn't speech")
+    }
+
+    func testNoisyRoomRaisesTheMicrophoneFloor() {
+        var classifier = MeetingSpeakerActivityClassifier()
+        XCTAssertEqual(classifier.classify(microphone: constant(0.04), system: constant(0)).you, true,
+                       "With nothing learnt yet, the fixed floor applies")
+        for _ in 0..<10 {
+            XCTAssertEqual(classifier.classify(microphone: constant(0.04), system: constant(0)).you, false,
+                           "A steady hum above the fixed floor stops counting once learnt")
+        }
+        XCTAssertEqual(classifier.classify(microphone: constant(0.2), system: constant(0)).you, true)
+        // Long speech keeps counting: the pauses between words hold the floor down.
+        let speech = second([0.25, 0.3, 0.02, 0.28, 0.3, 0.02, 0.27, 0.3, 0.26, 0.02])
+        for _ in 0..<90 { XCTAssertEqual(classifier.classify(microphone: speech, system: constant(0)).you, true) }
+    }
+
+    func testMissingTracksAreUnknown() {
+        var classifier = MeetingSpeakerActivityClassifier()
+        let result = classifier.classify(microphone: constant(0.2), system: nil)
+        XCTAssertEqual(result.you, true)
+        XCTAssertNil(result.others)
+        XCTAssertEqual(MeetingSpeechState(.init(elapsedSeconds: 0, durationSeconds: 1, ownMicActivity: true, systemActivity: nil)), .unknown,
+                       "Without Mac audio, microphone sound may be the others on the speakers")
+    }
+}
