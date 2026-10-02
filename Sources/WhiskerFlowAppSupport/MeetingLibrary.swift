@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import WhiskerFlowCore
 
@@ -66,12 +67,61 @@ public struct MeetingLibraryNote: Codable, Equatable, Identifiable, Sendable {
         return String(trimmed.prefix(maximumCharacters))
     }
 
-    /// The label sent to Atlas. Longer notes are shortened with an ellipsis;
-    /// the full text stays on this Mac.
-    public var atlasLabel: String {
+    /// The labels that carry this note to Atlas, in order. A longer note is
+    /// sent as numbered parts ("(1/3) …") at the same moment, so every word
+    /// reaches Atlas; the note counts as sent only once each part has.
+    /// Lengths are UTF-16 units, as Atlas's JavaScript validation counts them.
+    public var atlasLabels: [String] {
         let singleLine = text.replacingOccurrences(of: "\n", with: " ")
-        guard singleLine.count > Self.atlasLabelCharacters else { return singleLine }
-        return String(singleLine.prefix(Self.atlasLabelCharacters - 1)) + "…"
+        guard singleLine.utf16.count > Self.atlasLabelCharacters else { return [singleLine] }
+        // Room for the "(n/m) " prefix, up to 99 parts.
+        let budget = Self.atlasLabelCharacters - 10
+        var parts: [String] = []
+        var current = ""
+        for word in singleLine.split(separator: " ") {
+            var rest = word
+            while !rest.isEmpty {
+                let candidate = current.isEmpty ? String(rest) : current + " " + rest
+                if candidate.utf16.count <= budget {
+                    current = candidate
+                    rest = ""
+                } else if current.isEmpty {
+                    // A word longer than a whole part is cut where the part fills up.
+                    let end = Self.prefixEnd(of: rest, utf16Budget: budget)
+                    parts.append(String(rest[..<end]))
+                    rest = rest[end...]
+                } else {
+                    parts.append(current)
+                    current = ""
+                }
+            }
+        }
+        if !current.isEmpty { parts.append(current) }
+        return parts.enumerated().map { "(\($0.offset + 1)/\(parts.count)) \($0.element)" }
+    }
+
+    /// Atlas's idempotency key for each label. The first keeps the note's own
+    /// ID; later parts get a stable ID derived from it, so a retry after a
+    /// partial send repeats each part under the same key.
+    public func atlasRequestID(part: Int) -> UUID {
+        guard part > 0 else { return id }
+        var bytes = Array(SHA256.hash(data: Data("\(id.uuidString)#\(part)".utf8)).prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50 // version 5: name-based
+        bytes[8] = (bytes[8] & 0x3F) | 0x80 // RFC 4122 variant
+        return bytes.withUnsafeBufferPointer { NSUUID(uuidBytes: $0.baseAddress) as UUID }
+    }
+
+    /// Where the longest prefix of `text` within `utf16Budget` ends; at least
+    /// one character, so splitting always advances.
+    private static func prefixEnd(of text: Substring, utf16Budget: Int) -> Substring.Index {
+        var used = 0
+        var end = text.startIndex
+        for index in text.indices {
+            used += text[index].utf16.count
+            guard used <= utf16Budget || end == text.startIndex else { break }
+            end = text.index(after: index)
+        }
+        return end
     }
 }
 

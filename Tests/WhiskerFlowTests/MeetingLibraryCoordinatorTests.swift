@@ -153,6 +153,38 @@ final class MeetingLibraryCoordinatorTests: XCTestCase {
             atPath: failing.libraryRoot.appendingPathComponent("\(failing.sessionID.uuidString).wfmeeting").path))
     }
 
+    func testLongNoteReachesAtlasInFullBeforeItsMeetingIsDeleted() async throws {
+        let f = try fixture(retention: .deleteAfterDelivery)
+        let text = (1...120).map { "point\($0)" }.joined(separator: " ")
+        var requests: [MeetingBookmarkSyncRequest] = []
+        f.library.noteSync = { request in
+            requests.append(request)
+            if requests.count == 2 { throw AssistantError.message("Atlas offline") }
+            return "bookmark-\(requests.count)"
+        }
+        f.library.beginRecording(sessionID: f.sessionID, title: "Design review",
+                                 startedAt: Date(timeIntervalSince1970: 1_790_000_000), calendarEventID: nil)
+        try f.library.addNote(sessionID: f.sessionID, text: text, elapsedMs: 6_000)
+        f.library.finishRecording(f.sessionID, endedAtMs: 60_000, coachRecap: nil, bookmarks: [])
+
+        await f.coordinator.deliver(sessionID: f.sessionID)
+        XCTAssertEqual(f.library.entry(f.sessionID)?.notes.first?.syncState, .failed, "One part didn't reach Atlas")
+        XCTAssertNotNil(f.library.entry(f.sessionID), "So the only complete copy is kept")
+
+        requests = []
+        f.library.noteSync = { request in requests.append(request); return "bookmark-\(requests.count)" }
+        await f.library.retryNoteSync(sessionID: f.sessionID)
+        XCTAssertGreaterThan(requests.count, 1)
+        XCTAssertTrue(requests.allSatisfy { ($0.label?.utf16.count ?? 0) <= MeetingLibraryNote.atlasLabelCharacters })
+        XCTAssertEqual(Set(requests.map(\.requestID)).count, requests.count)
+        XCTAssertEqual(Set(requests.map(\.elapsedMilliseconds)), [6_000])
+        let sent = requests.compactMap(\.label).map {
+            $0.replacingOccurrences(of: #"^\(\d+/\d+\) "#, with: "", options: .regularExpression)
+        }
+        XCTAssertEqual(sent.joined(separator: " "), text)
+        XCTAssertNil(f.library.entry(f.sessionID), "Sent in full, so retention may now delete it")
+    }
+
     func testPermanentFailureIsShownAsFailedAndHeldForRetry() async throws {
         let f = try fixture(chunks: false, checkpoint: false)
         try recordLiveMoments(f)

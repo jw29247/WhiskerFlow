@@ -131,10 +131,39 @@ final class MeetingLibraryTests: XCTestCase {
         XCTAssertNil(MeetingLibraryNote.sanitized("  \n "))
         XCTAssertEqual(MeetingLibraryNote.sanitized(" hi ")!, "hi")
         XCTAssertEqual(MeetingLibraryNote.sanitized(String(repeating: "a", count: 5_000))!.count, 1_000)
-        let long = MeetingLibraryNote(elapsedMs: 0, text: String(repeating: "b", count: 500), createdAt: start)
-        XCTAssertEqual(long.atlasLabel.count, 200)
-        XCTAssertTrue(long.atlasLabel.hasSuffix("…"))
-        XCTAssertEqual(MeetingLibraryNote(elapsedMs: -5, text: "a\nb", createdAt: start).atlasLabel, "a b")
+        let short = MeetingLibraryNote(elapsedMs: -5, text: "a\nb", createdAt: start)
+        XCTAssertEqual(short.atlasLabels, ["a b"])
+        XCTAssertEqual(short.atlasRequestID(part: 0), short.id, "A short note keeps its own idempotency key")
+    }
+
+    /// Strips the "(n/m) " part prefix.
+    private func body(_ label: String) -> String {
+        label.replacingOccurrences(of: #"^\(\d+/\d+\) "#, with: "", options: .regularExpression)
+    }
+
+    func testLongNoteIsSentToAtlasInFullAsNumberedParts() {
+        let words = (1...150).map { "word\($0)" }.joined(separator: " ")
+        let note = MeetingLibraryNote(elapsedMs: 0, text: words, createdAt: start)
+        let labels = note.atlasLabels
+        XCTAssertGreaterThan(labels.count, 1)
+        XCTAssertTrue(labels.allSatisfy { $0.utf16.count <= MeetingLibraryNote.atlasLabelCharacters })
+        XCTAssertEqual(labels.first?.hasPrefix("(1/\(labels.count)) "), true)
+        XCTAssertEqual(labels.map(body).joined(separator: " "), words, "Split between words, nothing lost")
+
+        let unbroken = MeetingLibraryNote(elapsedMs: 0, text: String(repeating: "b", count: 500), createdAt: start)
+        XCTAssertEqual(unbroken.atlasLabels.map(body).joined(), String(repeating: "b", count: 500))
+        XCTAssertTrue(unbroken.atlasLabels.allSatisfy { $0.utf16.count <= MeetingLibraryNote.atlasLabelCharacters })
+
+        // Atlas counts UTF-16 units: an emoji is two.
+        let emoji = MeetingLibraryNote(elapsedMs: 0, text: String(repeating: "😀", count: 150), createdAt: start)
+        XCTAssertEqual(emoji.atlasLabels.count, 2)
+        XCTAssertTrue(emoji.atlasLabels.allSatisfy { $0.utf16.count <= MeetingLibraryNote.atlasLabelCharacters })
+        XCTAssertEqual(emoji.atlasLabels.map(body).joined(), emoji.text)
+
+        let ids = labels.indices.map(note.atlasRequestID(part:))
+        XCTAssertEqual(ids.first, note.id)
+        XCTAssertEqual(Set(ids).count, ids.count, "Each part has its own key")
+        XCTAssertEqual(ids, labels.indices.map(note.atlasRequestID(part:)), "Keys are stable across retries")
     }
 
     // MARK: Atlas insights

@@ -266,8 +266,9 @@ final class MeetingLibraryController {
         }
     }
 
-    /// Sends notes that are not yet in Atlas as labelled bookmarks. Atlas
-    /// rejects offsets past the recording's end, so a note is clamped to it.
+    /// Sends notes that are not yet in Atlas as labelled bookmarks, a long
+    /// note as several parts. Atlas rejects offsets past the recording's end,
+    /// so a note is clamped to it.
     func syncNotes(sessionID: UUID, meetingReference: String, durationMs: Int64?) async {
         guard let sync = noteSync, !syncingNotes.contains(sessionID),
               let entry = entry(sessionID) else { return }
@@ -275,16 +276,27 @@ final class MeetingLibraryController {
         defer { syncingNotes.remove(sessionID) }
         let limit = durationMs.flatMap { $0 > 0 ? $0 : nil } ?? entry.durationMs ?? .max
         for note in entry.notes where note.syncState != .synced {
-            let request = MeetingBookmarkSyncRequest(
-                requestID: note.id, localSessionID: sessionID, meetingReference: meetingReference,
-                elapsedMilliseconds: min(note.elapsedMs, limit), label: note.atlasLabel
-            )
-            let outcome: (AssistantSyncState, String?)
-            do { outcome = await (.synced, try sync(request)) } catch { outcome = (.failed, nil) }
+            var outcome = AssistantSyncState.synced
+            var reference: String?
+            // Synced only once every part is in Atlas: until then retention
+            // keeps the meeting, which holds the only complete copy.
+            for (part, label) in note.atlasLabels.enumerated() {
+                let request = MeetingBookmarkSyncRequest(
+                    requestID: note.atlasRequestID(part: part), localSessionID: sessionID,
+                    meetingReference: meetingReference, elapsedMilliseconds: min(note.elapsedMs, limit), label: label
+                )
+                do {
+                    let received = try await sync(request)
+                    if part == 0 { reference = received }
+                } catch {
+                    outcome = .failed
+                    break
+                }
+            }
             update(sessionID) { entry in
                 guard let index = entry.notes.firstIndex(where: { $0.id == note.id }) else { return }
-                entry.notes[index].syncState = outcome.0
-                if let reference = outcome.1 { entry.notes[index].atlasReference = reference }
+                entry.notes[index].syncState = outcome
+                if let reference { entry.notes[index].atlasReference = reference }
             }
         }
     }
