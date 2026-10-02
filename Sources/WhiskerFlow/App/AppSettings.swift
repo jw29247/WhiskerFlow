@@ -17,7 +17,6 @@ final class AppSettings {
     private(set) var persistenceError: String?
 
     var engine: TranscriptionEngineKind { didSet { defaults.set(engine.rawValue, forKey: Keys.engine) } }
-    var model: WhisperModel { didSet { defaults.set(model.rawValue, forKey: Keys.model) } }
     /// BCP-47 code, or "auto" to let the engine detect.
     var language: String {
         didSet {
@@ -29,8 +28,8 @@ final class AppSettings {
     /// The key combination used when `hotkey == .custom`.
     var customHotkey: KeyCombo { didSet { persist(customHotkey, key: Keys.customHotkey) } }
     var recordingMode: RecordingMode { didSet { defaults.set(recordingMode.rawValue, forKey: Keys.recordingMode) } }
-    /// Stream and transcribe while speaking so the transcript pastes instantly on
-    /// release. Applies to the WhisperKit engine; other engines stay file-based.
+    /// Show what is being heard in the HUD while speaking. Display only: the
+    /// pasted text always comes from the full decode on release.
     var liveTranscription: Bool { didSet { defaults.set(liveTranscription, forKey: Keys.liveTranscription) } }
     var rememberCorrections: Bool { didSet { defaults.set(rememberCorrections, forKey: "rememberCorrections") } }
     /// Add a remembered correction to the Dictionary as soon as it is seen.
@@ -38,7 +37,6 @@ final class AppSettings {
     /// Per-engine recogniser hints from the Dictionary. Each can be turned off
     /// independently; post-recognition replacement applies either way.
     var biasAppleSpeech: Bool { didSet { defaults.set(biasAppleSpeech, forKey: Keys.biasAppleSpeech) } }
-    var biasWhisperKit: Bool { didSet { defaults.set(biasWhisperKit, forKey: Keys.biasWhisperKit) } }
     var biasParakeet: Bool { didSet { defaults.set(biasParakeet, forKey: Keys.biasParakeet) } }
     var delivery: DeliveryMode { didSet { defaults.set(delivery.rawValue, forKey: Keys.delivery) } }
     var playSounds: Bool { didSet { defaults.set(playSounds, forKey: Keys.playSounds) } }
@@ -47,8 +45,6 @@ final class AppSettings {
     var showDockIcon: Bool { didSet { defaults.set(showDockIcon, forKey: Keys.showDockIcon) } }
     /// Stable CoreAudio UID, or `system-default`. Numeric AudioDeviceIDs are never persisted here.
     var selectedInputUID: String { didSet { defaults.set(selectedInputUID, forKey: Keys.selectedInputUID) } }
-    var whisperCommand: String { didSet { defaults.set(whisperCommand, forKey: Keys.whisperCommand) } }
-    var whisperArguments: String { didSet { defaults.set(whisperArguments, forKey: Keys.whisperArguments) } }
     /// The pre-Dictionary personal vocabulary. Read once to migrate into
     /// `DictionaryStore` and otherwise left as it was, as a fallback for older builds.
     var vocabulary: Vocabulary { didSet { persist(vocabulary, key: Keys.vocabulary) } }
@@ -145,10 +141,8 @@ final class AppSettings {
     /// writes its one-shot migration flags, which every launch sets.
     @ObservationIgnored let hadPreviousLaunch: Bool
 
-    private static let legacyParakeetMigrationKey = "parakeetTDTv3DefaultMigrated"
-
-    /// Parakeet refuses to run off Apple Silicon, so never migrate a working
-    /// WhisperKit setup onto it there.
+    /// Parakeet refuses to run off Apple Silicon; Apple Speech is the only
+    /// engine there.
     private static var supportsParakeet: Bool {
         #if arch(arm64)
         true
@@ -169,26 +163,17 @@ final class AppSettings {
         self.meetingTokenStore = meetingTokenStore
         hadPreviousLaunch = defaults.object(forKey: Keys.languageAutoMigrated) != nil
 
-        let storedEngine = defaults.string(forKey: Keys.engine).flatMap(TranscriptionEngineKind.init)
-        let storedModel = defaults.string(forKey: Keys.model).flatMap(WhisperModel.init)
-        let shouldMigrateLegacyDefault = !defaults.bool(forKey: Self.legacyParakeetMigrationKey)
-            && Self.supportsParakeet
-            && storedEngine == .whisperKit
-            && storedModel == .medium
-        // One-shot: only a WhisperKit + medium pair stored before this build is the
-        // legacy default. Marking every launch keeps a later deliberate choice of
-        // that pair from being migrated away on the next launch.
-        defaults.set(true, forKey: Self.legacyParakeetMigrationKey)
-        let resolvedEngine = TranscriptionEngineKind.engineForStoredPreferences(
-            engine: storedEngine,
-            model: storedModel,
-            migrateLegacyDefault: shouldMigrateLegacyDefault
-        )
+        // Whisper was removed: a stored Whisper engine moves to Parakeet, and
+        // its model size and command-line settings are dropped.
+        let storedEngine = defaults.string(forKey: Keys.engine)
+        let resolvedEngine = Self.supportsParakeet
+            ? TranscriptionEngineKind.engineForStoredPreferences(rawValue: storedEngine)
+            : .appleSpeech
         engine = resolvedEngine
-        if resolvedEngine == .parakeetTDTv3, storedEngine == .whisperKit {
+        if storedEngine != resolvedEngine.rawValue, storedEngine != nil {
             defaults.set(resolvedEngine.rawValue, forKey: Keys.engine)
         }
-        model = storedModel ?? .tiny
+        for key in Keys.removedWhisperSettings { defaults.removeObject(forKey: key) }
         let initialLanguage = Self.migratedLanguage(from: defaults)
         language = initialLanguage
         hotkey = defaults.string(forKey: Keys.hotkey).flatMap(HotkeyTrigger.init) ?? .fn
@@ -198,7 +183,6 @@ final class AppSettings {
         rememberCorrections = defaults.object(forKey: "rememberCorrections") as? Bool ?? true
         autoAddLearnedWords = defaults.object(forKey: Keys.autoAddLearnedWords) as? Bool ?? true
         biasAppleSpeech = defaults.object(forKey: Keys.biasAppleSpeech) as? Bool ?? Self.defaultBiasAppleSpeech
-        biasWhisperKit = defaults.object(forKey: Keys.biasWhisperKit) as? Bool ?? Self.defaultBiasWhisperKit
         biasParakeet = defaults.object(forKey: Keys.biasParakeet) as? Bool ?? Self.defaultBiasParakeet
         delivery = defaults.string(forKey: Keys.delivery).flatMap(DeliveryMode.init) ?? .pasteAtCursor
         playSounds = defaults.object(forKey: Keys.playSounds) as? Bool ?? true
@@ -206,8 +190,6 @@ final class AppSettings {
         showMenuBarExtra = defaults.object(forKey: Keys.showMenuBarExtra) as? Bool ?? true
         showDockIcon = defaults.object(forKey: Keys.showDockIcon) as? Bool ?? true
         selectedInputUID = defaults.string(forKey: Keys.selectedInputUID) ?? "system-default"
-        whisperCommand = defaults.string(forKey: Keys.whisperCommand) ?? Self.defaultWhisperCommand
-        whisperArguments = defaults.string(forKey: Keys.whisperArguments) ?? Self.defaultWhisperArguments
         vocabulary = Self.loadVocabulary(from: defaults) ?? Vocabulary()
         var initialFormatting = Self.loadFormatting(from: defaults) ?? FormattingOptions()
         initialFormatting.language = initialLanguage
@@ -242,7 +224,6 @@ final class AppSettings {
 
     /// Defaults follow docs/validation/2026-09-25-dictionary-biasing.md.
     static let defaultBiasAppleSpeech = true
-    static let defaultBiasWhisperKit = false
     static let defaultBiasParakeet = false
 
     var resolvedLanguage: String? {
@@ -275,10 +256,6 @@ final class AppSettings {
     /// The shortcut as it reads in a sentence ("hold fn and speak").
     var hotkeySpokenName: String {
         hotkey == .fn ? "fn" : hotkeyDisplayName
-    }
-
-    var cliConfiguration: WhisperConfiguration {
-        WhisperConfiguration(command: whisperCommand, argumentsTemplate: whisperArguments)
     }
 
     private func persist<T: Encodable>(_ value: T, key: String) {
@@ -364,18 +341,13 @@ final class AppSettings {
         return try? JSONDecoder().decode(KeyCombo.self, from: data)
     }
 
-    static var defaultWhisperCommand: String {
-        let candidates = ["/opt/homebrew/bin/whisper", "/usr/local/bin/whisper"]
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? "whisper"
-    }
-
-    static var defaultWhisperArguments: String {
-        "\"{audio}\" --model base --language en --fp16 False --output_format txt --output_dir \"{output}\""
-    }
-
     private enum Keys {
         static let engine = "engine"
-        static let model = "model"
+        /// Whisper's model size, command and arguments, its dictionary-hint
+        /// switch, and the one-shot WhisperKit-to-Parakeet migration flag.
+        static let removedWhisperSettings = [
+            "model", "whisperCommand", "whisperArguments", "dictionaryBiasWhisperKit", "parakeetTDTv3DefaultMigrated",
+        ]
         static let language = "language"
         static let languageAutoMigrated = "languageAutoMigrated"
         static let hotkey = "hotkey"
@@ -391,12 +363,9 @@ final class AppSettings {
         static let showDockIcon = "showDockIcon"
         static let selectedDeviceID = "selectedDeviceID"
         static let selectedInputUID = "selectedInputUID"
-        static let whisperCommand = "whisperCommand"
-        static let whisperArguments = "whisperArguments"
         static let vocabulary = "vocabulary"
         static let autoAddLearnedWords = "autoAddLearnedWords"
         static let biasAppleSpeech = "dictionaryBiasAppleSpeech"
-        static let biasWhisperKit = "dictionaryBiasWhisperKit"
         static let biasParakeet = "dictionaryBiasParakeet"
         static let formatting = "formattingOptions"
         static let historyRetention = "historyRetention"

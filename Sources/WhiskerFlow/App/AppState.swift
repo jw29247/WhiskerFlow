@@ -57,11 +57,9 @@ enum ModelState: Equatable {
 final class AppState {
     private struct TranscriptionJobConfiguration {
         let engine: TranscriptionEngineKind
-        let model: WhisperModel
         let language: String?
         let vocabulary: Vocabulary
         let formatting: FormattingOptions
-        let cliConfiguration: WhisperConfiguration
         let allowAppleFallback: Bool
         let delivery: DeliveryMode
         let playSounds: Bool
@@ -213,7 +211,6 @@ final class AppState {
     private var atlasAccountIdentity: String?
     private var activeRecordingConfiguration: TranscriptionJobConfiguration?
     /// Whether the most recent recording streamed live (vs. file-based capture).
-    private var streamingActive = false
     private var signalAssessor = AudioSignalAssessor()
     /// Keeps App Nap off while the hotkey is armed. A menu-bar utility with no
     /// visible window is otherwise napped: its queues are throttled and its
@@ -237,13 +234,14 @@ final class AppState {
         insightsStore: InsightsStore? = nil,
         microphonePermission: MicrophonePermissionController? = nil,
         pasteService: (any TextDeliveryService)? = nil,
-        onboardingStore: (any OnboardingProgressStoring)? = nil
+        onboardingStore: (any OnboardingProgressStoring)? = nil,
+        transcription: TranscriptionService? = nil
     ) {
         let resolvedSettings = settings ?? AppSettings()
         let resolvedMicrophonePermission = microphonePermission ?? MicrophonePermissionController(
             provider: AVCaptureMicrophoneAuthorizationProvider()
         )
-        let transcription = TranscriptionService()
+        let transcription = transcription ?? TranscriptionService()
         self.settings = resolvedSettings
         self.store = store ?? .defaultStore()
         self.assistant = store == nil && !UIPreview.isEnabled ? .defaultStore() : AssistantController()
@@ -624,6 +622,8 @@ final class AppState {
         hudController = RecordingHUDController(appState: self)
         warmUpEngine()
         warmUpMeetingEngine()
+        // Whisper was removed; free the space its downloaded models took.
+        Task.detached(priority: .background) { ModelStoragePaths.removeWhisperModels() }
     }
 
     func applyActivationPolicy() {
@@ -697,7 +697,7 @@ final class AppState {
                 audioFilePath: pending.url.path,
                 createdAt: Date(),
                 status: .failed(errorMessage: "WhiskerFlow quit before transcription finished. Retry this recording."),
-                model: pending.configuration.model.rawValue,
+                model: pending.configuration.engine.modelIdentifier,
                 engine: pending.configuration.engine.rawValue,
                 language: pending.configuration.language,
                 appCategory: pending.configuration.writing.category
@@ -718,37 +718,33 @@ final class AppState {
         guard !UIPreview.isEnabled else { return }
         warmUpTask?.cancel()
         let engine = settings.engine
-        let model = settings.model
         let language = settings.resolvedLanguage
         let allowFallback = settings.allowAppleFallback
-        guard engine == .whisperKit || engine == .parakeetTDTv3 else {
+        guard engine == .parakeetTDTv3 else {
             modelState = .ready
             return
         }
         modelState = .preparing
-        if engine == .parakeetTDTv3 {
-            let needsDownload = !ParakeetTDTv3Engine.isModelDownloaded
-            modelDownload = ModelDownloadStatus(
-                tracker: needsDownload ? .parakeetFirstDownload : .parakeetCachedLoad,
-                needsDownload: needsDownload
-            )
-        }
+        let needsDownload = !ParakeetTDTv3Engine.isModelDownloaded
+        modelDownload = ModelDownloadStatus(
+            tracker: needsDownload ? .parakeetFirstDownload : .parakeetCachedLoad,
+            needsDownload: needsDownload
+        )
         warmUpTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            let ready = await transcription.prepare(kind: engine, model: model, language: language)
-            if ready, engine == .parakeetTDTv3 { self.modelDownload.tracker?.finish() }
+            let ready = await transcription.prepare(kind: engine, language: language)
+            if ready { self.modelDownload.tracker?.finish() }
             await transcription.prepareHints(self.recognizerHints, kind: engine)
             guard !Task.isCancelled,
                   self.settings.engine == engine,
-                  self.settings.model == model,
                   self.settings.resolvedLanguage == language else { return }
             if ready {
-                DiagnosticsService.breadcrumb(category: "model", metadata: ["model": model.rawValue])
+                DiagnosticsService.breadcrumb(category: "model", metadata: ["model": engine.modelIdentifier])
                 self.modelState = .ready
             } else if allowFallback {
-                self.modelState = .failed("Could not load \(model.displayName). Apple Speech will be used.")
+                self.modelState = .failed("Could not load Parakeet. Apple Speech will be used.")
             } else {
-                self.modelState = .failed("Could not load \(model.displayName). Apple Speech fallback is off.")
+                self.modelState = .failed("Could not load Parakeet. Apple Speech fallback is off.")
             }
         }
     }
@@ -830,7 +826,6 @@ final class AppState {
         RecognizerHints(
             terms: DictionaryBiasing.terms(personal: dictionary.entries, readOnly: readOnlyDictionaryRules.map(\.rule)),
             appleSpeech: settings.biasAppleSpeech,
-            whisperKit: settings.biasWhisperKit,
             parakeet: settings.biasParakeet
         )
     }
@@ -1214,9 +1209,8 @@ final class AppState {
                                                            allowAppleFallback: false)
             do {
                 let outcome = try await withAbandoningDeadline(seconds: backstop) {
-                    try await transcription.transcribe(audioURL: audioURL, kind: engine, model: configuration.model,
+                    try await transcription.transcribe(audioURL: audioURL, kind: engine,
                                                        language: configuration.language,
-                                                       cliConfiguration: configuration.cliConfiguration,
                                                        allowAppleFallback: false)
                 }
                 let text = await Task.detached(priority: .userInitiated) {
@@ -1225,7 +1219,7 @@ final class AppState {
                                                     recognizeCorrections: configuration.recognizeCorrections)
                 }.value
                 try self.store.markTranscribed(id: record.id, text: text, durationSeconds: outcome.result.duration,
-                                               model: configuration.model.rawValue, engine: outcome.engine.rawValue,
+                                               model: outcome.engine.modelIdentifier, engine: outcome.engine.rawValue,
                                                language: outcome.result.language, rawRecognition: outcome.result.text)
                 self.records = self.store.records
                 self.status = .success("Transcribed again with \(engine.displayName)")
@@ -1599,15 +1593,14 @@ final class AppState {
             let configuration = makeTranscriptionConfiguration()
             span.setAttributes([
                 "transcription.engine": .string(configuration.engine.rawValue),
-                "transcription.model": .string(configuration.model.rawValue),
+                "transcription.model": .string(configuration.engine.modelIdentifier),
                 "recording.mode": .string(String(describing: settings.recordingMode)),
                 "writing.category": .string(configuration.writing.category.rawValue)
             ])
             activeRecordingConfiguration = configuration
             assistant.capturePurpose = .dictation
-            // Stream + decode live for WhisperKit; Parakeet decodes the captured
-            // samples on release, with audio persistence following delivery.
-            streamingActive = configuration.engine == .whisperKit && settings.liveTranscription
+            // The engine decodes the captured samples on release, with audio
+            // persistence following delivery.
             var inputSelection: AudioInputSelection?
             var lastStartError: Error?
             lifecycleLogger.info("Opening microphone", metadata: [
@@ -1621,13 +1614,10 @@ final class AppState {
                     try await live.start(
                         selection: candidate,
                         language: configuration.language,
-                        model: configuration.model,
                         vocabulary: configuration.vocabulary,
                         formatting: configuration.formatting,
-                        streaming: streamingActive,
                         tone: configuration.writing.tone,
                         recognizeCorrections: configuration.recognizeCorrections,
-                        hints: configuration.hints,
                         previewEngine: settings.liveTranscription ? configuration.engine : nil
                     )
                     inputSelection = candidate
@@ -1646,7 +1636,6 @@ final class AppState {
             }
             guard recordingCoordinator.didStart(sessionID) else {
                 live.cancel()
-                streamingActive = false
                 activeRecordingConfiguration = nil
                 telemetryOutcome = "cancelled"
                 return
@@ -1679,7 +1668,6 @@ final class AppState {
         } catch {
             _ = recordingCoordinator.fail(sessionID)
             isRecording = false
-            streamingActive = false
             activeRecordingConfiguration = nil
             let message = CaptureErrorPresentation.message(for: error)
             lastError = message
@@ -1785,8 +1773,6 @@ final class AppState {
             self?.abandonStuckFinish(sessionID: sessionID)
         }
 
-        let wasStreaming = streamingActive
-        streamingActive = false
         var configuration = activeRecordingConfiguration ?? makeTranscriptionConfiguration()
         activeRecordingConfiguration = nil
         let pasteTarget = pasteTargetApplication
@@ -1803,8 +1789,8 @@ final class AppState {
         if let url = live.currentAudioURL {
             inFlightFinishAudio[sessionID] = (url, configuration)
         }
-        let result = await live.finish(reason: reason)
-        lifecycleLogger.info("Live decode returned", metadata: ["event": "decode_returned", "session": "\(sessionID)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - finishStarted) * 1000)", "samples": "\(result.totalSampleCount)"])
+        let result = live.finish(reason: reason)
+        lifecycleLogger.info("Capture stopped", metadata: ["event": "decode_returned", "session": "\(sessionID)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - finishStarted) * 1000)", "samples": "\(result.totalSampleCount)"])
         watchdog.cancel()
         let wasAbandoned = abandonedSessionIDs.remove(sessionID) != nil
         _ = recordingCoordinator.didFinish(sessionID)
@@ -1812,42 +1798,17 @@ final class AppState {
         if wasAbandoned {
             // The watchdog already reported this session as timed out and released
             // the coordinator, so the HUD text, the status and the paste target may
-            // all belong to a newer session by now. File the transcript so it isn't
-            // lost, but deliver nothing and touch no lifecycle UI.
+            // all belong to a newer session by now. Deliver nothing and touch no
+            // lifecycle UI; the audio must still reach the retry queue.
             logger.error("Finish returned after the watchdog")
-            let recovered = !result.text.isEmpty && result.coversAllAudio
             DiagnosticsService.breadcrumb(
                 category: "recording",
-                metadata: [
-                    "phase": "finish_late",
-                    "recovered": String(recovered)
-                ]
+                metadata: ["phase": "finish_late", "recovered": "false"]
             )
             inFlightFinishAudio[sessionID] = nil
-            if recovered {
-                recordSuccessfulDictation(text: result.text, rawText: result.rawText,
-                                          speakingSeconds: Double(result.totalSampleCount) / 16_000,
-                                          engine: configuration.engine.rawValue, appBundleID: nil,
-                                          configuration: configuration)
-            }
-            if let recordID = recoveryRecordIDs.removeValue(forKey: sessionID) {
-                // Shutdown already filed this audio for retry; complete it in place.
-                if recovered {
-                    completeRecoveryRecord(recordID, text: result.text, rawText: result.rawText,
-                                           totalSampleCount: result.totalSampleCount, configuration: configuration)
-                }
-            } else if recovered {
-                persistLiveRecording(
-                    text: result.text,
-                    rawText: result.rawText,
-                    capturedAudioURL: result.audioURL,
-                    totalSampleCount: result.totalSampleCount,
-                    configuration: configuration,
-                    sessionID: sessionID
-                )
-            } else if let url = result.audioURL, result.totalSampleCount > 0 {
-                // No usable transcript (a superseded or incomplete live decode, or
-                // a file-based capture): the audio must still reach the retry queue.
+            // Shutdown may already have filed this audio for retry.
+            if recoveryRecordIDs.removeValue(forKey: sessionID) == nil,
+               let url = result.audioURL, result.totalSampleCount > 0 {
                 fileTimedOutRecording(url: url, totalSampleCount: result.totalSampleCount,
                                       configuration: configuration)
             }
@@ -1859,59 +1820,19 @@ final class AppState {
         if configuration.playSounds { soundService.play(.recordingStopped) }
         liveText = ""
 
-        if wasStreaming, !result.text.isEmpty, result.coversAllAudio {
-            // Streaming already produced the transcript — paste immediately, then
-            // persist the audio + record off the critical path.
-            let mayUpdateUI = canUpdateLifecycleUI(for: sessionID)
-            if mayUpdateUI { status = .transcribing }
-            await deliver(
-                result.text,
-                pasteTarget: pasteTarget,
-                delivery: configuration.delivery,
-                mayUpdateStatus: mayUpdateUI,
-                purpose: configuration.purpose,
-                quickKind: configuration.quickKind,
-                clientReference: configuration.clientReference,
-                accountIdentity: configuration.accountIdentity,
-                sessionID: sessionID
-            )
-            inFlightFinishAudio[sessionID] = nil
-            recordSuccessfulDictation(text: result.text, rawText: result.rawText,
-                                      speakingSeconds: Double(result.totalSampleCount) / 16_000,
-                                      engine: configuration.engine.rawValue,
-                                      appBundleID: pasteTarget?.bundleIdentifier, configuration: configuration)
-            if let recordID = recoveryRecordIDs.removeValue(forKey: sessionID) {
-                abandonedSessionIDs.remove(sessionID)
-                completeRecoveryRecord(recordID, text: result.text, rawText: result.rawText,
-                                       totalSampleCount: result.totalSampleCount, configuration: configuration)
-            } else {
-                persistLiveRecording(
-                    text: result.text,
-                    rawText: result.rawText,
-                    capturedAudioURL: result.audioURL,
-                    totalSampleCount: result.totalSampleCount,
-                    configuration: configuration,
-                    sessionID: sessionID
-                )
-            }
-        } else {
-            // Non-streaming engine, streaming caught no speech, or the live
-            // transcript is missing audio (its final pass failed or the tail left
-            // memory): transcribe the file (includes the Apple Speech fallback)
-            // rather than paste a transcript that silently drops the last words.
-            inFlightFinishAudio[sessionID] = nil
-            if canUpdateLifecycleUI(for: sessionID) { status = .transcribing }
-            await transcribeCapturedSamples(
-                result.samples,
-                conversionFailures: result.conversionFailures,
-                capturedAudioURL: result.audioURL,
-                totalSampleCount: result.totalSampleCount,
-                stopReason: reason,
-                pasteTarget: pasteTarget,
-                configuration: configuration,
-                sessionID: sessionID
-            )
-        }
+        // Transcribe the captured samples (includes the Apple Speech fallback).
+        inFlightFinishAudio[sessionID] = nil
+        if canUpdateLifecycleUI(for: sessionID) { status = .transcribing }
+        await transcribeCapturedSamples(
+            result.samples,
+            conversionFailures: result.conversionFailures,
+            capturedAudioURL: result.audioURL,
+            totalSampleCount: result.totalSampleCount,
+            stopReason: reason,
+            pasteTarget: pasteTarget,
+            configuration: configuration,
+            sessionID: sessionID
+        )
 
         if reason == .deviceDisconnected, canUpdateLifecycleUI(for: sessionID) {
             if CapturedAudioValidation.shouldDismissEmptyDeviceInterruption(
@@ -1988,7 +1909,6 @@ final class AppState {
         }
         isRecording = false
         isTranscribing = false
-        streamingActive = false
         activeRecordingConfiguration = nil
         logger.error(
             "Finish watchdog fired",
@@ -2038,110 +1958,6 @@ final class AppState {
         }
     }
 
-    /// Save a finished streaming transcript + its audio without blocking the
-    /// paste. The WAV is encoded off the main actor; the store update hops back.
-    private func persistLiveRecording(
-        text: String,
-        rawText: String,
-        capturedAudioURL: URL?,
-        totalSampleCount: Int,
-        configuration: TranscriptionJobConfiguration,
-        sessionID: UUID
-    ) {
-        recordDictionaryUsage(raw: rawText, final: text, configuration: configuration)
-        let createdAt = Date()
-        let duration = Double(totalSampleCount) / 16_000
-        let model = configuration.model.rawValue
-        let engine = configuration.engine.rawValue
-        let language = configuration.language
-        let category = configuration.writing.category
-        guard let url = capturedAudioURL else {
-            handleStorageError(CocoaError(.fileNoSuchFile), message: "Could not save recording")
-            return
-        }
-
-        let workToken = pendingPersistWork.begin()
-        Task.detached(priority: .utility) { [weak self] in
-            defer {
-                Task { @MainActor in self?.pendingPersistWork.end(workToken) }
-            }
-            await Observability.tracer.spanBuilder(spanName: "transcript.persist").withActiveSpan { span in
-                var telemetryOutcome = "error"
-                span.setAttributes([
-                    "transcription.engine": .string(engine),
-                    "transcription.model": .string(model)
-                ])
-                defer {
-                    span.setAttribute(key: "outcome", value: telemetryOutcome)
-                    Observability.transcriptPersistence.add(
-                        value: 1,
-                        attributes: [
-                            "outcome": .string(telemetryOutcome),
-                            "engine": .string(engine)
-                        ]
-                    )
-                }
-                let saved = await self?.appendRecord(
-                        text: text,
-                        rawText: rawText,
-                        audioPath: url.path,
-                        createdAt: createdAt,
-                        duration: duration,
-                        model: model,
-                        engine: engine,
-                        language: language,
-                        category: category,
-                        sessionID: sessionID
-                ) ?? false
-                if saved {
-                    telemetryOutcome = "success"
-                    span.status = .ok
-                } else {
-                    span.setAttribute(key: "error.type", value: "storage")
-                    span.status = .error(description: "Could not save transcript")
-                }
-            }
-        }
-    }
-
-    private func appendRecord(
-        text: String,
-        rawText: String,
-        audioPath: String,
-        createdAt: Date,
-        duration: Double,
-        model: String,
-        engine: String,
-        language: String?,
-        category: AppCategory,
-        sessionID: UUID
-    ) -> Bool {
-        let record = TranscriptRecord(
-            text: text,
-            audioFilePath: audioPath,
-            createdAt: createdAt,
-            status: .transcribed,
-            durationSeconds: duration,
-            model: model,
-            engine: engine,
-            language: language,
-            updatedAt: createdAt,
-            rawRecognition: rawText,
-            appCategory: category
-        )
-        do {
-            try store.add(record)
-            records = store.records
-            if canUpdateLifecycleUI(for: sessionID) {
-                selectedRecordID = record.id
-            }
-            return true
-        } catch {
-            handleStorageError(error, message: "Could not save transcript")
-            return false
-        }
-    }
-
     /// Files a late finish that produced no usable transcript as a retryable
     /// failure, so its audio stays in the retry queue instead of being orphaned.
     private func fileTimedOutRecording(url: URL, totalSampleCount: Int, configuration: TranscriptionJobConfiguration) {
@@ -2151,38 +1967,13 @@ final class AppState {
             createdAt: Date(),
             status: .failed(errorMessage: "Transcription timed out. Retry this recording."),
             durationSeconds: Double(totalSampleCount) / 16_000,
-            model: configuration.model.rawValue,
+            model: configuration.engine.modelIdentifier,
             engine: configuration.engine.rawValue,
             language: configuration.language,
             appCategory: configuration.writing.category
         )
         do {
             try store.add(record)
-        } catch {
-            noteHistoryFailure(error)
-        }
-        records = store.records
-    }
-
-    private func completeRecoveryRecord(
-        _ id: UUID,
-        text: String,
-        rawText: String,
-        totalSampleCount: Int,
-        configuration: TranscriptionJobConfiguration
-    ) {
-        do {
-            try store.markTranscribed(
-                id: id,
-                text: text,
-                durationSeconds: Double(totalSampleCount) / 16_000,
-                model: configuration.model.rawValue,
-                engine: configuration.engine.rawValue,
-                language: configuration.language,
-                rawRecognition: rawText,
-                appCategory: configuration.writing.category
-            )
-            recordDictionaryUsage(raw: rawText, final: text, configuration: configuration)
         } catch {
             noteHistoryFailure(error)
         }
@@ -2269,7 +2060,7 @@ final class AppState {
             createdAt: Date(),
             status: .transcribing,
             durationSeconds: Double(totalSampleCount) / 16_000,
-            model: configuration.model.rawValue,
+            model: configuration.engine.modelIdentifier,
             engine: configuration.engine.rawValue,
             language: configuration.language,
             appCategory: configuration.writing.category
@@ -2333,7 +2124,7 @@ final class AppState {
         let isRetry = sessionID == nil
         span.setAttributes([
             "transcription.engine": .string(configuration.engine.rawValue),
-            "transcription.model": .string(configuration.model.rawValue),
+            "transcription.model": .string(configuration.engine.modelIdentifier),
             "transcription.retry": .bool(isRetry),
             "transcription.input": .string(capturedSamples == nil ? "file" : "samples")
         ])
@@ -2391,9 +2182,7 @@ final class AppState {
                     try await transcription.transcribe(
                         audioURL: audioURL,
                         kind: configuration.engine,
-                        model: configuration.model,
                         language: configuration.language,
-                        cliConfiguration: configuration.cliConfiguration,
                         allowAppleFallback: configuration.allowAppleFallback,
                         capturedSamples: capturedSamples,
                         hints: configuration.hints
@@ -2425,7 +2214,7 @@ final class AppState {
                     id: record.id,
                     text: finalText,
                     durationSeconds: outcome.result.duration,
-                    model: configuration.model.rawValue,
+                    model: outcome.engine.modelIdentifier,
                     engine: outcome.engine.rawValue,
                     language: outcome.result.language,
                     rawRecognition: outcome.result.text,
@@ -2677,11 +2466,9 @@ final class AppState {
         let accountReady = assistant.synchronizeAccount()
         return TranscriptionJobConfiguration(
             engine: settings.engine,
-            model: settings.model,
             language: settings.resolvedLanguage,
             vocabulary: accountReady ? effectiveVocabulary : Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: dictionary.vocabulary),
             formatting: settings.formatting,
-            cliConfiguration: settings.cliConfiguration,
             allowAppleFallback: settings.allowAppleFallback,
             delivery: settings.delivery,
             playSounds: settings.playSounds,
@@ -2723,17 +2510,8 @@ final class AppState {
             // The captured-samples decode can fail over to the file decode.
             engineBudget = DecodeTimeoutPolicy.modelPreparationWait
                 + 2 * (queuedDecode + DecodeTimeoutPolicy.longFormTimeout(forAudioSeconds: seconds))
-        case .whisperKit:
-            let windowSeconds = BoundedDecodeWindowPolicy.windowSeconds
-            let windows = max(1, BoundedDecodeWindowPolicy.frameRanges(
-                totalFrames: Int64(seconds * 16_000), sampleRate: 16_000
-            ).count)
-            let perWindow = queuedDecode + DecodeTimeoutPolicy.timeout(forAudioSeconds: min(seconds, windowSeconds))
-            engineBudget = DecodeTimeoutPolicy.modelPreparationWait + Double(windows) * perWindow
         case .appleSpeech:
             engineBudget = DecodeTimeoutPolicy.appleSpeechTimeout(forAudioSeconds: seconds)
-        case .whisperCLI:
-            engineBudget = WhisperCLIEngine.effectiveTimeout(floor: 180, audioSeconds: seconds)
         }
         let fallbackBudget = allowAppleFallback && engine != .appleSpeech
             ? DecodeTimeoutPolicy.appleSpeechTimeout(forAudioSeconds: seconds) : 0
@@ -2744,8 +2522,7 @@ final class AppState {
     /// The recognizer ran and found no words — as opposed to failing to run.
     nonisolated static func isNoSpeechError(_ error: any Error) -> Bool {
         switch error {
-        case TranscriptionError.emptyTranscript, WhisperCLIError.emptyTranscript,
-             BoundedTranscriptAssemblyError.emptyTranscript:
+        case TranscriptionError.emptyTranscript:
             return true
         default:
             return false

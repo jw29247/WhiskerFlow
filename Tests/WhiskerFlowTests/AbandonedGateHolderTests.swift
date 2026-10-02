@@ -63,22 +63,15 @@ final class AbandonedGateHolderTests: XCTestCase {
         for seconds in [0.0, 1, 5, 10, 30, 60, 95, 300, 600] {
             let apple = DecodeTimeoutPolicy.appleSpeechTimeout(forAudioSeconds: seconds)
             let queue = DecodeTimeoutPolicy.gateQueueWait
-            let windows = Double(max(1, BoundedDecodeWindowPolicy.frameRanges(
-                totalFrames: Int64(seconds * 16_000), sampleRate: 16_000).count))
-            let whisperKit = DecodeTimeoutPolicy.dictationModelLoadWait + windows * (queue
-                + DecodeTimeoutPolicy.timeout(forAudioSeconds: min(seconds, BoundedDecodeWindowPolicy.windowSeconds)))
             let parakeet = DecodeTimeoutPolicy.modelPreparationWait
                 + 2 * (queue + DecodeTimeoutPolicy.longFormTimeout(forAudioSeconds: seconds))
-            let cli = DecodeTimeoutPolicy.cliTimeout(forAudioSeconds: seconds)
-            for (engine, budget) in [(TranscriptionEngineKind.whisperKit, whisperKit),
-                                     (.parakeetTDTv3, parakeet), (.whisperCLI, cli)] {
-                XCTAssertGreaterThanOrEqual(
-                    AppState.recognitionBackstopSeconds(forAudioSeconds: seconds, engine: engine, allowAppleFallback: true),
-                    budget + apple, "\(engine) \(seconds)s")
-            }
+            XCTAssertGreaterThanOrEqual(
+                AppState.recognitionBackstopSeconds(forAudioSeconds: seconds, engine: .parakeetTDTv3, allowAppleFallback: true),
+                parakeet + apple, "parakeet \(seconds)s")
+            XCTAssertGreaterThanOrEqual(
+                AppState.recognitionBackstopSeconds(forAudioSeconds: seconds, engine: .appleSpeech, allowAppleFallback: true),
+                apple, "apple \(seconds)s")
         }
-        XCTAssertLessThan(DecodeTimeoutPolicy.dictationModelLoadWait, DecodeTimeoutPolicy.modelPreparationWait)
-        XCTAssertEqual(DecodeTimeoutPolicy.dictationModelLoadWait, 15 * scale)
     }
 }
 

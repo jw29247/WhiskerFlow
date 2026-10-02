@@ -187,13 +187,6 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                if appState.settings.engine == .whisperKit {
-                    Picker("Model", selection: $appState.settings.model) {
-                        ForEach(WhisperModel.allCases) { Text($0.displayName).tag($0) }
-                    }
-                    .onChange(of: appState.settings.model) { _, _ in appState.warmUpEngine() }
-                }
-
                 Toggle("Fall back to Apple Speech if the model is unavailable",
                        isOn: $appState.settings.allowAppleFallback)
                 if appState.settings.allowAppleFallback || appState.settings.engine == .appleSpeech {
@@ -201,14 +194,6 @@ struct SettingsView: View {
                 }
             }
 
-            if appState.settings.engine == .whisperCLI {
-                Section("Whisper CLI") {
-                    Text("Use {audio} for the recording and {output} for the output folder.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    TextField("Command", text: $appState.settings.whisperCommand)
-                    TextField("Arguments", text: $appState.settings.whisperArguments)
-                }
-            }
             Section("Model status") {
                 HStack {
                     modelStatusView
@@ -268,9 +253,6 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                 Toggle("Apple Speech", isOn: $appState.settings.biasAppleSpeech)
                 Text("Passes Words and the written side of Replacements as contextual phrases (up to 100).")
-                    .font(.caption).foregroundStyle(.secondary)
-                Toggle("WhisperKit", isOn: $appState.settings.biasWhisperKit)
-                Text("Adds a short glossary prompt. In testing it fixed most names but made each decode about 0.1 s (tiny) to 1 s (small) slower.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Parakeet", isOn: $appState.settings.biasParakeet)
                     .onChange(of: appState.settings.biasParakeet) { _, enabled in

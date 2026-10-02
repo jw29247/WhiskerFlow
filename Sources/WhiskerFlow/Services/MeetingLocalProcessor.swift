@@ -46,7 +46,7 @@ struct MeetingLocalProcessingProgress: Codable, Sendable {
   var tracks: [String: Track] = [:]
 }
 
-/// Post-meeting-only local processing. The canonical text comes from WhisperKit
+/// Post-meeting-only local processing. The canonical text comes from Parakeet
 /// over the mixed track; microphone transcription is used only as an explicit
 /// timing/text alignment signal for the `You` label. SpeakerKit supplies stable
 /// diarized labels for the remaining turns. No audio leaves this process.
@@ -192,7 +192,7 @@ actor MeetingLocalProcessor {
     let untranscribed = checkpoint.tracks[canonicalTrack.rawValue]?.untranscribedWindows.count ?? 0
     return MeetingLocalProcessingResult(
       turns: turns,
-      modelVersion: WhisperKitEngine.meetingModelIdentifier,
+      modelVersion: TranscriptionService.meetingModelIdentifier,
       durationMs: durationMs,
       untranscribedAudibleWindowCount: untranscribed > 0 ? untranscribed : nil
     )
@@ -229,7 +229,7 @@ actor MeetingLocalProcessor {
   /// Binds progress to the exact source chunks, model and language so a
   /// changed manifest or setting never resumes from stale windows.
   private static func progressKey(manifest: MeetingRecordingSessionManifest, language: String?) -> String {
-    var lines = ["session=\(manifest.sessionID.uuidString)", "model=\(WhisperKitEngine.meetingModelIdentifier)",
+    var lines = ["session=\(manifest.sessionID.uuidString)", "model=\(TranscriptionService.meetingModelIdentifier)",
                  "language=\(language ?? "auto")", "window=\(MeetingTranscriptionWindowPolicy.maximumDurationMs)"]
     for chunk in manifest.chunks.sorted(by: { ($0.track.rawValue, $0.sequence) < ($1.track.rawValue, $1.sequence) }) {
       lines.append("\(chunk.track.rawValue)|\(chunk.sequence)|\(chunk.startMs)|\(chunk.endMs)|\(chunk.checksum)")
@@ -324,7 +324,7 @@ actor MeetingLocalProcessor {
       do {
         decodedResult = try await decodeWithTransientRetry(materialized.url, language)
       } catch TranscriptionError.emptyTranscript {
-        // Whisper can emit an empty result for a longer window even when the
+        // A decoder can emit an empty result for a longer window even when the
         // same source decodes at smaller boundaries. Retry each durable chunk
         // and bounded subwindows before treating the window as non-speech.
         if materialized.containsAudibleActivity {
@@ -434,7 +434,7 @@ actor MeetingLocalProcessor {
         } catch TranscriptionError.emptyTranscript {
           guard retry.containsAudibleActivity else { break }
           guard attempt + 1 < Self.audibleChunkRetryCount else { break }
-          // A short retry gives WhisperKit time to release a transient
+          // A short retry gives the model time to release a transient
           // decoder/VAD failure without allowing overlapping model work.
           try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 200_000_000)
         }
@@ -832,9 +832,8 @@ enum MeetingSegmentReconciler {
 }
 
 enum MeetingTranscriptionWindowPolicy {
-  // Whisper's native feature window is 30 seconds (480,000 samples). Keeping
-  // each file at or below that boundary avoids WhisperKit's internal VAD
-  // fan-out, whose per-chunk failures are otherwise omitted from its result.
+  // Windows of at most 30 seconds keep each decode short, so dictation never
+  // waits long behind a meeting window, and a resumed meeting re-decodes little.
   static let maximumDurationMs: Int64 = 30_000
 
   static func windows(

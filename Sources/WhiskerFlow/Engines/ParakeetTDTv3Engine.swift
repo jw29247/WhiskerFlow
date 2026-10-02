@@ -220,7 +220,7 @@ actor ParakeetTDTv3Engine: Sendable {
 
     /// Capture already produces mono 16 kHz samples. Decode those directly,
     /// leaving WAV encoding and history persistence off the delivery path.
-    func transcribe(samples: [Float], model: WhisperModel, language: String?,
+    func transcribe(samples: [Float], language: String?,
                     hints: RecognizerHints = .none) async throws -> TranscriptionResult {
         let manager = try await preparedManager()
         await beginDecode()

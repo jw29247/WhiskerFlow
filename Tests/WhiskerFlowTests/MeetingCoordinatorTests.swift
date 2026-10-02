@@ -89,16 +89,6 @@ final class MeetingCoordinatorTests: XCTestCase {
         XCTAssertEqual(windows[0].last?.sequence, windows[1].first?.sequence)
     }
 
-    func testMeetingDecodeUsesOneWhisperWorker() {
-        let options = WhisperKitEngine.decodingOptions(
-            language: "en",
-            withoutTimestamps: false,
-            wordTimestamps: true,
-            concurrentWorkerCount: 1
-        )
-        XCTAssertEqual(options.concurrentWorkerCount, 1)
-    }
-
     func testTranscriptionWindowsSplitAtSourceGaps() {
         let descriptors = [
             chunk(sequence: 0, startMs: 0, endMs: 10_000),

@@ -71,32 +71,6 @@ final class RecognizerBiasingEvaluationTests: XCTestCase {
         if let folder { try? FileManager.default.removeItem(at: folder) }
     }
 
-    func testWhisperKitPromptBiasing() async throws {
-        let service = TranscriptionService()
-        let models: [WhisperModel] = (ProcessInfo.processInfo.environment["WHISKERFLOW_BIAS_EVAL_WHISPER_MODELS"] ?? "tiny,base,small")
-            .split(separator: ",").compactMap { WhisperModel(rawValue: String($0)) }
-        for model in models {
-            let ready = await service.prepare(kind: .whisperKit, model: model, language: "en")
-            XCTAssertTrue(ready, "WhisperKit \(model) must be downloaded locally")
-            for biased in [false, true] {
-                let hints = RecognizerHints(terms: biased ? Self.terms : [], whisperKit: true)
-                for clip in clips {
-                    // Release path for a file capture (bounded windows).
-                    try await record(engine: "whisperkit-\(model.rawValue)", mode: "file", biased: biased, clip: clip) {
-                        try await service.transcribe(audioURL: clip.url, kind: .whisperKit, model: model, language: "en",
-                                                     cliConfiguration: WhisperConfiguration(command: "", argumentsTemplate: ""),
-                                                     allowAppleFallback: false, hints: hints).result.text
-                    }
-                    // Live streaming path (in-memory samples, no timestamps).
-                    let samples = try AudioConverter().resampleAudioFile(clip.url)
-                    try await record(engine: "whisperkit-\(model.rawValue)", mode: "live", biased: biased, clip: clip) {
-                        try await service.transcribeSamples(samples, language: "en", model: model, hints: hints).text
-                    }
-                }
-            }
-        }
-    }
-
     func testParakeetVocabularyBoosting() async throws {
         let engine = ParakeetTDTv3Engine()
         try await engine.prepare()
@@ -109,7 +83,7 @@ final class RecognizerBiasingEvaluationTests: XCTestCase {
             for clip in clips {
                 let samples = try AudioConverter().resampleAudioFile(clip.url)
                 try await record(engine: "parakeet-tdt-v3", mode: "capture", biased: biased, clip: clip) {
-                    try await engine.transcribe(samples: samples, model: .medium, language: "en", hints: hints).text
+                    try await engine.transcribe(samples: samples, language: "en", hints: hints).text
                 }
             }
         }

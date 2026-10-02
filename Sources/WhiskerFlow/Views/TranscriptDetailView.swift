@@ -87,7 +87,7 @@ struct TranscriptDetailView: View {
                     if let duration = record.durationSeconds {
                         Text("Recording length: \(Int(duration) / 60):\(String(format: "%02d", Int(duration) % 60))")
                     }
-                    if let engine = record.engine { Text("Engine: \(TranscriptionEngineKind(rawValue: engine)?.displayName ?? engine)") }
+                    if let engine = record.engine { Text("Engine: \(TranscriptionEngineKind.displayName(forStored: engine))") }
                     if let language = record.language { Text("Language: \(language)") }
                 }.font(.caption).foregroundStyle(FlowStyle.muted).padding(.top, 8)
             } label: {

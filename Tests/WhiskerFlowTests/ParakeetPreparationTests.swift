@@ -42,7 +42,7 @@ final class ParakeetPreparationTests: XCTestCase {
         let engine = ParakeetTDTv3Engine(preparationWait: 0.05, loadManager: { try await probe.load() })
         let started = Date()
         do {
-            _ = try await engine.transcribe(samples: [Float](repeating: 0, count: 1_600), model: .base, language: "en")
+            _ = try await engine.transcribe(samples: [Float](repeating: 0, count: 1_600), language: "en")
             XCTFail("The decode should stop waiting for the load")
         } catch TranscriptionError.timedOut {}
         XCTAssertLessThan(Date().timeIntervalSince(started), 0.35)

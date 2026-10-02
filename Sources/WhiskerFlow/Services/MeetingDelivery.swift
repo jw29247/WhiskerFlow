@@ -142,7 +142,7 @@ struct MeetingDelivery {
     guard !source.chunks.isEmpty else { throw MeetingChunkStoreError.invalidSession }
     let durationMs = source.chunks.map(\.endMs).max() ?? source.durationMs ?? 0
     let sourceGapDetected = source.hasStructuralSourceGap || MeetingAudioTrack.allCases.contains { track in !source.chunks.contains { $0.track == track } }
-    let modelVersion: String? = WhisperKitEngine.meetingModelIdentifier
+    let modelVersion: String? = TranscriptionService.meetingModelIdentifier
     progress("Sending recording to Atlas…")
       var manifest = source
       let sourceManifestHash = try await Self.offMain { try store.sourceManifestChecksum(sessionID: sessionID) }

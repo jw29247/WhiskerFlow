@@ -28,10 +28,8 @@ public enum DecodeTimeoutPolicy {
     /// Hard ceiling, also used when the audio duration is unknown.
     public static var maximumTimeout: Double { baseMaximumTimeout * hardwareScale }
     public static let baseMaximumTimeout: Double = 300
-    /// Budget for a live partial decode of the growing buffer. A live window never
-    /// exceeds `LiveDecodeWindowPolicy.hardCapSeconds`, so it needs nothing like the
-    /// file-decode budget — and keeping it small is what lets the finish watchdog
-    /// sit above the worst legitimate release.
+    /// Budget for a short decode on the release path. Keeping it small is what
+    /// lets the finish watchdog sit above the worst legitimate release.
     public static var livePartialTimeout: Double { baseLivePartialTimeout * hardwareScale }
     public static let baseLivePartialTimeout: Double = 20
     /// Live decodes a single release can end up awaiting one after another: the
@@ -68,12 +66,6 @@ public enum DecodeTimeoutPolicy {
         max(90, 2 * max(0, duration) + 30) * scale
     }
 
-    /// The openai-whisper CLI runs on the CPU and may download its checkpoint on
-    /// first use, so it gets a far more generous budget than the Core ML engines.
-    public static func cliTimeout(forAudioSeconds duration: Double, scale: Double = hardwareScale) -> Double {
-        max(180, 5 * max(0, duration) + 300) * scale
-    }
-
     /// How long a caller that must decode (not a live partial) waits for another
     /// Core ML operation to release the shared gate: about one bounded-window
     /// decode, the longest thing that legitimately holds it besides a model load.
@@ -85,10 +77,4 @@ public enum DecodeTimeoutPolicy {
     /// (the load itself keeps running). Covers a first-run download and Core ML
     /// compile on a slow Mac.
     public static var modelPreparationWait: Double { 180 * hardwareScale }
-
-    /// How long a dictation decode waits for its model load. A first-run
-    /// download, or a load queued behind the meeting model's compile, takes
-    /// minutes; the dictation falls back to Apple Speech meanwhile and the load
-    /// carries on for the next attempt to join.
-    public static var dictationModelLoadWait: Double { 15 * hardwareScale }
 }

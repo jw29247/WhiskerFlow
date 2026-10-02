@@ -14,7 +14,7 @@ final class DictationPerformanceTests: XCTestCase {
         let records = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: manifest))) as! [[String: Any]]
         let paths = Array(Set(records.compactMap { $0["audioFilePath"] as? String })).sorted()
         let service = TranscriptionService()
-        let ready = await service.prepare(kind: .parakeetTDTv3, model: .medium, language: "en")
+        let ready = await service.prepare(kind: .parakeetTDTv3, language: "en")
         XCTAssertTrue(ready)
         let converter = AudioConverter()
         var measurements: [[String: Any]] = []
@@ -27,8 +27,7 @@ final class DictationPerformanceTests: XCTestCase {
                     let start = ContinuousClock.now
                     let outcome = try await service.transcribe(
                         audioURL: URL(fileURLWithPath: path), kind: .parakeetTDTv3,
-                        model: .medium, language: "en",
-                        cliConfiguration: WhisperConfiguration(command: "", argumentsTemplate: ""),
+                        language: "en",
                         allowAppleFallback: false,
                         capturedSamples: mode == "capture" ? samples : nil
                     )
@@ -56,7 +55,7 @@ final class DictationPerformanceTests: XCTestCase {
         try await engine.prepare()
         func decode(_ label: String) async throws {
             let start = ContinuousClock.now
-            _ = try await engine.transcribe(TranscriptionRequest(audioURL: URL(fileURLWithPath: path), language: "en", model: .medium))
+            _ = try await engine.transcribe(TranscriptionRequest(audioURL: URL(fileURLWithPath: path), language: "en"))
             print("IDLE \(label) \(start.duration(to: .now))")
         }
         try await decode("warm-reference")

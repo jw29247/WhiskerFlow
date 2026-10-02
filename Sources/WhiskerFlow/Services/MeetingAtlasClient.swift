@@ -313,6 +313,8 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
                 "speakerResolution": turn.speaker.resolution == .googleMeet ? "unknown" : turn.speaker.resolution.rawValue,
                 "speakerProvider": {
                     switch turn.speaker.resolution {
+                    // Atlas's contract value for the self-attributed label;
+                    // it names no recogniser (transcription is Parakeet).
                     case .selfSpeaker: return "whisperkit"
                     case .diarized, .unknown: return "speakerkit"
                     case .googleMeet: return "google_meet"

@@ -17,18 +17,13 @@ Install
 
 Transcription
 -------------
-WhiskerFlow uses WhisperKit, which runs Whisper on the Apple Neural Engine.
+WhiskerFlow uses Parakeet TDT v3, which runs on the Apple Neural Engine.
 No Python, no Homebrew, nothing else to install. The first time you dictate it
-downloads a small model (~150 MB) and keeps it warm afterwards.
+downloads its model (about 500 MB) and keeps it warm afterwards. Meetings are
+transcribed with the same model.
 
-If you have no internet on first run, switch the engine to "Apple Speech
-(built-in)" in Settings > Engine — it works fully offline with zero download.
-
-Advanced (optional)
--------------------
-Settings > Engine > "Whisper CLI" lets you point WhiskerFlow at your own
-openai-whisper install. Run "Install Whisper.command" to set that up via
-Homebrew. This is only needed if you specifically want the CLI engine.
+If you have no internet on first run, WhiskerFlow uses Apple Speech (built-in)
+until the download finishes; it works fully offline with zero download.
 
 Notes
 -----

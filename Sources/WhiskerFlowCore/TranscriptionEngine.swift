@@ -3,83 +3,50 @@ import Foundation
 /// Which transcription backend handles a recording.
 public enum TranscriptionEngineKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case parakeetTDTv3
-    case whisperKit
     case appleSpeech
-    case whisperCLI
 
     public var id: String { rawValue }
 
     public static let defaultEngine: TranscriptionEngineKind = .parakeetTDTv3
 
-    /// Existing installs used WhisperKit Medium as their implicit default. Keep
-    /// explicit alternative choices intact while moving that legacy default to
-    /// the faster, more accurate engine.
-    public static func engineForStoredPreferences(
-        engine: TranscriptionEngineKind?,
-        model: WhisperModel?,
-        migrateLegacyDefault: Bool = true
-    ) -> TranscriptionEngineKind {
-        if migrateLegacyDefault, engine == .whisperKit, model == .medium {
-            return .parakeetTDTv3
+    /// Whisper (WhisperKit and the Whisper CLI) was removed: every recording now
+    /// goes through Parakeet, so a stored Whisper choice, or anything unknown,
+    /// resolves to the default.
+    public static func engineForStoredPreferences(rawValue: String?) -> TranscriptionEngineKind {
+        rawValue.flatMap(TranscriptionEngineKind.init(rawValue:)) ?? defaultEngine
+    }
+
+    /// The label for an engine recorded in History, including the removed ones.
+    public static func displayName(forStored rawValue: String) -> String {
+        if let engine = TranscriptionEngineKind(rawValue: rawValue) { return engine.displayName }
+        switch rawValue {
+        case "whisperKit": return "WhisperKit (removed)"
+        case "whisperCLI": return "Whisper CLI (removed)"
+        default: return rawValue
         }
-        return engine ?? defaultEngine
     }
 
     public var displayName: String {
         switch self {
         case .parakeetTDTv3: return "Parakeet TDT v3 (on-device)"
-        case .whisperKit: return "WhisperKit (on-device)"
         case .appleSpeech: return "Apple Speech (built-in)"
-        case .whisperCLI: return "Whisper CLI (advanced)"
+        }
+    }
+
+    /// The model a record or receipt names.
+    public var modelIdentifier: String {
+        switch self {
+        case .parakeetTDTv3: return "parakeet-tdt-0.6b-v3"
+        case .appleSpeech: return "apple-speech"
         }
     }
 
     public var blurb: String {
         switch self {
-        case .parakeetTDTv3: return "Faster, accurate on-device dictation, recommended for near-instant results."
-        case .whisperKit: return "Fast, accurate, runs on the Neural Engine. Downloads a model on first use."
+        case .parakeetTDTv3: return "Fast, accurate on-device dictation, recommended for near-instant results."
         case .appleSpeech: return "No download, fully offline, built into macOS."
-        case .whisperCLI: return "Use your own openai-whisper command. Requires a local install."
         }
     }
-}
-
-/// Logical Whisper model size. Each engine maps this to its own identifier.
-public enum WhisperModel: String, Codable, CaseIterable, Sendable, Identifiable {
-    case tiny
-    case base
-    case small
-    case medium
-
-    public var id: String { rawValue }
-
-    public var displayName: String {
-        switch self {
-        case .tiny: return "Tiny — fastest (recommended)"
-        case .base: return "Base — balanced"
-        case .small: return "Small — more accurate"
-        case .medium: return "Medium — most accurate, slower"
-        }
-    }
-
-    /// CoreML model identifier used by WhisperKit. The `.en` variants are
-    /// smaller and sharper on English but cannot decode any other language.
-    public func whisperKitIdentifier(multilingual: Bool) -> String {
-        multilingual ? "openai_whisper-\(rawValue)" : "openai_whisper-\(rawValue).en"
-    }
-
-    /// Whether a requested language needs the multilingual weights. A nil
-    /// language means auto-detect, which the English-only models cannot do.
-    public static func requiresMultilingualModel(language: String?) -> Bool {
-        guard let language, !language.isEmpty else { return true }
-        let normalized = language.lowercased()
-        return normalized != "en"
-            && !normalized.hasPrefix("en-")
-            && !normalized.hasPrefix("en_")
-    }
-
-    /// Model name passed to the openai-whisper CLI (`--model`).
-    public var cliIdentifier: String { rawValue }
 }
 
 /// How the push-to-talk trigger behaves.
@@ -119,13 +86,11 @@ public enum DeliveryMode: String, Codable, CaseIterable, Sendable, Identifiable 
 public struct RecognizerHints: Sendable, Equatable {
     public var terms: [String]
     public var appleSpeech: Bool
-    public var whisperKit: Bool
     public var parakeet: Bool
 
-    public init(terms: [String], appleSpeech: Bool = false, whisperKit: Bool = false, parakeet: Bool = false) {
+    public init(terms: [String], appleSpeech: Bool = false, parakeet: Bool = false) {
         self.terms = terms
         self.appleSpeech = appleSpeech
-        self.whisperKit = whisperKit
         self.parakeet = parakeet
     }
 
@@ -135,9 +100,7 @@ public struct RecognizerHints: Sendable, Equatable {
     public func terms(for engine: TranscriptionEngineKind) -> [String] {
         switch engine {
         case .appleSpeech: return appleSpeech ? terms : []
-        case .whisperKit: return whisperKit ? terms : []
         case .parakeetTDTv3: return parakeet ? terms : []
-        case .whisperCLI: return []
         }
     }
 }
@@ -146,18 +109,15 @@ public struct TranscriptionRequest: Sendable {
     public var audioURL: URL
     /// BCP-47 language code, or nil to let the engine auto-detect.
     public var language: String?
-    public var model: WhisperModel
     public var hints: RecognizerHints
 
     public init(
         audioURL: URL,
         language: String? = "en",
-        model: WhisperModel = .base,
         hints: RecognizerHints = .none
     ) {
         self.audioURL = audioURL
         self.language = language
-        self.model = model
         self.hints = hints
     }
 }

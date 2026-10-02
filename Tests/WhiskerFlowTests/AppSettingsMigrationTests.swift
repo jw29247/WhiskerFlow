@@ -44,32 +44,32 @@ final class AppSettingsMigrationTests: XCTestCase {
         }
     }
 
-    func testWhisperKitMediumChosenAfterFreshInstallSurvivesRelaunch() {
-        withDefaults { defaults, name in
-            let first = settings(defaults, name)
-            first.engine = .whisperKit
-            first.model = .medium
-
-            let relaunched = settings(defaults, name)
-            XCTAssertEqual(relaunched.engine, .whisperKit)
-            XCTAssertEqual(relaunched.model, .medium)
-        }
-    }
-
-    func testLegacyWhisperKitMediumDefaultMigratesOnceOnAppleSilicon() throws {
+    func testStoredWhisperEngineMovesToParakeetAndItsSettingsAreDropped() throws {
         #if !arch(arm64)
         throw XCTSkip("Parakeet only runs on Apple Silicon")
         #else
-        withDefaults { defaults, name in
-            defaults.set(TranscriptionEngineKind.whisperKit.rawValue, forKey: "engine")
-            defaults.set(WhisperModel.medium.rawValue, forKey: "model")
-            let migrated = settings(defaults, name)
-            XCTAssertEqual(migrated.engine, .parakeetTDTv3)
-
-            migrated.engine = .whisperKit
-            XCTAssertEqual(settings(defaults, name).engine, .whisperKit)
+        for stored in ["whisperKit", "whisperCLI"] {
+            withDefaults { defaults, name in
+                defaults.set(stored, forKey: "engine")
+                defaults.set("medium", forKey: "model")
+                defaults.set("/opt/homebrew/bin/whisper", forKey: "whisperCommand")
+                defaults.set(true, forKey: "dictionaryBiasWhisperKit")
+                let migrated = settings(defaults, name)
+                XCTAssertEqual(migrated.engine, .parakeetTDTv3)
+                XCTAssertEqual(defaults.string(forKey: "engine"), "parakeetTDTv3")
+                XCTAssertNil(defaults.object(forKey: "model"))
+                XCTAssertNil(defaults.object(forKey: "whisperCommand"))
+                XCTAssertNil(defaults.object(forKey: "dictionaryBiasWhisperKit"))
+            }
         }
         #endif
+    }
+
+    func testAppleSpeechChoiceSurvivesRelaunch() {
+        withDefaults { defaults, name in
+            settings(defaults, name).engine = .appleSpeech
+            XCTAssertEqual(settings(defaults, name).engine, .appleSpeech)
+        }
     }
 
     func testFormattingCarriesDictationLanguage() {

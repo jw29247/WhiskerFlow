@@ -69,7 +69,7 @@ if [[ -f "$ROOT_DIR/Resources/AppIcon.icns" ]]; then
   cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 fi
 
-# Bundle SwiftPM dependency resource bundles (e.g. WhisperKit) so the app is self-contained.
+# Bundle SwiftPM dependency resource bundles (e.g. SpeakerKit) so the app is self-contained.
 BUILD_DIR="$(dirname "$BINARY")"
 shopt -s nullglob
 for bundle in "$BUILD_DIR"/*.bundle; do

@@ -1,5 +1,4 @@
 import Foundation
-@preconcurrency import AVFoundation
 import SpeakerKit
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
@@ -18,15 +17,21 @@ struct MeetingAudioWindow: Sendable {
 /// when the primary engine is unavailable or fails (e.g. offline first run).
 actor TranscriptionService {
   private let parakeetTDTv3 = ParakeetTDTv3Engine()
-  private let whisperKit = WhisperKitEngine()
   private let appleSpeech = AppleSpeechEngine()
   private var meetingSpeakerKit: SpeakerKit?
   /// The one in-flight SpeakerKit download/load; overlapping warm-ups and
   /// diarization join it instead of fetching pyannote twice into one folder.
   private var meetingSpeakerKitLoad: Task<SpeakerKit, Error>?
+  /// Tests only: stands in for every engine's recogniser.
+  typealias Recognizer = @Sendable (TranscriptionRequest, TranscriptionEngineKind) async throws -> TranscriptionResult
+  private let recognizerOverride: Recognizer?
+
+  init(recognizerOverride: Recognizer? = nil) {
+    self.recognizerOverride = recognizerOverride
+  }
 
   @discardableResult
-  func prepare(kind: TranscriptionEngineKind, model: WhisperModel, language: String?) async -> Bool {
+  func prepare(kind: TranscriptionEngineKind, language: String?) async -> Bool {
     switch kind {
     case .parakeetTDTv3:
       do {
@@ -37,17 +42,8 @@ actor TranscriptionService {
       } catch {
         return false
       }
-    case .whisperKit:
-      do {
-        try await whisperKit.prepare(model: model, language: language)
-        return true
-      } catch {
-        return false
-      }
     case .appleSpeech:
       return await appleSpeech.requestAuthorization()
-    case .whisperCLI:
-      return true
     }
   }
 
@@ -76,31 +72,24 @@ actor TranscriptionService {
     await appleSpeech.requestAuthorization()
   }
 
-  /// Transcribe an in-memory 16 kHz mono float buffer with the warm WhisperKit
-  /// pipe (single shared model instance — no extra load). Drives live dictation.
-  func transcribeSamples(_ samples: [Float], language: String?, model: WhisperModel,
-                         hints: RecognizerHints = .none) async throws
-    -> TranscriptionResult {
-    try await whisperKit.transcribe(samples: samples, language: language, model: model,
-                                    promptTerms: hints.terms(for: .whisperKit))
-  }
+  /// Identifies the recogniser in meeting checkpoints and Atlas receipts.
+  static let meetingModelIdentifier = TranscriptionEngineKind.parakeetTDTv3.modelIdentifier
 
+  /// Meetings use the dictation model: one Parakeet instance, so a meeting
+  /// window never evicts it. Its word timings are grouped into phrases, the
+  /// unit speaker labels are matched on.
   func transcribeMeeting(audioURL: URL, language: String?) async throws -> TranscriptionResult {
-    try await whisperKit.transcribeMeeting(
-      TranscriptionRequest(
-        audioURL: audioURL,
-        language: language,
-        model: .medium
-      )
-    )
+    var result = try await parakeetTDTv3.transcribe(TranscriptionRequest(audioURL: audioURL, language: language))
+    result.segments = TranscriptPhraseSegmenter.phrases(from: result.segments)
+    return result
   }
 
-  /// Warm-up waits for the meeting model however long a first-run download
-  /// and compile take, so a slow Mac reports ready instead of a false failure.
+  /// Warm-up waits for the model however long a first-run download and
+  /// compile take, so a slow Mac reports ready instead of a false failure.
   /// Cancelling the caller stops the wait; the load keeps going.
   func prepareMeeting(language: String?) async -> Bool {
     do {
-      try await whisperKit.prepareMeeting(language: language, waitingUpTo: nil)
+      try await parakeetTDTv3.prepare()
       _ = try await ensureMeetingSpeakerKit()
       return true
     } catch {
@@ -242,9 +231,7 @@ actor TranscriptionService {
   func transcribe(
     audioURL: URL,
     kind: TranscriptionEngineKind,
-    model: WhisperModel,
     language: String?,
-    cliConfiguration: WhisperConfiguration,
     allowAppleFallback: Bool,
     capturedSamples: [Float]? = nil,
     hints: RecognizerHints = .none
@@ -252,19 +239,17 @@ actor TranscriptionService {
     let request = TranscriptionRequest(
       audioURL: audioURL,
       language: language,
-      model: model,
       hints: hints
     )
 
     do {
-      if kind == .whisperKit, capturedSamples == nil {
-        return await TranscriptionOutcome(
-          result: try transcribeWhisperFileBounded(request), engine: kind)
+      if let recognizerOverride {
+        return TranscriptionOutcome(result: try await recognizerOverride(request, kind), engine: kind)
       }
       if kind == .parakeetTDTv3, let capturedSamples {
         do {
           let result = try await parakeetTDTv3.transcribe(
-            samples: capturedSamples, model: model, language: language, hints: hints)
+            samples: capturedSamples, language: language, hints: hints)
           return TranscriptionOutcome(result: result, engine: kind)
         } catch {
           if Task.isCancelled { throw error }
@@ -276,8 +261,7 @@ actor TranscriptionService {
           // decoder and Apple fallback if the direct sample path fails.
         }
       }
-      let result = try await primaryTranscribe(
-        request, kind: kind, cliConfiguration: cliConfiguration)
+      let result = try await primaryTranscribe(request, kind: kind)
       return TranscriptionOutcome(result: result, engine: kind)
     } catch {
       if Task.isCancelled { throw error }
@@ -290,56 +274,15 @@ actor TranscriptionService {
     }
   }
 
-  private func transcribeWhisperFileBounded(_ request: TranscriptionRequest) async throws
-    -> TranscriptionResult {
-    let file = try AVAudioFile(forReading: request.audioURL)
-    let rate = file.processingFormat.sampleRate
-    let windowFrames = AVAudioFrameCount(rate * 30)
-    var assembler = BoundedTranscriptAssembler()
-    let ranges = BoundedDecodeWindowPolicy.frameRanges(totalFrames: file.length, sampleRate: rate)
-    let ownership = BoundedDecodeWindowPolicy.ownership(of: ranges, sampleRate: rate)
-    for (range, owned) in zip(ranges, ownership) {
-      try Task.checkCancellation()
-      let start = range.lowerBound
-      file.framePosition = start
-      let count = AVAudioFrameCount(range.count)
-      guard let pcm = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: count) else {
-        throw CocoaError(.fileReadUnknown)
-      }
-      try file.read(into: pcm, frameCount: count)
-      guard let channel = pcm.floatChannelData?[0] else { throw CocoaError(.fileReadCorruptFile) }
-      let samples = Array(UnsafeBufferPointer(start: channel, count: Int(pcm.frameLength)))
-      let decoded: TranscriptionResult
-      do {
-        decoded = try await whisperKit.transcribeFileWindow(
-          samples: samples, language: request.language, model: request.model,
-          promptTerms: request.hints.terms(for: .whisperKit))
-      } catch TranscriptionError.emptyTranscript {
-        guard BoundedDecodeWindowPolicy.containsAudibleActivity(samples) else { continue }
-        throw TranscriptionError.underlying(
-          "Audible recording audio was not transcribed. The recording is saved and will retry.")
-      }
-      if file.length <= AVAudioFramePosition(windowFrames) { return decoded }
-      try assembler.append(decoded, offsetSeconds: Double(start) / rate, ownership: owned,
-                           requiresTimings: true)
-    }
-    return try assembler.finish(language: request.language, duration: Double(file.length) / rate)
-  }
-
   private func primaryTranscribe(
     _ request: TranscriptionRequest,
-    kind: TranscriptionEngineKind,
-    cliConfiguration: WhisperConfiguration
+    kind: TranscriptionEngineKind
   ) async throws -> TranscriptionResult {
     switch kind {
     case .parakeetTDTv3:
       return try await parakeetTDTv3.transcribe(request)
-    case .whisperKit:
-      return try await whisperKit.transcribe(request)
     case .appleSpeech:
       return try await appleSpeech.transcribe(request)
-    case .whisperCLI:
-      return try await WhisperCLIEngine(configuration: cliConfiguration).transcribe(request)
     }
   }
 }

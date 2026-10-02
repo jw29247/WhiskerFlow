@@ -36,18 +36,6 @@ final class DecodeTimeoutPolicyTests: XCTestCase {
         XCTAssertLessThan(DecodeTimeoutPolicy.livePartialTimeout, DecodeTimeoutPolicy.timeout(forAudioSeconds: 0))
     }
 
-    /// The live budget is what the live path actually uses, so it has to leave real
-    /// headroom over the longest window that path can hand it — the file-decode
-    /// budget for the same audio would exceed the finish watchdog.
-    func testLiveBudgetClearsTheLongestLiveWindowByAMargin() {
-        let longestWindow = LiveDecodeWindowPolicy.hardCapSeconds
-        XCTAssertGreaterThan(DecodeTimeoutPolicy.livePartialTimeout, longestWindow)
-        XCTAssertLessThan(
-            DecodeTimeoutPolicy.livePartialTimeout,
-            DecodeTimeoutPolicy.timeout(forAudioSeconds: longestWindow)
-        )
-    }
-
     /// A release awaits several live decodes one after another, and the finish
     /// watchdog is derived from this so a slow-but-healthy release is never reported
     /// as a timeout.
@@ -78,10 +66,8 @@ final class DecodeTimeoutPolicyTests: XCTestCase {
         XCTAssertEqual(DecodeTimeoutPolicy.longFormTimeout(forAudioSeconds: 600, scale: 2), 1_320)
     }
 
-    func testAppleSpeechAndCLIBudgetsFollowRecordingLength() {
+    func testAppleSpeechBudgetFollowsRecordingLength() {
         XCTAssertEqual(DecodeTimeoutPolicy.appleSpeechTimeout(forAudioSeconds: 10, scale: 1), 90)
         XCTAssertEqual(DecodeTimeoutPolicy.appleSpeechTimeout(forAudioSeconds: 300, scale: 1), 630)
-        XCTAssertEqual(DecodeTimeoutPolicy.cliTimeout(forAudioSeconds: 0, scale: 1), 300)
-        XCTAssertEqual(DecodeTimeoutPolicy.cliTimeout(forAudioSeconds: 240, scale: 1), 1_500)
     }
 }
