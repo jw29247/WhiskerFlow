@@ -11,7 +11,11 @@ import WhiskerFlowCore
 /// Silent tests: no microphone, audio playback or capture is started.
 @MainActor
 final class CallPromptAndCoachingTests: XCTestCase {
-    private func coordinator(ask: Bool = true, detector: CallDetectionService? = nil) -> (MeetingCaptureCoordinator, AppSettings) {
+    private func coordinator(
+        ask: Bool = true, detector: CallDetectionService? = nil,
+        joinedMeetingProvider: (@Sendable (String?) async -> Bool)? = nil,
+        diskStateReader: @escaping @Sendable () -> String = { MeetingCaptureCoordinator.readLocalDiskState() }
+    ) -> (MeetingCaptureCoordinator, AppSettings) {
         let name = "CallPromptTests.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         addTeardownBlock { defaults.removePersistentDomain(forName: name) }
@@ -25,7 +29,9 @@ final class CallPromptAndCoachingTests: XCTestCase {
             transcription: TranscriptionService(),
             store: EncryptedMeetingChunkStore(rootURL: root, keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))),
             clientProvider: { nil },
-            callDetector: detector ?? CallDetectionService(readSignals: { CallDetectionSignals(inputs: [], windows: []) })
+            callDetector: detector ?? CallDetectionService(readSignals: { CallDetectionSignals(inputs: [], windows: []) }),
+            joinedMeetingProvider: joinedMeetingProvider,
+            diskStateReader: diskStateReader
         )
         coordinator.canRecordDetectedCall = { true }
         return (coordinator, settings)
@@ -51,6 +57,57 @@ final class CallPromptAndCoachingTests: XCTestCase {
         XCTAssertNotNil(coordinator.callPrompt, "A new call asks again")
         coordinator.handleCallEvent(.ended(meet))
         XCTAssertNil(coordinator.callPrompt, "The question disappears when the call ends")
+    }
+
+    private func scheduleMeet(_ settings: AppSettings, now: Int64) {
+        settings.cacheMeetingSchedule([AtlasCaptureScheduleIntent(
+            eventID: "sync", title: "Weekly sync", startMs: now - 60_000, endMs: now + 1_800_000,
+            meetingURL: "https://meet.google.com/abc-defg-hij", location: nil, existingMeetingID: nil, overlapsPrevious: false)])
+    }
+
+    private static let storageDetail = "At least 500 MB of local storage is required before recording."
+
+    /// Recording setup starts with the free-space check, so a full disk stops
+    /// it there: nothing is captured, and the status shows it was reached.
+    func testScheduledJoinedMeetingReachesRecordingSetupWithoutAnAnswer() async {
+        let (coordinator, settings) = coordinator(joinedMeetingProvider: { _ in true }, diskStateReader: { "full" })
+        settings.meetingModeEnabled = true
+        scheduleMeet(settings, now: MeetingCaptureCoordinator.nowMs())
+        await coordinator.pollSchedule()
+        XCTAssertEqual(coordinator.statusDetail, Self.storageDetail, "Control: the schedule poll would record this meeting")
+        XCTAssertFalse(coordinator.isCapturing)
+    }
+
+    func testNotNowStopsTheSchedulePollRecordingTheCall() async {
+        let (coordinator, settings) = coordinator(joinedMeetingProvider: { _ in true }, diskStateReader: {
+            XCTFail("A declined call must never reach recording setup")
+            return "full"
+        })
+        settings.meetingModeEnabled = true
+        scheduleMeet(settings, now: MeetingCaptureCoordinator.nowMs())
+        coordinator.handleCallEvent(.started(meet))
+        XCTAssertEqual(coordinator.callPrompt?.intent?.eventID, "sync")
+        coordinator.declineCallPrompt()
+        await coordinator.pollSchedule()
+        coordinator.handleCallEvent(.ended(meet))
+        await coordinator.pollSchedule()
+        XCTAssertNotEqual(coordinator.statusDetail, Self.storageDetail)
+        XCTAssertFalse(coordinator.isCapturing)
+    }
+
+    func testNotNowCoversAnEventThatReachesTheScheduleLater() async {
+        let (coordinator, settings) = coordinator(joinedMeetingProvider: { _ in true }, diskStateReader: {
+            XCTFail("A declined call must never reach recording setup")
+            return "full"
+        })
+        settings.meetingModeEnabled = true
+        coordinator.handleCallEvent(.started(meet))
+        XCTAssertNil(coordinator.callPrompt?.intent, "Asked before the calendar was loaded")
+        coordinator.declineCallPrompt()
+        scheduleMeet(settings, now: MeetingCaptureCoordinator.nowMs())
+        await coordinator.pollSchedule()
+        XCTAssertNotEqual(coordinator.statusDetail, Self.storageDetail)
+        XCTAssertFalse(coordinator.isCapturing)
     }
 
     func testASecondCallDoesNotReplaceTheQuestionShowing() {

@@ -38,6 +38,10 @@ final class MeetingCaptureCoordinator {
   private(set) var callPrompt: DetectedCallPrompt?
   /// Calls already asked about; each call is asked about once.
   private var promptedCallIDs: Set<String> = []
+  /// Calls answered "Not now", until they end. The schedule poll must not
+  /// record a calendar event that is one of them, including an event that
+  /// only appears in the schedule after the question was answered.
+  private var declinedCalls: [String: DetectedCall] = [:]
   /// A prompt-started recording follows the detected calls: it stops once
   /// none is active, not when one of several ends (for example a Safari tab
   /// using the microphone next to the Meet call being recorded).
@@ -337,6 +341,8 @@ final class MeetingCaptureCoordinator {
       callDetector.stop()
       callPrompt = nil
       promptedCallIDs.removeAll()
+      // A stopped detector never reports these calls ending.
+      declinedCalls.removeAll()
     }
   }
 
@@ -355,6 +361,7 @@ final class MeetingCaptureCoordinator {
     case .ended(let call):
       lifecycleLog("call_ended", call: call)
       promptedCallIDs.remove(call.id)
+      declinedCalls[call.id] = nil
       if callPrompt?.call.id == call.id { callPrompt = nil }
       if activeDetectedCallID != nil, callDetector.activeCalls.isEmpty, activeSessionID != nil, !captureTransitionInProgress {
         Task { @MainActor [weak self] in await self?.stopCapture() }
@@ -377,9 +384,22 @@ final class MeetingCaptureCoordinator {
     Task { @MainActor [weak self] in await self?.startCapture(intent: prompt.intent, detectedCall: prompt.call) }
   }
 
-  /// "Not now": this call isn't asked about again.
+  /// "Not now": this call isn't asked about again, and the schedule poll
+  /// doesn't record it either. Its calendar event stays off the record for
+  /// the event's window, as after a manual stop; Record on a later question
+  /// or on the event lifts that.
   func declineCallPrompt() {
+    guard let prompt = callPrompt else { return }
     callPrompt = nil
+    declinedCalls[prompt.call.id] = prompt.call
+    if let intent = prompt.intent {
+      suppressedEvents.suppress(eventID: intent.eventID, untilMs: intent.endMs + Self.stopGraceMs)
+    }
+  }
+
+  /// Whether `intent` is a call answered "Not now" that is still going on.
+  private func isDeclinedCall(_ intent: AtlasCaptureScheduleIntent, nowMs: Int64) -> Bool {
+    declinedCalls.values.contains { CallCalendarMatcher.match($0, intents: [intent], nowMs: nowMs) != nil }
   }
 
   #if DEBUG
@@ -470,6 +490,7 @@ final class MeetingCaptureCoordinator {
       let next = automaticIntents.first(where: {
         $0.startMs - Self.preArmWindowMs <= now && now <= $0.endMs + Self.stopGraceMs
           && !suppressedEvents.isSuppressed($0.eventID, nowMs: now)
+          && !isDeclinedCall($0, nowMs: now)
       })
     else {
       if !isBusy && !scheduleFetchFailed {
