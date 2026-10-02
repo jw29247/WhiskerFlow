@@ -169,7 +169,7 @@ final class TranscriptStoreMigrationTests: XCTestCase {
         let reloaded = TranscriptStore(fileURL: jsonURL)
         try reloaded.load()
         XCTAssertEqual(reloaded.records.first { $0.id == capture.id }?.captureIntent, intent)
-        XCTAssertEqual(reloaded.records.first { $0.id == existing.id }?.text, "kept")
+        XCTAssertEqual(reloaded.records.first { $0.id == existing }?.text, "kept")
     }
 
     // MARK: - Scale
