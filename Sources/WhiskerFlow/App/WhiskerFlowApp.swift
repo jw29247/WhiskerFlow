@@ -103,5 +103,6 @@ struct WhiskerFlowMenuBarLabel: View {
         Label("WhiskerFlow", systemImage: appState.meetingStatus == .recording
             ? "record.circle.fill"
             : (appState.isRecording ? "waveform.circle.fill" : "waveform.circle"))
+            .modifier(AtlasSignInPresenter(appState: appState))
     }
 }

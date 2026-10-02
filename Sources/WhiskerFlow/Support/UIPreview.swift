@@ -182,6 +182,7 @@ enum UIPreview {
                 state.onboarding.present()
             }
             state.meetingLibrary.insertForPreview(previewLibrary)
+            state.leaderboard.insertForPreview(previewLeaderboard)
             if mode == "call-prompt" { state.showCallPromptForPreview() }
             if mode == "coach" { seedCoach(state.meetingAssistant) }
             return state
@@ -320,6 +321,19 @@ enum UIPreview {
     #endif
 
     /// Sample meetings for the library screens. Invented content only.
+    static var previewLeaderboard: LeaderboardBoard {
+        func person(_ name: String, _ words: Int, _ streak: Int, _ meetings: Int, you: Bool = false) -> LeaderboardEntry {
+            LeaderboardEntry(employeeId: name, name: name, avatarUrl: nil, isYou: you, words: words, dictations: words / 40,
+                             speakingSeconds: words / 3, timeSavedSeconds: words * 3 / 2 - words / 3, meetings: meetings,
+                             meetingSeconds: meetings * 2_400, currentStreakDays: streak, longestStreakDays: streak + 3,
+                             lastActiveDay: nil)
+        }
+        return LeaderboardBoard(generatedAt: 0, entries: [
+            person("Priya Shah", 18_420, 12, 9), person("Tom Reeves", 15_310, 4, 14), person("Jacob", 12_980, 7, 11, you: true),
+            person("Amara Okafor", 9_870, 9, 3), person("Lewis Grant", 6_240, 2, 6), person("Sofia Marin", 2_150, 1, 0),
+        ])
+    }
+
     static var previewLibrary: [MeetingLibraryEntry] {
         guard isEnabled && isPaired && mode != "empty" else { return [] }
         let now = Date()

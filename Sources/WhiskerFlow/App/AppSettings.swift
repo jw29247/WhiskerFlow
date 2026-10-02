@@ -15,6 +15,8 @@ final class AppSettings {
     )
 
     private(set) var persistenceError: String?
+    /// For state that lives beside the settings (the leaderboard's report marks).
+    var userDefaults: UserDefaults { defaults }
 
     var engine: TranscriptionEngineKind { didSet { defaults.set(engine.rawValue, forKey: Keys.engine) } }
     /// BCP-47 code, or "auto" to let the engine detect.

@@ -150,6 +150,8 @@ final class AppState {
     let corrections: CorrectionStore
     let dictionary: DictionaryStore
     let insights: InsightsStore
+    /// The company board in Atlas: daily counts go up, everyone's come back.
+    let leaderboard: LeaderboardController
     /// Recomputed when a dictation is recorded, on reset and on a typing-speed change.
     private(set) var insightsSummary = InsightsSummary(buckets: [], recentSamples: [])
     /// With history off, the last transcript stays in memory for a few minutes
@@ -264,7 +266,20 @@ final class AppState {
             assistant: store == nil && !UIPreview.isEnabled ? nil : MeetingAssistantController(
                 rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("WhiskerFlowAssistant-\(UUID().uuidString)"))
         )
+        let insights = self.insights
+        // Tests and the UI preview never report to Atlas.
+        let reportsUsage = store == nil && !UIPreview.isEnabled
+        self.leaderboard = LeaderboardController(
+            client: { [resolvedSettings] in
+                guard reportsUsage, !resolvedSettings.atlasDeviceToken.isEmpty,
+                      let url = URL(string: resolvedSettings.atlasBaseURL), url.scheme == "https" else { return nil }
+                return LeaderboardAtlasClient(baseURL: url, token: resolvedSettings.atlasDeviceToken)
+            },
+            usageDays: { tally in LeaderboardReport.days(buckets: insights.buckets, meetings: tally) },
+            defaults: resolvedSettings.userDefaults
+        )
         self.live = LiveDictationSession(transcription: transcription)
+        enforcesAtlasSignIn = reportsUsage
         var defaultPasteService = PasteService()
         defaultPasteService.correctionMonitor = correctionMonitor
         if let pasteService {
@@ -289,6 +304,9 @@ final class AppState {
         refreshAtlasAccountCache()
         assistant.accountIdentityProvider = { [weak self] in self?.atlasAccountIdentity }
         meetingCapture.assistant.accountIdentityProvider = assistant.accountIdentityProvider
+        meetingCapture.library.onRecordingFinished = { [weak self] startedAt, durationMs in
+            self?.leaderboard.recordMeeting(startedAt: startedAt, durationMs: durationMs)
+        }
         if store == nil && !UIPreview.isEnabled { assistant.synchronizeAccount() }
         assistant.requestTransport = { [weak self] in
             guard let self, !UIPreview.isEnabled, !self.settings.atlasDeviceToken.isEmpty,
@@ -514,6 +532,20 @@ final class AppState {
   var upcomingMeetings: [AtlasCaptureScheduleIntent] { UIPreview.isEnabled ? UIPreview.meetings.filter { $0.existingMeetingID == nil } : meetingCapture.upcomingMeetingIntents }
   var previousMeetings: [AtlasCaptureScheduleIntent] { UIPreview.isEnabled ? UIPreview.meetings.filter { $0.existingMeetingID != nil } : meetingCapture.previousMeetingIntents }
 
+    /// Production builds need an Atlas sign-in before anything else works.
+    /// Tests and the UI preview don't.
+    @ObservationIgnored private var enforcesAtlasSignIn = false
+    /// Bumped when a dictation press needs sign-in, to bring the window up.
+    private(set) var atlasSignInRequests = 0
+
+    var requiresAtlasSignIn: Bool {
+        if UIPreview.isEnabled { return UIPreview.mode == "sign-in" }
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["WHISKERFLOW_SKIP_ATLAS_SIGN_IN"] == "1" { return false }
+        #endif
+        return enforcesAtlasSignIn && !isAtlasPaired
+    }
+
     var isAtlasPaired: Bool {
         if UIPreview.isEnabled { return UIPreview.isPaired }
         guard URL(string: settings.atlasBaseURL)?.scheme == "https" else { return false }
@@ -624,8 +656,24 @@ final class AppState {
         hudController = RecordingHUDController(appState: self)
         warmUpEngine()
         warmUpMeetingEngine()
+        startLeaderboardReporting()
         // Whisper was removed; free the space its downloaded models took.
         Task.detached(priority: .background) { ModelStoragePaths.removeWhisperModels() }
+    }
+
+    /// The first report counts the meetings already in the library, so it
+    /// waits for the library to load.
+    private func startLeaderboardReporting() {
+        Task { @MainActor [weak self] in
+            for _ in 0..<120 where self?.meetingLibrary.isLoaded == false {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            guard let self else { return }
+            if self.meetingLibrary.isLoaded {
+                self.leaderboard.seedMeetingsIfNeeded(self.meetingLibrary.entries.map { ($0.startedAt, $0.durationMs ?? 0) })
+            }
+            self.leaderboard.startPeriodicReporting()
+        }
     }
 
     func applyActivationPolicy() {
@@ -1061,6 +1109,8 @@ final class AppState {
         settings.atlasDeviceToken = token
         refreshMeetingConfiguration()
         atlasSignInConfirmation = "Connected to Atlas. Meeting Mode is ready."
+        if case .failure = status { status = .idle }
+        Task { await self.leaderboard.refresh() }
       } catch {
         atlasSignInError = error.localizedDescription
       }
@@ -1485,6 +1535,12 @@ final class AppState {
     }
 
     private func beginRecording() async {
+        if requiresAtlasSignIn {
+            lifecycleLogger.notice("Recording request needs Atlas sign-in", metadata: ["event": "recording_rejected"])
+            status = .failure("Sign in with Atlas to start dictating.")
+            atlasSignInRequests &+= 1
+            return
+        }
         lifecycleLogger.info("Recording requested", metadata: ["event": "recording_requested"])
         guard let sessionID = recordingCoordinator.requestStart() else {
             lifecycleLogger.notice("Recording request blocked by active capture", metadata: ["event": "recording_rejected"])

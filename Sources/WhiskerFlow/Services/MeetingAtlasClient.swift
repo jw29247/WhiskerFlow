@@ -383,7 +383,9 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
         guard let http = response as? HTTPURLResponse else { throw MeetingAtlasClientError.invalidResponse }
         switch http.statusCode {
         case 200..<300: return
-        case 401, 403: throw MeetingAtlasClientError.server("Atlas access expired or was denied. Reconnect Atlas in Meeting setup.")
+        case 401: throw MeetingAtlasClientError.server("Atlas access expired. Reconnect Atlas in Meeting setup.")
+        // Signed in, but this account isn't allowed to record meetings.
+        case 403: throw MeetingAtlasClientError.server("Meeting recording isn't enabled for your Atlas account.")
         case 429: throw MeetingAtlasClientError.server("Atlas is busy. Delivery will resume shortly.")
         default: throw MeetingAtlasClientError.server("Atlas could not accept this request (HTTP \(http.statusCode)).")
         }

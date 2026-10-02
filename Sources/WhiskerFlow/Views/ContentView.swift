@@ -11,6 +11,24 @@ struct ContentView: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
+        if appState.requiresAtlasSignIn {
+            AtlasSignInGate(appState: appState)
+                .modifier(OnboardingWindow.Presenter(onboarding: appState.onboarding))
+                .onAppear {
+                    UIPreview.scheduleSnapshotIfRequested()
+                    // Starting watches the dictation key, which now opens this
+                    // window; setup follows once signed in.
+                    DispatchQueue.main.async {
+                        appState.start()
+                        appState.applyActivationPolicy()
+                    }
+                }
+        } else {
+            mainContent
+        }
+    }
+
+    private var mainContent: some View {
         HStack(spacing: 0) {
             sidebar
             Rectangle().fill(FlowStyle.line).frame(width: 1)
@@ -55,6 +73,8 @@ struct ContentView: View {
                                 openInsights: { navigate { destination = .insights } })
                 case .insights:
                     InsightsView(appState: appState)
+                case .leaderboard:
+                    LeaderboardView(appState: appState)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -206,15 +226,15 @@ struct ContentView: View {
 
 private enum FlowDestination: String, CaseIterable, Identifiable {
     case dictate = "Dictate", meetings = "Meetings", history = "History", dictionary = "Dictionary", assistant = "Assistant",
-         insights = "Insights"
+         insights = "Insights", leaderboard = "Leaderboard"
     var id: String { rawValue }
     var symbol: String {
-        switch self { case .assistant: return "wand.and.stars"; case .dictate: return "mic"; case .meetings: return "calendar"; case .history: return "clock.arrow.circlepath"; case .dictionary: return "character.book.closed"; case .insights: return "chart.bar.xaxis" }
+        switch self { case .assistant: return "wand.and.stars"; case .dictate: return "mic"; case .meetings: return "calendar"; case .history: return "clock.arrow.circlepath"; case .dictionary: return "character.book.closed"; case .insights: return "chart.bar.xaxis"; case .leaderboard: return "trophy" }
     }
     var shortcut: KeyEquivalent {
-        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4"; case .insights: return "6" }
+        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4"; case .insights: return "6"; case .leaderboard: return "7" }
     }
     var shortcutLabel: String {
-        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4"; case .insights: return "6" }
+        switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4"; case .insights: return "6"; case .leaderboard: return "7" }
     }
 }

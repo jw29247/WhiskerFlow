@@ -25,6 +25,8 @@ final class MeetingLibraryController {
     /// Notes reach Atlas through the same transport as bookmarks.
     @ObservationIgnored var noteSync: MeetingBookmarkSync?
     @ObservationIgnored var retention: () -> MeetingTranscriptRetention = { .defaultValue }
+    /// A recording ended: its start and length. Counts it for the leaderboard.
+    @ObservationIgnored var onRecordingFinished: ((Date, Int64) -> Void)?
     @ObservationIgnored private let store: EncryptedMeetingLibraryStore
     @ObservationIgnored private let persistQueue = DispatchQueue(
         label: "agency.thatworks.WhiskerFlow.meeting-library", qos: .utility
@@ -147,6 +149,9 @@ final class MeetingLibraryController {
         _ sessionID: UUID, endedAtMs: Int64, coachRecap: String?, bookmarks: [MeetingLibraryBookmark],
         coachSummary: MeetingCoachSummary? = nil
     ) {
+        if let entry = entry(sessionID), entry.status == .recording {
+            onRecordingFinished?(entry.startedAt, max(entry.durationMs ?? 0, endedAtMs))
+        }
         update(sessionID) { entry in
             for index in entry.dictations.indices where entry.dictations[index].endMs == nil {
                 entry.dictations[index].endMs = max(entry.dictations[index].startMs, endedAtMs)
