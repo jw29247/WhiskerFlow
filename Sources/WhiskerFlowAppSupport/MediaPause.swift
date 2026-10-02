@@ -1,31 +1,39 @@
 import Foundation
 
-/// When dictation pauses media. The play/pause key goes to macOS's "now
-/// playing" app, so it is pressed only when a media app or a browser is
-/// actually putting out sound: with nothing playing, the same key would start
-/// the last player instead.
-public enum MediaPausePolicy {
-    /// Players whose audio is media. Browsers count too (video and music
-    /// sites take the media key).
-    public static let mediaApps: Set<String> = [
-        "com.apple.Music", "com.apple.podcasts", "com.apple.TV", "com.apple.QuickTimePlayerX", "com.apple.iBooksX",
-        "com.spotify.client", "com.tidal.desktop", "com.deezer.deezer-desktop", "com.amazon.music",
-        "org.videolan.vlc", "com.colliderli.iina", "tv.plex.desktop", "tv.plex.plexamp",
-        "com.github.th-ch.youtube-music", "au.com.shiftyjelly.PocketCasts", "fm.overcast.overcast",
-    ]
+/// What macOS's Now Playing service says, read through the bundled helper
+/// (see `NowPlayingBridge`).
+public struct NowPlayingStatus: Equatable, Sendable {
+    public var isPlaying: Bool
+    /// The now-playing app's process, 0 when there is none.
+    public var pid: Int32
 
-    /// - Parameters:
-    ///   - processesPlayingAudio: bundle IDs of processes whose audio output is
-    ///     running (helpers included, such as `com.google.Chrome.helper`).
-    ///   - inCall: a call or meeting is going on, or another app is using the
-    ///     microphone (a call the detector didn't recognise).
-    public static func shouldPause(processesPlayingAudio: [String?], ownBundleID: String?, inCall: Bool) -> Bool {
-        guard !inCall else { return false }
-        return processesPlayingAudio.contains { bundleID in
-            guard let bundleID, bundleID != ownBundleID else { return false }
-            if bundleID.hasPrefix("com.apple.WebKit") { return true }
-            return (mediaApps.union(CallDetectionRules.browsers)).contains { bundleID == $0 || bundleID.hasPrefix($0 + ".") }
+    public init(isPlaying: Bool, pid: Int32) {
+        self.isPlaying = isPlaying
+        self.pid = pid
+    }
+
+    /// The helper prints `playing=<0|1>` and `pid=<n>` lines. Anything else
+    /// is unknown, never "not playing".
+    public static func parse(_ output: String) -> NowPlayingStatus? {
+        var values: [String: String] = [:]
+        for line in output.split(whereSeparator: \.isNewline) {
+            let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
+            if parts.count == 2 { values[parts[0]] = parts[1] }
         }
+        guard let playing = values["playing"].flatMap(Int.init) else { return nil }
+        return NowPlayingStatus(isPlaying: playing != 0, pid: values["pid"].flatMap(Int32.init) ?? 0)
+    }
+}
+
+/// When dictation pauses media: only when macOS reports something actually
+/// playing. Paused media, an unknown state, a call, or WhiskerFlow itself
+/// leave everything as it is, so dictation never starts music.
+public enum MediaPausePolicy {
+    /// - Parameter inCall: a call or meeting is going on, or another app is
+    ///   using the microphone (a call the detector didn't recognise).
+    public static func shouldPause(_ status: NowPlayingStatus?, ownPID: Int32, inCall: Bool) -> Bool {
+        guard !inCall, let status, status.isPlaying else { return false }
+        return status.pid != ownPID
     }
 }
 

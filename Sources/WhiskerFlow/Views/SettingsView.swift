@@ -73,7 +73,7 @@ struct SettingsView: View {
                 }
 
                 Toggle("Pause media while dictating", isOn: $appState.settings.pauseMediaWhileDictating)
-                Text("Pauses music or video when you start dictating and plays it again when you stop. Nothing happens if nothing is playing or you're in a call.")
+                Text("Pauses music or video when you start dictating and plays it again when you stop. If nothing is playing, or you're in a call, nothing changes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 

@@ -90,6 +90,14 @@ if [[ -d "$SPARKLE_FRAMEWORK" ]]; then
   fi
 fi
 
+# The Now Playing helper: MediaRemote answers only Apple-signed processes, so
+# WhiskerFlow loads this into /usr/bin/perl (see NowPlayingBridge.swift).
+mkdir -p "$APP_BUNDLE/Contents/Frameworks"
+clang -fblocks -dynamiclib -O2 -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
+  -framework CoreFoundation \
+  -o "$APP_BUNDLE/Contents/Frameworks/libWhiskerFlowNowPlaying.dylib" \
+  "$ROOT_DIR/Support/NowPlaying/WhiskerFlowNowPlaying.c"
+
 # Sign inner-to-outer (Apple discourages --deep for real signing). Only nested
 # bundles that actually contain Mach-O code need their own signature; resource-
 # only bundles (e.g. swift-transformers_Hub.bundle) are sealed by the app
@@ -138,6 +146,7 @@ shopt -u nullglob
 if [[ -d "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework" ]]; then
   sign_sparkle_framework "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
 fi
+codesign_one "$APP_BUNDLE/Contents/Frameworks/libWhiskerFlowNowPlaying.dylib"
 
 
 if [[ -n "$SIGN_IDENTITY" ]]; then

@@ -2,38 +2,30 @@ import XCTest
 @testable import WhiskerFlowAppSupport
 
 final class MediaPausePolicyTests: XCTestCase {
-    private let own = "agency.thatworks.WhiskerFlow"
+    private let ownPID: Int32 = 500
 
-    func testPausesAMediaAppThatIsPlaying() {
-        XCTAssertTrue(MediaPausePolicy.shouldPause(processesPlayingAudio: ["com.spotify.client.helper"], ownBundleID: own, inCall: false))
-        XCTAssertTrue(MediaPausePolicy.shouldPause(processesPlayingAudio: ["com.apple.Music"], ownBundleID: own, inCall: false))
+    func testPausesOnlyWhatMacOSSaysIsPlaying() {
+        XCTAssertTrue(MediaPausePolicy.shouldPause(NowPlayingStatus(isPlaying: true, pid: 77), ownPID: ownPID, inCall: false))
+        XCTAssertFalse(MediaPausePolicy.shouldPause(NowPlayingStatus(isPlaying: false, pid: 77), ownPID: ownPID, inCall: false),
+                       "paused media stays paused, and nothing else is started")
     }
 
-    func testPausesABrowserPlayingAudio() {
-        XCTAssertTrue(MediaPausePolicy.shouldPause(processesPlayingAudio: ["com.google.Chrome.helper"], ownBundleID: own, inCall: false))
-        XCTAssertTrue(MediaPausePolicy.shouldPause(processesPlayingAudio: ["com.apple.WebKit.GPU"], ownBundleID: own, inCall: false))
+    /// When macOS can't be asked, pressing play/pause could start music, so
+    /// nothing is pressed.
+    func testUnknownStateDoesNothing() {
+        XCTAssertFalse(MediaPausePolicy.shouldPause(nil, ownPID: ownPID, inCall: false))
     }
 
-    /// Play/pause goes to the last "now playing" app. With nothing playing it
-    /// would start that app instead, so silence never sends the key.
-    func testNothingPlayingNeverSendsTheKey() {
-        XCTAssertFalse(MediaPausePolicy.shouldPause(processesPlayingAudio: [], ownBundleID: own, inCall: false))
+    func testNeverDuringACallOrForWhiskerFlowItself() {
+        XCTAssertFalse(MediaPausePolicy.shouldPause(NowPlayingStatus(isPlaying: true, pid: 77), ownPID: ownPID, inCall: true))
+        XCTAssertFalse(MediaPausePolicy.shouldPause(NowPlayingStatus(isPlaying: true, pid: ownPID), ownPID: ownPID, inCall: false))
     }
 
-    /// Apps that hold audio output open without playing media (call apps,
-    /// chat apps, system sounds, WhiskerFlow itself) don't count.
-    func testOtherAudioOutputDoesNotCount() {
-        for bundleID in [own, "us.zoom.xos", "com.tinyspeck.slackmacgap.helper", "com.apple.systemsoundserverd",
-                         "com.hnc.Discord", nil] as [String?] {
-            XCTAssertFalse(MediaPausePolicy.shouldPause(processesPlayingAudio: [bundleID], ownBundleID: own, inCall: false),
-                           "\(bundleID ?? "nil")")
-        }
-    }
-
-    /// A call's audio is the conversation, and the media key could start music
-    /// in the middle of it.
-    func testNeverDuringACall() {
-        XCTAssertFalse(MediaPausePolicy.shouldPause(processesPlayingAudio: ["com.spotify.client"], ownBundleID: own, inCall: true))
+    func testReadsTheHelpersAnswer() {
+        XCTAssertEqual(NowPlayingStatus.parse("playing=1\npid=52205\n"), NowPlayingStatus(isPlaying: true, pid: 52205))
+        XCTAssertEqual(NowPlayingStatus.parse("playing=0\npid=0\n"), NowPlayingStatus(isPlaying: false, pid: 0))
+        XCTAssertNil(NowPlayingStatus.parse(""), "no answer is unknown, not 'not playing'")
+        XCTAssertNil(NowPlayingStatus.parse("garbage"))
     }
 
     func testResumesOnlyWhatItPaused() {
