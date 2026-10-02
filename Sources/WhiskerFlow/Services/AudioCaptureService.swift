@@ -139,6 +139,9 @@ enum CoreAudioDeviceCatalog {
         return id
     }
 
+    /// The device's display name, or an empty string.
+    static func name(of id: AudioDeviceID) -> String { descriptor(id)?.name ?? "" }
+
     private static func descriptor(_ id: AudioDeviceID) -> AudioInputDescriptor? {
         guard inputChannelCount(id) > 0,
               let uid = stringProperty(id, selector: kAudioDevicePropertyDeviceUID),
@@ -629,7 +632,10 @@ final class AudioCaptureService {
         discardReadyCapture()
         let generation = readyGeneration
         let task = Task.detached(priority: .userInitiated) { () -> PreparedCapture? in
-            guard let descriptor = CoreAudioDeviceCatalog.resolve(selection) else { return nil }
+            guard let descriptor = CoreAudioDeviceCatalog.resolve(selection),
+                  CaptureReadinessPolicy.keepsEngineReady(
+                    transport: CoreAudioDeviceCatalog.transport(of: descriptor.transientID), name: descriptor.name
+                  ) else { return nil }
             return try? await Self.onEngineQueue(
                 timeout: Self.engineBuildTimeoutSeconds, discardLate: { Self.retire($0) }
             ) {
@@ -1003,7 +1009,12 @@ final class AudioCaptureService {
         active.tapInstalled = false
         active.engine.stop()
         active.sink.end()
-        if reusable, keepsCaptureReady, ready == nil {
+        // A Bluetooth microphone is released at once, so the headset returns
+        // to its high-quality playback profile as soon as dictation ends.
+        if reusable, keepsCaptureReady, ready == nil,
+           CaptureReadinessPolicy.keepsEngineReady(
+            transport: CoreAudioDeviceCatalog.transport(of: active.deviceID), name: CoreAudioDeviceCatalog.name(of: active.deviceID)
+           ) {
             adoptReadyCapture(active)
         } else {
             Self.engineQueue.async { _ = active }

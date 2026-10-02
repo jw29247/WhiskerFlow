@@ -178,3 +178,21 @@ final class PracticeEvaluationTests: XCTestCase {
         }
     }
 }
+
+final class CaptureReadinessPolicyTests: XCTestCase {
+    func testNoPreparedEngineOnBluetoothOrWirelessMicrophones() {
+        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(transport: .bluetooth, name: "Jacob’s AirPods Pro"))
+        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(transport: .bluetooth, name: "WH-1000XM5"),
+                       "Any Bluetooth input, whatever it is called")
+        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(transport: .wireless, name: "iPhone Microphone"))
+        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(transport: .aggregate, name: "AirPods + Built-in"),
+                       "A headset hidden behind an aggregate is recognised by name")
+        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(transport: nil, name: "Unknown"), "Unknown transport: be safe")
+    }
+
+    func testWiredAndBuiltInMicrophonesKeepTheInstantStart() {
+        XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(transport: .builtIn, name: "MacBook Pro Microphone"))
+        XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(transport: .usb, name: "C920 HD Pro Webcam"))
+        XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(transport: .virtual, name: "Krisp Microphone"))
+    }
+}

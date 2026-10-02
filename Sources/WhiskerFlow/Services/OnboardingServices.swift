@@ -86,6 +86,11 @@ extension CoreAudioDeviceCatalog {
     /// The device a selection would record from right now, with how it connects.
     static func inputDetails(for selection: AudioInputSelection) -> (name: String, transport: AudioInputTransport)? {
         guard let descriptor = resolve(selection) else { return nil }
+        return (descriptor.name, transport(of: descriptor.transientID) ?? .other)
+    }
+
+    /// How a device connects, or `nil` if CoreAudio can't say.
+    nonisolated static func transport(of deviceID: AudioDeviceID) -> AudioInputTransport? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyTransportType,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -93,19 +98,16 @@ extension CoreAudioDeviceCatalog {
         )
         var transport: UInt32 = 0
         var size = UInt32(MemoryLayout<UInt32>.size)
-        guard AudioObjectGetPropertyData(descriptor.transientID, &address, 0, nil, &size, &transport) == noErr else {
-            return (descriptor.name, .other)
-        }
-        let kind: AudioInputTransport
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &transport) == noErr else { return nil }
         switch transport {
-        case kAudioDeviceTransportTypeBuiltIn: kind = .builtIn
-        case kAudioDeviceTransportTypeUSB: kind = .usb
-        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: kind = .bluetooth
-        case kAudioDeviceTransportTypeVirtual: kind = .virtual
-        case kAudioDeviceTransportTypeAggregate, kAudioDeviceTransportTypeAutoAggregate: kind = .aggregate
-        default: kind = .other
+        case kAudioDeviceTransportTypeBuiltIn: return .builtIn
+        case kAudioDeviceTransportTypeUSB: return .usb
+        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: return .bluetooth
+        case kAudioDeviceTransportTypeContinuityCaptureWireless, kAudioDeviceTransportTypeAirPlay: return .wireless
+        case kAudioDeviceTransportTypeVirtual: return .virtual
+        case kAudioDeviceTransportTypeAggregate, kAudioDeviceTransportTypeAutoAggregate: return .aggregate
+        default: return .other
         }
-        return (descriptor.name, kind)
     }
 }
 

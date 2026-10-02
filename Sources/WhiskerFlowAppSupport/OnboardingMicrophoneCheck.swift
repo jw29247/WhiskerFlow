@@ -65,7 +65,31 @@ public struct OnboardingMicrophoneCheck: Sendable {
 
 /// How an input device is connected, reduced to what matters for dictation.
 public enum AudioInputTransport: Equatable, Sendable {
-    case builtIn, usb, bluetooth, virtual, aggregate, other
+    /// `wireless`: an iPhone microphone over Continuity, or AirPlay.
+    case builtIn, usb, bluetooth, wireless, virtual, aggregate, other
+}
+
+/// Whether dictation may keep a capture engine prepared on an input while
+/// idle, so the next press starts instantly.
+///
+/// Never on Bluetooth or other wireless microphones: holding a prepared
+/// engine on a headset's microphone switches the headset from its
+/// high-quality playback profile to its call profile, and every device change
+/// rebuilt the engine and switched it again. On the Mac's speakers or wired
+/// headphones that cost nothing; on Bluetooth headphones it broke playback
+/// even when nobody was dictating.
+public enum CaptureReadinessPolicy {
+    public static func keepsEngineReady(transport: AudioInputTransport?, name: String) -> Bool {
+        guard let transport else { return false }
+        switch transport {
+        case .bluetooth, .wireless: return false
+        case .builtIn, .usb, .virtual, .aggregate, .other:
+            let lowered = name.lowercased()
+            // Some Bluetooth headsets appear behind an aggregate or with an
+            // unexpected transport; their names give them away.
+            return !["airpods", "beats", "bluetooth", "buds", "headset"].contains { lowered.contains($0) }
+        }
+    }
 }
 
 public enum MicrophoneInputAdvice: Equatable, Sendable {
