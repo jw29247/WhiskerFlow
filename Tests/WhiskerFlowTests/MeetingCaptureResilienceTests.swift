@@ -11,6 +11,7 @@ final class MeetingCaptureResilienceTests: XCTestCase {
         XCTAssertEqual(MeetingDeliveryFailurePolicy.classify(MeetingChunkStoreError.keychain(-25308)), .transient)
         XCTAssertEqual(MeetingDeliveryFailurePolicy.classify(URLError(.notConnectedToInternet)), .transient)
         XCTAssertEqual(MeetingDeliveryFailurePolicy.classify(MeetingAtlasClientError.server("busy")), .transient)
+        XCTAssertEqual(MeetingDeliveryFailurePolicy.classify(MeetingLibraryError.saveFailed), .transient)
         XCTAssertEqual(MeetingDeliveryFailurePolicy.classify(NSError(domain: "decoder", code: 1)), .counted)
     }
 

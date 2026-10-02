@@ -943,7 +943,10 @@ final class MeetingCaptureCoordinator {
           durationMs: completedManifest.durationMs
         )
       }
-      await library.flush()
+      // Once the audio and checkpoint are gone, the library copy is the only
+      // local transcript, and reconciliation could not rebuild it: keep the
+      // session for retry until that copy is on disk.
+      guard await library.save(sessionID) else { throw MeetingLibraryError.saveFailed }
       try store.removeSession(sessionID: sessionID)
       heldSessionIDs.remove(sessionID)
       retryBackoff.succeeded(sessionID)
@@ -1345,6 +1348,8 @@ enum MeetingDeliveryFailurePolicy {
       }
     }
     if error is URLError || error is MeetingAtlasClientError { return .transient }
+    // Raised after Atlas accepted everything: a retry repeats no transcription.
+    if case MeetingLibraryError.saveFailed = error { return .transient }
     return .counted
   }
 }

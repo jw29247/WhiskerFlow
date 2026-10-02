@@ -4,10 +4,19 @@ import Observation
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
-enum MeetingLibraryError: Error, Equatable {
+enum MeetingLibraryError: LocalizedError, Equatable {
     case notRecording
     case emptyNote
     case noteLimitReached
+    /// The meeting's library copy couldn't be written to disk.
+    case saveFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .saveFailed: return "Its copy in the meeting library couldn’t be written."
+        case .notRecording, .emptyNote, .noteLimitReached: return nil
+        }
+    }
 }
 
 /// The meeting library on this Mac: status, transcript, notes, bookmarks,
@@ -311,7 +320,23 @@ final class MeetingLibraryController {
         update(sessionID) { $0.atlasInsights = insights }
     }
 
-    /// Resolves once every write queued so far is on disk.
+    /// Writes this meeting's current copy after every write queued before it,
+    /// and reports whether it reached the disk. Background writes only report
+    /// failures through `storageError`; callers that are about to delete the
+    /// meeting's only other copy need the answer. No entry means nothing to keep.
+    func save(_ sessionID: UUID) async -> Bool {
+        guard let entry = entry(sessionID) else { return true }
+        let store = store
+        let saved = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            persistQueue.async { continuation.resume(returning: (try? store.save(entry)) != nil) }
+        }
+        if !saved {
+            storageError = "A meeting couldn’t be saved on this Mac. Unlock the login keychain and try again."
+        }
+        return saved
+    }
+
+    /// Resolves once every write queued so far has run.
     func flush() async {
         let queue = persistQueue
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in

@@ -185,6 +185,34 @@ final class MeetingLibraryCoordinatorTests: XCTestCase {
         XCTAssertNil(f.library.entry(f.sessionID), "Sent in full, so retention may now delete it")
     }
 
+    func testRecordingIsKeptUntilItsLibraryCopyIsSaved() async throws {
+        let f = try fixture()
+        try recordLiveMoments(f)
+        await f.library.flush()
+        // The library folder can't be written: a file stands in its place.
+        try FileManager.default.removeItem(at: f.libraryRoot)
+        try Data().write(to: f.libraryRoot)
+
+        await f.coordinator.deliver(sessionID: f.sessionID)
+        XCTAssertNoThrow(try f.store.loadManifest(sessionID: f.sessionID), "Audio and checkpoint stay for a retry")
+        XCTAssertNotNil(f.library.storageError)
+        XCTAssertEqual(f.client.events.filter { $0 == "finalize" }.count, 1)
+
+        try FileManager.default.removeItem(at: f.libraryRoot)
+        f.coordinator.retryRecording(sessionID: f.sessionID)
+        for _ in 0..<200 where (try? f.store.loadManifest(sessionID: f.sessionID)) != nil {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertThrowsError(try f.store.loadManifest(sessionID: f.sessionID), "Removed once the library copy is on disk")
+        XCTAssertEqual(f.client.events.filter { $0 == "create" }.count, 1, "The retry repeats no upload")
+        let relaunched = MeetingLibraryController(
+            store: EncryptedMeetingLibraryStore(rootURL: f.libraryRoot, keyProvider: FixedMeetingChunkKeyProvider(key: f.key))
+        )
+        await relaunched.waitUntilLoaded()
+        XCTAssertEqual(relaunched.entry(f.sessionID)?.status, .delivered)
+        XCTAssertEqual(relaunched.entry(f.sessionID)?.turns.count, 2)
+    }
+
     func testPermanentFailureIsShownAsFailedAndHeldForRetry() async throws {
         let f = try fixture(chunks: false, checkpoint: false)
         try recordLiveMoments(f)
