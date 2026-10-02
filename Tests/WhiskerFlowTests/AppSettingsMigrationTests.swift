@@ -16,6 +16,19 @@ final class AppSettingsMigrationTests: XCTestCase {
         AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
     }
 
+    func testMeetingModeIsOnByDefaultAndTurnsOnOnceForExistingInstalls() {
+        withDefaults { defaults, name in
+            XCTAssertTrue(settings(defaults, name).meetingModeEnabled, "fresh install")
+        }
+        withDefaults { defaults, name in
+            defaults.set(false, forKey: "meetingModeEnabled")
+            let upgraded = settings(defaults, name)
+            XCTAssertTrue(upgraded.meetingModeEnabled, "an earlier off switches on once")
+            upgraded.meetingModeEnabled = false
+            XCTAssertFalse(settings(defaults, name).meetingModeEnabled, "a later choice is kept")
+        }
+    }
+
     func testAutoDetectChosenAfterFreshInstallSurvivesRelaunch() {
         withDefaults { defaults, name in
             let first = settings(defaults, name)

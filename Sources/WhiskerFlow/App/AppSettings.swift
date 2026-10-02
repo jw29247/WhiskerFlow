@@ -205,10 +205,15 @@ final class AppSettings {
             min(max($0, InsightsSummary.typingWordsPerMinuteRange.lowerBound), InsightsSummary.typingWordsPerMinuteRange.upperBound)
         } ?? InsightsSummary.defaultTypingWordsPerMinute
         defaults.removeObject(forKey: Keys.atlasBaseURL)
-        // Meeting Mode is an opt-in capture surface. Existing installs must not
-        // begin recording or download the large local meeting model until the
-        // user pairs a device and explicitly enables it.
-        meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? false
+        // Meeting Mode is on by default (2 October 2026). Existing installs
+        // switch on once, whatever they stored before, and keep any later
+        // choice. It records only after "Record this meeting?" or a scheduled
+        // opt-in, and needs Atlas; the model is the dictation model.
+        if !defaults.bool(forKey: Keys.meetingModeDefaultOnMigrated) {
+            defaults.set(true, forKey: Keys.meetingModeEnabled)
+            defaults.set(true, forKey: Keys.meetingModeDefaultOnMigrated)
+        }
+        meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? true
         askToRecordCalls = defaults.object(forKey: Keys.askToRecordCalls) as? Bool ?? true
         coachEnabled = defaults.object(forKey: Keys.coachEnabled) as? Bool ?? true
         coachLiveAnalysis = defaults.object(forKey: Keys.coachLiveAnalysis) as? Bool ?? true
@@ -380,6 +385,7 @@ final class AppSettings {
         static let launchAtLogin = "launchAtLogin"
         static let atlasBaseURL = "atlasBaseURL"
         static let meetingModeEnabled = "meetingModeEnabled"
+        static let meetingModeDefaultOnMigrated = "meetingModeDefaultOnMigrated"
         static let meetingTranscriptRetention = "meetingTranscriptRetention"
         static let askToRecordCalls = "askToRecordCalls"
         static let coachEnabled = "coachEnabled"
