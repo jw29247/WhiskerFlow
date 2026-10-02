@@ -25,8 +25,16 @@ struct MeetingDelivery {
     transcriptReady: (MeetingLocalProcessingResult) -> Void = { _ in }
   ) async throws -> MeetingAtlasRecordingCompletion {
     let store = self.store
-    let (manifest, hash) = try await Self.offMain {
-      (try store.loadManifest(sessionID: sessionID), try store.sourceManifestChecksum(sessionID: sessionID))
+    let (manifest, hash) = try await Self.offMain { () -> (MeetingRecordingSessionManifest, String) in
+      // The live capture is never delivered, so a session still marked
+      // `.recording` was interrupted (a crash, or a quit that outlasted the
+      // final flush): the meeting went on past its last durable chunk. Persist
+      // the gap now, before a failed or cancelled attempt moves the state on
+      // and erases the only evidence.
+      if try store.loadManifest(sessionID: sessionID).state == .recording {
+        try store.markState(sessionID: sessionID, state: .awaitingTranscription, sourceGapDetected: true)
+      }
+      return (try store.loadManifest(sessionID: sessionID), try store.sourceManifestChecksum(sessionID: sessionID))
     }
     var receipt: RecordingDeliveryReceipt
     if let bytes = try store.readDeliveryReceipt(sessionID: sessionID),

@@ -189,10 +189,9 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
 
     /// Whether the persisted chunks contain an observable gap in a source.
     ///
-    /// A process can stop after the final complete chunks have been written but
-    /// before it advances the manifest out of `.recording`. That lifecycle state
-    /// alone is not evidence that audio is missing. Missing tracks remain the
-    /// caller's responsibility to report separately to Atlas.
+    /// Structure only: the lifecycle state is not considered here. Delivery
+    /// marks a session interrupted in `.recording` as a gap separately, and
+    /// missing tracks remain the caller's responsibility to report to Atlas.
     public var hasStructuralSourceGap: Bool {
         guard !sourceGapDetected else { return true }
 

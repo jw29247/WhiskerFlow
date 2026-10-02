@@ -111,6 +111,38 @@ final class MeetingDeliveryTests: XCTestCase {
         XCTAssertEqual(client.events.filter { $0 == "finalize" }.count, 2)
     }
 
+    @MainActor
+    func testInterruptedRecordingIsReportedAsASourceGapAcrossRetries() async throws {
+        // Left in `.recording` by a crash: the meeting went on after the last chunk.
+        let (store, id, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let client = DeliveryStub()
+        client.failCreate = true
+        let delivery = MeetingDelivery(store: store, client: client)
+        let process = { MeetingLocalProcessingResult(turns: [], modelVersion: "fixture", durationMs: 1000) }
+        do { _ = try await delivery.deliver(sessionID: id, process: process, progress: { _ in }); XCTFail() }
+        catch MeetingAtlasClientError.server {}
+        // The coordinator files the failure, which moves the state on.
+        _ = try store.recordDeliveryFailure(sessionID: id, countsTowardLimit: false, maximumAttempts: 4)
+        XCTAssertTrue(try store.loadManifest(sessionID: id).sourceGapDetected, "The gap is persisted before the first attempt")
+
+        client.failCreate = false
+        _ = try await delivery.deliver(sessionID: id, process: process, progress: { _ in })
+        XCTAssertEqual(client.sourceGaps, [true], "Atlas must not mark a truncated meeting as covered")
+    }
+
+    @MainActor
+    func testFinishedRecordingIsNotReportedAsASourceGap() async throws {
+        let (store, id, root) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try store.markState(sessionID: id, state: .awaitingTranscription, durationMs: 1000, sourceGapDetected: false)
+        let client = DeliveryStub()
+        _ = try await MeetingDelivery(store: store, client: client).deliver(sessionID: id, process: {
+            MeetingLocalProcessingResult(turns: [], modelVersion: "fixture", durationMs: 1000)
+        }, progress: { _ in })
+        XCTAssertEqual(client.sourceGaps, [false])
+    }
+
     private func fixture(mixedChunks: Int = 1) throws -> (EncryptedMeetingChunkStore, UUID, URL) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let store = EncryptedMeetingChunkStore(rootURL: root, keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256)))
@@ -127,6 +159,8 @@ final class MeetingDeliveryTests: XCTestCase {
 
 private final class DeliveryStub: MeetingAtlasClient, @unchecked Sendable {
     var events: [String] = []
+    var failCreate = false
+    var sourceGaps: [Bool] = []
     var failFinalize = false
     var failPlaybackAtSequence: Int?
     var playbackSequences: [Int] = []
@@ -134,7 +168,10 @@ private final class DeliveryStub: MeetingAtlasClient, @unchecked Sendable {
     var finalized = false
     func schedule(fromMs: Int64, toMs: Int64) async throws -> [AtlasCaptureScheduleIntent] { [] }
     func heartbeat(appVersion: String, permissionState: [String: String], diskState: String, captureState: String, lastFailureReason: String?) async throws {}
-    func createMeeting(captureSessionID: UUID, title: String, occurredAtMs: Int64, eventID: String?) async throws -> MeetingAtlasCreatedMeeting { events.append("create"); return MeetingAtlasCreatedMeeting(meetingID: "meeting", created: true) }
+    func createMeeting(captureSessionID: UUID, title: String, occurredAtMs: Int64, eventID: String?) async throws -> MeetingAtlasCreatedMeeting {
+        if failCreate { throw MeetingAtlasClientError.server("Fixture outage") }
+        events.append("create"); return MeetingAtlasCreatedMeeting(meetingID: "meeting", created: true)
+    }
     func prepareRecording(meetingID: String, captureSessionID: UUID, trackChunkCounts: [MeetingAudioTrack: Int], sourceManifestHash: String?, playbackChunkCount: Int?) async throws -> String { events.append("prepare"); return "artifact" }
     func uploadChunk(artifactID: String, descriptor: MeetingRecordingChunkDescriptor, body: Data) async throws { events.append("chunk") }
     func uploadPlaybackChunk(artifactID: String, descriptor: MeetingRecordingChunkDescriptor, body: Data) async throws {
@@ -143,7 +180,7 @@ private final class DeliveryStub: MeetingAtlasClient, @unchecked Sendable {
         playbackSequences.append(descriptor.sequence)
     }
     func completePlayback(artifactID: String) async throws { events.append("playbackComplete") }
-    func completeRecording(artifactID: String, durationMs: Int64, trackChunkCounts: [MeetingAudioTrack: Int], hasSourceGap: Bool, missingTracks: [MeetingAudioTrack], canonicalChecksum: String?, sourceManifestHash: String?, modelVersion: String?) async throws -> MeetingAtlasRecordingCompletion { events.append("complete"); serverStatus = "pending"; return MeetingAtlasRecordingCompletion(status: "recorded_pending_transcription", duplicate: false) }
+    func completeRecording(artifactID: String, durationMs: Int64, trackChunkCounts: [MeetingAudioTrack: Int], hasSourceGap: Bool, missingTracks: [MeetingAudioTrack], canonicalChecksum: String?, sourceManifestHash: String?, modelVersion: String?) async throws -> MeetingAtlasRecordingCompletion { events.append("complete"); sourceGaps.append(hasSourceGap); serverStatus = "pending"; return MeetingAtlasRecordingCompletion(status: "recorded_pending_transcription", duplicate: false) }
     func appendSegments(meetingID: String, turns: [MeetingSpeakerTurn]) async throws { events.append("segments") }
     func finalize(meetingID: String, artifactID: String, transcriptionState: String, status: String) async throws { events.append("finalize")
         if !finalized { serverStatus = "covered"; finalized = true }
