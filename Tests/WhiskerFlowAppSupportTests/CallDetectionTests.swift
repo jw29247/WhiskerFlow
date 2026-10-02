@@ -137,6 +137,22 @@ final class CallDetectionTests: XCTestCase {
         XCTAssertNil(CallCalendarMatcher.match(unknown, intents: events, nowMs: 500), "A different Meet code is a different call")
     }
 
+    func testReusedMeetLinkMatchesTheOccurrenceHappeningNow() {
+        let meet = DetectedCall(platform: .googleMeet, appBundleID: "com.google.Chrome", isBrowser: true, meetingCode: "abc-defg-hij")
+        let room = "https://meet.google.com/abc-defg-hij"
+        let minute: Int64 = 60_000
+        let events = [intent("standup", url: room, start: 0, end: 30 * minute),
+                      intent("retro", url: room, start: 30 * minute, end: 60 * minute),
+                      intent("next-week", url: room, start: 7 * 24 * 60 * minute, end: 7 * 24 * 60 * minute + 30 * minute)]
+        XCTAssertEqual(CallCalendarMatcher.match(meet, intents: events, nowMs: 2 * minute)?.eventID, "standup")
+        XCTAssertEqual(CallCalendarMatcher.match(meet, intents: events, nowMs: 31 * minute)?.eventID, "retro",
+                       "Joining the second back-to-back meeting is that meeting, not the first")
+        XCTAssertEqual(CallCalendarMatcher.match(meet, intents: events, nowMs: 7 * 24 * 60 * minute - 5 * minute)?.eventID,
+                       "next-week")
+        XCTAssertEqual(CallCalendarMatcher.match(meet, intents: Array(events.reversed()), nowMs: 31 * minute)?.eventID, "retro",
+                       "Order in the schedule doesn't decide")
+    }
+
     func testOtherPlatformsMatchACurrentEventByJoinHost() {
         let zoom = DetectedCall(platform: .zoom, appBundleID: "us.zoom.xos", isBrowser: false)
         let now: Int64 = 10_000_000

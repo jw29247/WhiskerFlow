@@ -284,14 +284,25 @@ public enum CallCalendarMatcher {
         lateMs: Int64 = 15 * 60_000
     ) -> AtlasCaptureScheduleIntent? {
         let links = intents.map { intent in (intent, joinURLs(intent)) }
-        if let code = call.meetingCode,
-           let exact = links.first(where: { _, urls in
-               urls.contains { $0.host == "meet.google.com" && $0.path.lowercased() == "/" + code }
-           }) {
-            return exact.0
+        func isCurrent(_ intent: AtlasCaptureScheduleIntent) -> Bool {
+            intent.startMs - earlyMs <= nowMs && nowMs <= intent.endMs + lateMs
+        }
+        if let code = call.meetingCode {
+            let exact = links.filter { _, urls in
+                urls.contains { $0.host == "meet.google.com" && $0.path.lowercased() == "/" + code }
+            }.map(\.0)
+            // A reused room (back-to-back meetings, a recurring series) has an
+            // event per occurrence: the one happening now, else the nearest.
+            if let occurrence = exact.min(by: { lhs, rhs in
+                isCurrent(lhs) != isCurrent(rhs)
+                    ? isCurrent(lhs)
+                    : abs(lhs.startMs - nowMs) < abs(rhs.startMs - nowMs)
+            }) {
+                return occurrence
+            }
         }
         let current = links.filter { intent, urls in
-            intent.startMs - earlyMs <= nowMs && nowMs <= intent.endMs + lateMs
+            isCurrent(intent)
                 && urls.contains { url in
                     guard let host = url.host?.lowercased() else { return false }
                     return call.platform.joinHosts.contains { host == $0 || host.hasSuffix("." + $0) }
