@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import WhiskerFlowAppSupport
 import XCTest
 @testable import WhiskerFlow
 
@@ -99,6 +100,74 @@ final class AudioCaptureConversionTests: XCTestCase {
         let target = try XCTUnwrap(AVAudioFormat(
             commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false))
         XCTAssertEqual(AudioCaptureService.makeConverter(from: input, to: target)?.downmix, false)
+    }
+
+    /// Feeds `seconds` of a 440 Hz tone on `toneChannel` (silence elsewhere)
+    /// through the ring in callback-sized writes, as the HAL callback would.
+    private func processTone(
+        sampleRate: Double, channels: Int, toneChannel: Int, seconds: Double, callbackFrames: Int = 512
+    ) throws -> (chunks: [Int], samples: [Float]) {
+        let plan = try HALInputCapturePlan(sampleRate: sampleRate, channelCount: channels)
+        let ring = PlanarAudioRingBuffer(channelCount: channels, capacityFrames: plan.ringCapacityFrames)
+        let processor = try CaptureChunkProcessor(plan: plan, ring: ring, targetSampleRate: 16_000)
+        let total = Int(sampleRate * seconds)
+        var buffers = (0..<channels).map { _ in [Float](repeating: 0, count: callbackFrames) }
+        var chunks: [Int] = []
+        var samples: [Float] = []
+        var written = 0
+        while written < total {
+            let frames = min(callbackFrames, total - written)
+            for frame in 0..<frames {
+                buffers[toneChannel][frame] = 0.5 * sin(Float(written + frame) * 2 * .pi * 440 / Float(sampleRate))
+            }
+            let pointers = buffers.map { _ in UnsafeMutablePointer<Float>.allocate(capacity: callbackFrames) }
+            defer { pointers.forEach { $0.deallocate() } }
+            for (index, pointer) in pointers.enumerated() { pointer.update(from: buffers[index], count: frames) }
+            XCTAssertTrue(ring.write(frames: frames) { UnsafePointer(pointers[$0]) })
+            written += frames
+            processor.drain(final: false) { result in
+                if let converted = try? result.get() { chunks.append(converted.count); samples += converted }
+            }
+        }
+        processor.drain(final: true) { result in
+            if let converted = try? result.get() { chunks.append(converted.count); samples += converted }
+        }
+        return (chunks, samples)
+    }
+
+    /// The HAL path delivers ~100 ms chunks at 16 kHz mono from a 48 kHz
+    /// stereo webcam whose mic is on channel 1, and from a 4-input interface
+    /// whose mic is on input 3: neither records silence.
+    func testHALChunksAreSixteenKilohertzMonoFromAnyChannel() throws {
+        for (rate, channels, tone) in [(48_000.0, 2, 1), (44_100.0, 4, 2), (48_000.0, 1, 0)] {
+            let result = try processTone(sampleRate: rate, channels: channels, toneChannel: tone, seconds: 1.05)
+            XCTAssertEqual(Double(result.samples.count), 16_000 * 1.05, accuracy: 400, "\(rate) Hz × \(channels)")
+            XCTAssertGreaterThan(result.chunks.count, 9)
+            // The resampler emits in its own packet sizes, so "about 100 ms".
+            XCTAssertTrue(result.chunks.dropLast().allSatisfy { (1_200...2_000).contains($0) }, "\(result.chunks)")
+            XCTAssertGreaterThan(result.samples.map(abs).max() ?? 0, 0.4, "\(rate) Hz × \(channels)")
+        }
+    }
+
+    func testSixteenKilohertzMonoDevicesPassStraightThrough() throws {
+        let result = try processTone(sampleRate: 16_000, channels: 1, toneChannel: 0, seconds: 0.5, callbackFrames: 160)
+        XCTAssertEqual(result.samples.count, 8_000)
+        XCTAssertEqual(result.chunks, [1_600, 1_600, 1_600, 1_600, 1_600])
+        XCTAssertEqual(result.samples[100], 0.5 * sin(100 * 2 * .pi * 440 / 16_000), accuracy: 1e-6)
+    }
+
+    /// Stopping drains the partial chunk too, so the spool gets every frame.
+    func testFinalDrainDeliversThePartialChunk() throws {
+        let result = try processTone(sampleRate: 16_000, channels: 1, toneChannel: 0, seconds: 0.25, callbackFrames: 100)
+        XCTAssertEqual(result.chunks, [1_600, 1_600, 800])
+    }
+
+    func testDeviceFormatsPastTwoChannelsUseADiscreteLayout() throws {
+        let plan = try HALInputCapturePlan(sampleRate: 48_000, channelCount: 8)
+        let format = try XCTUnwrap(CaptureChunkProcessor.deviceFormat(for: plan))
+        XCTAssertEqual(format.channelCount, 8)
+        XCTAssertFalse(format.isInterleaved)
+        XCTAssertEqual(format.commonFormat, .pcmFormatFloat32)
     }
 
     /// Resolving a specific device translates its UID directly; it must agree

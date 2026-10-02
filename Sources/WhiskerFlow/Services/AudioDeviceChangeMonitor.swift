@@ -19,8 +19,8 @@ final class AudioDeviceChangeMonitor {
         guard registrations.isEmpty else { return }
         register(selector: kAudioHardwarePropertyDevices)
         register(selector: kAudioHardwarePropertyDefaultInputDevice)
-        // A ready engine also opens the default output; see CaptureReadinessPolicy.
-        register(selector: kAudioHardwarePropertyDefaultOutputDevice)
+        // The default output is not watched: the input-only capture unit
+        // never opens it, so it cannot invalidate a ready capture.
     }
 
     func stop() {

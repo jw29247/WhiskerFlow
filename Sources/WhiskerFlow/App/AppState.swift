@@ -1924,8 +1924,8 @@ final class AppState {
                 stopReason: reason,
                 totalSampleCount: result.totalSampleCount
             ) {
-                // A route rebuild can stop AVAudioEngine before its first
-                // usable buffer. It is a discarded tap, not a failed
+                // A device change can end the capture before its first
+                // usable buffer. It is a discarded capture, not a failed
                 // transcription; leave the next hotkey press immediately
                 // available and keep the interruption visible in diagnostics.
                 lifecycleLogger.info(

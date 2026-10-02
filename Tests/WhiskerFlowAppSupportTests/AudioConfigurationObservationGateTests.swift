@@ -23,11 +23,6 @@ final class AudioConfigurationObservationGateTests: XCTestCase {
 }
 
 final class CaptureInterruptionDetectorTests: XCTestCase {
-    func testConfigurationChangeOnlyInterruptsAStoppedEngine() {
-        XCTAssertFalse(CaptureInterruptionDetector.configurationChangeInterrupts(engineIsRunning: true))
-        XCTAssertTrue(CaptureInterruptionDetector.configurationChangeInterrupts(engineIsRunning: false))
-    }
-
     func testStoppedEngineIsAnInterruptionEvenBeforeTheFirstBuffer() {
         var detector = CaptureInterruptionDetector()
         XCTAssertTrue(detector.isInterrupted(deliveredBufferCount: 0, engineIsRunning: false, now: 0.5))

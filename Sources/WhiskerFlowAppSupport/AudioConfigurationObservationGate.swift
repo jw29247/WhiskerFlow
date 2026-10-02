@@ -37,15 +37,13 @@ public struct AudioConfigurationObservationGate: Sendable {
     }
 }
 
-/// Decides when a running capture has actually lost its microphone.
-/// AVAudioEngine stops itself for a real hardware change, but absorbs the
-/// changes it posts while building its device aggregate — so the engine's
-/// running state, not the notification or a fixed startup delay, is what
-/// matters. A tap that stops firing while the engine claims to run is the
-/// other failure: some Bluetooth routes vanish without stopping the engine.
+/// Catches a running capture that lost its microphone without a device
+/// change being seen (`CaptureDeviceExpectation` covers those): a capture
+/// unit that stopped, or buffers that stop arriving while the unit claims to
+/// run — some Bluetooth routes vanish without stopping anything.
 public struct CaptureInterruptionDetector: Sendable {
-    /// Generous enough that no scheduling hiccup on a slow Mac trips it; the
-    /// tap normally fires about ten times a second.
+    /// Generous enough that no scheduling hiccup on a slow Mac trips it;
+    /// buffers normally arrive about ten times a second.
     public static let defaultStallInterval: TimeInterval = 4
 
     public let stallInterval: TimeInterval
@@ -54,10 +52,6 @@ public struct CaptureInterruptionDetector: Sendable {
 
     public init(stallInterval: TimeInterval = Self.defaultStallInterval) {
         self.stallInterval = stallInterval
-    }
-
-    public static func configurationChangeInterrupts(engineIsRunning: Bool) -> Bool {
-        !engineIsRunning
     }
 
     /// Before the first buffer nothing counts as a stall: Bluetooth inputs

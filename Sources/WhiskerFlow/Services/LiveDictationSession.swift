@@ -2,7 +2,7 @@ import Foundation
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
-/// Dictation capture using the app-owned AVAudioEngine capture service.
+/// Dictation capture using the app-owned HAL input capture service.
 ///
 /// While the key is held, audio streams into a 16 kHz float buffer and,
 /// optionally, a preview loop shows the latest words in the HUD. On `finish()`

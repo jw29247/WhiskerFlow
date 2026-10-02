@@ -196,20 +196,30 @@ final class CaptureReadinessPolicyTests: XCTestCase {
         XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(transport: .virtual, name: "Krisp Microphone"))
     }
 
-    /// 2 October: the C920 was selected, but every engine build also opened the
-    /// Soundcore headset (the system default input and output) and flipped it
-    /// to its call profile.
-    func testNoPreparedEngineWhileTheDefaultDevicesAreBluetooth() {
+    /// 2 October: the C920 was selected, but every AVAudioEngine build also
+    /// opened the Soundcore headset (the system default input and output) and
+    /// flipped it to its call profile. The input-only HAL unit opens only the
+    /// C920, so a ready capture is fine whatever the defaults are.
+    func testASpecificWiredMicrophoneStaysReadyWhateverTheDefaultsAre() {
         let webcam = AudioDeviceTraits(transport: .usb, name: "C920 HD Pro Webcam")
         let headset = AudioDeviceTraits(transport: .bluetooth, name: "Soundcore Life Q35")
-        let speakers = AudioDeviceTraits(transport: .builtIn, name: "MacBook Pro Speakers")
-        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: headset, defaultOutput: headset))
-        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: webcam, defaultOutput: headset),
-                       "Bluetooth output alone: the engine's aggregate still opens the headset")
-        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(
-            selected: webcam, defaultInput: AudioDeviceTraits(transport: .builtIn, name: "AirPods Pro"), defaultOutput: speakers))
-        XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: webcam, defaultOutput: speakers))
-        XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: nil, defaultOutput: nil))
+        XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: headset, followsSystemDefault: false))
+        XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: webcam, followsSystemDefault: false))
+        XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: nil, followsSystemDefault: false))
+        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(selected: headset, defaultInput: webcam, followsSystemDefault: false),
+                       "A Bluetooth microphone is never held ready, selected or not")
+    }
+
+    func testTheSystemDefaultIsNotHeldReadyWhileTheDefaultInputIsBluetooth() {
+        let webcam = AudioDeviceTraits(transport: .usb, name: "C920 HD Pro Webcam")
+        let headset = AudioDeviceTraits(transport: .bluetooth, name: "Soundcore Life Q35")
+        let disguised = AudioDeviceTraits(transport: .builtIn, name: "AirPods Pro")
+        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(selected: headset, defaultInput: headset, followsSystemDefault: true))
+        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: headset, followsSystemDefault: true),
+                       "The default input moved to the headset after the selection was resolved")
+        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: disguised, followsSystemDefault: true))
+        XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: webcam, followsSystemDefault: true))
+        XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: nil, followsSystemDefault: true))
     }
 
     func testTheReadyEngineIgnoresTheChangesItPostsItself() {

@@ -69,13 +69,13 @@ public enum AudioInputTransport: Equatable, Sendable {
     case builtIn, usb, bluetooth, wireless, virtual, aggregate, other
 }
 
-/// Whether dictation may keep a capture engine prepared on an input while
+/// Whether dictation may keep a capture unit prepared on an input while
 /// idle, so the next press starts instantly.
 ///
 /// Never on Bluetooth or other wireless microphones: holding a prepared
-/// engine on a headset's microphone switches the headset from its
+/// capture on a headset's microphone switches the headset from its
 /// high-quality playback profile to its call profile, and every device change
-/// rebuilt the engine and switched it again. On the Mac's speakers or wired
+/// rebuilt it and switched it again. On the Mac's speakers or wired
 /// headphones that cost nothing; on Bluetooth headphones it broke playback
 /// even when nobody was dictating.
 public enum CaptureReadinessPolicy {
@@ -91,17 +91,20 @@ public enum CaptureReadinessPolicy {
         }
     }
 
-    /// AVAudioEngine builds its I/O on an aggregate of the system default
-    /// input and output, whichever mic it is given. With a Bluetooth headset
-    /// as either default, every build opens the headset and flips it to its
-    /// call profile, so no engine is kept ready then.
+    /// Capture runs on an input-only HAL unit, which opens only the device it
+    /// is given. AVAudioEngine built its I/O on an aggregate of the system
+    /// default input and output whichever mic it was given, so a Bluetooth
+    /// headset as either default flipped to its call profile on every build;
+    /// the HAL unit never touches the default output, or the default input of
+    /// a specific microphone. A system-default selection records from the
+    /// default input, so that is checked too, in case it moved since
+    /// `selected` was resolved.
     public static func keepsEngineReady(
-        selected: AudioDeviceTraits, defaultInput: AudioDeviceTraits?, defaultOutput: AudioDeviceTraits?
+        selected: AudioDeviceTraits, defaultInput: AudioDeviceTraits?, followsSystemDefault: Bool
     ) -> Bool {
-        [selected, defaultInput, defaultOutput].allSatisfy { device in
-            guard let device else { return true }
-            return keepsEngineReady(transport: device.transport, name: device.name)
-        }
+        guard keepsEngineReady(transport: selected.transport, name: selected.name) else { return false }
+        guard followsSystemDefault, let defaultInput else { return true }
+        return keepsEngineReady(transport: defaultInput.transport, name: defaultInput.name)
     }
 }
 
@@ -115,17 +118,19 @@ public struct AudioDeviceTraits: Sendable, Equatable {
     }
 }
 
-/// When an idle ready engine is rebuilt after a configuration change. Each
-/// build posts a change of its own about 110 ms later; rebuilding on that
-/// kept rebuilding every 2 seconds forever (27 builds a minute on 2 October).
+/// When an idle ready capture is rebuilt after its device changed. Under
+/// AVAudioEngine each build posted a change of its own about 110 ms later,
+/// and rebuilding on that kept rebuilding every 2 seconds forever (27 builds
+/// a minute on 2 October). The HAL unit's listeners compare device values
+/// instead, but a device that keeps changing must still not rebuild in a loop.
 public enum ReadyEngineRebuildPolicy {
-    /// Changes this soon after the engine was adopted are its own.
+    /// Changes this soon after the capture was adopted are ignored.
     public static let settleSeconds = 1.5
     public static let rebuildAfterSeconds = 2.0
     public static let minimumIntervalSeconds = 10.0
 
     /// Seconds to wait before rebuilding, or nil to ignore the change. A
-    /// press still checks the ready engine's format, so ignoring is safe.
+    /// press still checks the ready capture's device, so ignoring is safe.
     public static func rebuildDelay(changeAt now: Double, adoptedAt: Double, lastRebuildAt: Double?) -> Double? {
         guard now - adoptedAt >= settleSeconds else { return nil }
         let spacing = lastRebuildAt.map { $0 + minimumIntervalSeconds - now } ?? 0
