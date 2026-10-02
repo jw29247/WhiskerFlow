@@ -2,85 +2,56 @@ import XCTest
 @testable import WhiskerFlowAppSupport
 
 final class ModelStoragePathsTests: XCTestCase {
-    func testWhisperKitModelsUseApplicationSupportInsteadOfDocuments() {
-        let applicationSupport = URL(fileURLWithPath: "/Users/test/Library/Application Support")
+    private var root: URL!
 
-        XCTAssertEqual(
-            ModelStoragePaths.whisperKitDownloadBase(in: applicationSupport),
-            applicationSupport
-                .appendingPathComponent("WhiskerFlow", isDirectory: true)
-                .appendingPathComponent("Models", isDirectory: true)
-        )
+    override func setUpWithError() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("model-paths-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
 
-    func testExistingLegacyModelAndTokenizerAreMigratedForOfflineLoading() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let applicationSupport = root.appendingPathComponent("Application Support", isDirectory: true)
-        let documents = root.appendingPathComponent("Documents", isDirectory: true)
-        let legacyBase = documents.appendingPathComponent("huggingface", isDirectory: true)
-        let legacyModel = legacyBase
-            .appendingPathComponent("models/argmaxinc/whisperkit-coreml/openai_whisper-small.en", isDirectory: true)
-        let legacyTokenizer = legacyBase
-            .appendingPathComponent("models/openai/whisper-small.en", isDirectory: true)
-        try FileManager.default.createDirectory(at: legacyModel, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: legacyTokenizer, withIntermediateDirectories: true)
-        try Data("model".utf8).write(to: legacyModel.appendingPathComponent("config.json"))
-        try Data("tokenizer".utf8).write(to: legacyTokenizer.appendingPathComponent("tokenizer.json"))
-
-        let assets = try XCTUnwrap(ModelStoragePaths.prepareLocalAssets(
-            modelIdentifier: "openai_whisper-small.en",
-            applicationSupport: applicationSupport,
-            documents: documents
-        ))
-
-        XCTAssertTrue(FileManager.default.fileExists(
-            atPath: assets.modelFolder.appendingPathComponent("config.json").path
-        ))
-        XCTAssertTrue(FileManager.default.fileExists(
-            atPath: assets.tokenizerDownloadBase
-                .appendingPathComponent("models/openai/whisper-small.en/tokenizer.json")
-                .path
-        ))
-        XCTAssertFalse(assets.modelFolder.path.hasPrefix(documents.path))
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: root)
     }
 
-    func testMultilingualIdentifierMapsToTheMatchingModelAndTokenizerPaths() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let applicationSupport = root.appendingPathComponent("Application Support", isDirectory: true)
-        let documents = root.appendingPathComponent("Documents", isDirectory: true)
-        let legacyBase = documents.appendingPathComponent("huggingface", isDirectory: true)
-        let legacyModel = legacyBase
-            .appendingPathComponent("models/argmaxinc/whisperkit-coreml/openai_whisper-small", isDirectory: true)
-        let legacyTokenizer = legacyBase
-            .appendingPathComponent("models/openai/whisper-small", isDirectory: true)
-        try FileManager.default.createDirectory(at: legacyModel, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: legacyTokenizer, withIntermediateDirectories: true)
-        try Data("model".utf8).write(to: legacyModel.appendingPathComponent("config.json"))
-        try Data("tokenizer".utf8).write(to: legacyTokenizer.appendingPathComponent("tokenizer.json"))
+    private func write(_ relativePath: String, bytes: Int = 4096) throws {
+        let url = root.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 1, count: bytes).write(to: url)
+    }
 
-        let assets = try XCTUnwrap(ModelStoragePaths.prepareLocalAssets(
-            modelIdentifier: "openai_whisper-small",
-            applicationSupport: applicationSupport,
-            documents: documents
-        ))
+    private func exists(_ relativePath: String) -> Bool {
+        FileManager.default.fileExists(atPath: root.appendingPathComponent(relativePath).path)
+    }
 
-        let base = ModelStoragePaths.whisperKitDownloadBase(in: applicationSupport)
-        XCTAssertEqual(
-            assets.modelFolder,
-            base.appendingPathComponent(
-                "models/argmaxinc/whisperkit-coreml/openai_whisper-small",
-                isDirectory: true
-            )
-        )
-        XCTAssertEqual(assets.tokenizerDownloadBase, base)
-        XCTAssertTrue(FileManager.default.fileExists(
-            atPath: assets.tokenizerDownloadBase
-                .appendingPathComponent("models/openai/whisper-small/tokenizer.json")
-                .path
-        ))
+    func testRemovesWhisperModelsAndTokenizers() throws {
+        try write("WhiskerFlow/Models/models/argmaxinc/whisperkit-coreml/openai_whisper-tiny/model.bin")
+        try write("WhiskerFlow/Models/models/openai/whisper-tiny/tokenizer.json")
+
+        let freed = ModelStoragePaths.removeWhisperModels(applicationSupport: root)
+
+        XCTAssertGreaterThan(freed, 0)
+        XCTAssertFalse(exists("WhiskerFlow/Models/models/argmaxinc"))
+        XCTAssertFalse(exists("WhiskerFlow/Models/models/openai"))
+        XCTAssertFalse(exists("WhiskerFlow/Models"), "Empty parents go too")
+        XCTAssertTrue(exists("WhiskerFlow"))
+    }
+
+    func testKeepsEverythingElse() throws {
+        try write("WhiskerFlow/Models/models/argmaxinc/whisperkit-coreml/x/model.bin")
+        try write("WhiskerFlow/Models/models/argmaxinc/speakerkit-coreml/pyannote/model.bin")
+        try write("WhiskerFlow/transcripts.sqlite")
+        try write("FluidAudio/Models/parakeet-tdt-0.6b-v3/encoder.bin")
+
+        ModelStoragePaths.removeWhisperModels(applicationSupport: root)
+
+        XCTAssertFalse(exists("WhiskerFlow/Models/models/argmaxinc/whisperkit-coreml"))
+        XCTAssertTrue(exists("WhiskerFlow/Models/models/argmaxinc/speakerkit-coreml/pyannote/model.bin"))
+        XCTAssertTrue(exists("WhiskerFlow/transcripts.sqlite"))
+        XCTAssertTrue(exists("FluidAudio/Models/parakeet-tdt-0.6b-v3/encoder.bin"))
+    }
+
+    func testNothingToRemoveIsANoOp() {
+        XCTAssertEqual(ModelStoragePaths.removeWhisperModels(applicationSupport: root), 0)
+        XCTAssertTrue(exists(""))
     }
 }

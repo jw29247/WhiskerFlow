@@ -1,19 +1,35 @@
 import Foundation
 import Security
 
+/// What a token lookup found. Only `unavailable` is uncertain: a locked
+/// Keychain or a busy securityd says nothing about whether the token exists.
+public enum MeetingCaptureTokenLookup: Equatable, Sendable {
+    case found(String)
+    case missing
+    /// The user declined the Keychain's prompt to allow access.
+    case denied
+    case unavailable(OSStatus)
+}
+
 public final class MeetingCaptureTokenStore: @unchecked Sendable {
+    public typealias CopyMatching = @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
+
     private let service: String
     private let account: String
+    private let copyMatching: CopyMatching
 
+    /// - Parameter copyMatching: the Keychain query; tests inject failures.
     public init(
         service: String = "agency.thatworks.WhiskerFlow.meeting-capture",
-        account: String = "atlas-device-token"
+        account: String = "atlas-device-token",
+        copyMatching: @escaping CopyMatching = { SecItemCopyMatching($0, $1) }
     ) {
         self.service = service
         self.account = account
+        self.copyMatching = copyMatching
     }
 
-    public func read() -> String? {
+    public func lookup() -> MeetingCaptureTokenLookup {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -22,9 +38,24 @@ public final class MeetingCaptureTokenStore: @unchecked Sendable {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = copyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            guard let data = result as? Data, let token = String(data: data, encoding: .utf8) else { return .missing }
+            return .found(token)
+        case errSecItemNotFound:
+            return .missing
+        case errSecUserCanceled, errSecAuthFailed:
+            return .denied
+        default:
+            return .unavailable(status)
+        }
+    }
+
+    /// The token, or `nil` when it is missing or the Keychain can't be read.
+    public func read() -> String? {
+        guard case .found(let token) = lookup() else { return nil }
+        return token
     }
 
     public func write(_ token: String) throws {

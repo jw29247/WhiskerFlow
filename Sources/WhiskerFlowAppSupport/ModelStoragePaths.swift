@@ -1,105 +1,60 @@
 import Foundation
 
-public struct WhisperKitLocalAssets: Sendable {
-    public let modelFolder: URL
-    public let tokenizerDownloadBase: URL
-}
-
 public enum ModelStoragePaths {
-    public static func whisperKitDownloadBase(in applicationSupport: URL) -> URL {
+    /// WhiskerFlow's own model folder in Application Support.
+    public static func modelsBase(in applicationSupport: URL) -> URL {
         applicationSupport
             .appendingPathComponent("WhiskerFlow", isDirectory: true)
             .appendingPathComponent("Models", isDirectory: true)
     }
 
-    public static func prepareWhisperKitDownloadBase(
-        fileManager: FileManager = .default
-    ) throws -> URL {
-        guard let applicationSupport = fileManager.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first else {
-            throw CocoaError(.fileNoSuchFile)
+    /// Where WhisperKit kept its Core ML models and tokenizers. Whisper was
+    /// removed, so these are dead weight (often several GB). Parakeet keeps
+    /// its models elsewhere, and other apps' Whisper models
+    /// (in the shared Hugging Face folder) are never touched.
+    public static func removedWhisperFolders(in applicationSupport: URL) -> [URL] {
+        let models = modelsBase(in: applicationSupport).appendingPathComponent("models", isDirectory: true)
+        return [
+            models.appendingPathComponent("argmaxinc/whisperkit-coreml", isDirectory: true),
+            models.appendingPathComponent("openai", isDirectory: true),
+        ]
+    }
+
+    /// Deletes the removed Whisper downloads and returns the bytes freed. Safe
+    /// to call on every launch: once they are gone it only checks two paths.
+    @discardableResult
+    public static func removeWhisperModels(applicationSupport: URL, fileManager: FileManager = .default) -> Int64 {
+        var freed: Int64 = 0
+        for folder in removedWhisperFolders(in: applicationSupport) where fileManager.fileExists(atPath: folder.path) {
+            let size = allocatedSize(of: folder, fileManager: fileManager)
+            if (try? fileManager.removeItem(at: folder)) != nil { freed += size }
         }
-        let directory = whisperKitDownloadBase(in: applicationSupport)
-        try fileManager.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-        return directory
+        // Drop the folders left empty, never anything that still has contents.
+        var parent = modelsBase(in: applicationSupport).appendingPathComponent("models/argmaxinc", isDirectory: true)
+        for _ in 0..<3 {
+            guard let contents = try? fileManager.contentsOfDirectory(atPath: parent.path),
+                  contents.allSatisfy({ $0 == ".DS_Store" }) else { break }
+            try? fileManager.removeItem(at: parent)
+            parent.deleteLastPathComponent()
+        }
+        return freed
     }
 
-    public static func prepareLocalAssets(
-        modelIdentifier: String,
-        fileManager: FileManager = .default
-    ) throws -> WhisperKitLocalAssets? {
-        guard let applicationSupport = fileManager.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first,
-        let documents = fileManager.urls(
-            for: .documentDirectory,
-            in: .userDomainMask
-        ).first else { return nil }
-        return try prepareLocalAssets(
-            modelIdentifier: modelIdentifier,
-            applicationSupport: applicationSupport,
-            documents: documents,
-            fileManager: fileManager
-        )
+    public static func removeWhisperModels(fileManager: FileManager = .default) -> Int64 {
+        guard let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return 0
+        }
+        return removeWhisperModels(applicationSupport: applicationSupport, fileManager: fileManager)
     }
 
-    public static func prepareLocalAssets(
-        modelIdentifier: String,
-        applicationSupport: URL,
-        documents: URL,
-        fileManager: FileManager = .default
-    ) throws -> WhisperKitLocalAssets? {
-        let localBase = whisperKitDownloadBase(in: applicationSupport)
-        try fileManager.createDirectory(at: localBase, withIntermediateDirectories: true)
-
-        let modelRelativePath = "models/argmaxinc/whisperkit-coreml/\(modelIdentifier)"
-        let tokenizerIdentifier = modelIdentifier.replacingOccurrences(
-            of: "openai_whisper-",
-            with: "whisper-"
-        )
-        let tokenizerRelativePath = "models/openai/\(tokenizerIdentifier)"
-        let localModel = localBase.appendingPathComponent(modelRelativePath, isDirectory: true)
-        let localTokenizer = localBase.appendingPathComponent(tokenizerRelativePath, isDirectory: true)
-        let legacyBase = documents.appendingPathComponent("huggingface", isDirectory: true)
-
-        try copyDirectoryIfNeeded(
-            from: legacyBase.appendingPathComponent(modelRelativePath, isDirectory: true),
-            to: localModel,
-            fileManager: fileManager
-        )
-        try copyDirectoryIfNeeded(
-            from: legacyBase.appendingPathComponent(tokenizerRelativePath, isDirectory: true),
-            to: localTokenizer,
-            fileManager: fileManager
-        )
-
-        guard fileManager.fileExists(atPath: localModel.path),
-              fileManager.fileExists(
-                atPath: localTokenizer.appendingPathComponent("tokenizer.json").path
-              ) else { return nil }
-        return WhisperKitLocalAssets(
-            modelFolder: localModel,
-            tokenizerDownloadBase: localBase
-        )
-    }
-
-    private static func copyDirectoryIfNeeded(
-        from source: URL,
-        to destination: URL,
-        fileManager: FileManager
-    ) throws {
-        guard !fileManager.fileExists(atPath: destination.path),
-              fileManager.fileExists(atPath: source.path) else { return }
-        try fileManager.createDirectory(
-            at: destination.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try fileManager.copyItem(at: source, to: destination)
+    private static func allocatedSize(of folder: URL, fileManager: FileManager) -> Int64 {
+        guard let enumerator = fileManager.enumerator(
+            at: folder, includingPropertiesForKeys: [.totalFileAllocatedSizeKey], options: []
+        ) else { return 0 }
+        var total: Int64 = 0
+        for case let url as URL in enumerator {
+            total += Int64((try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?.totalFileAllocatedSize ?? 0)
+        }
+        return total
     }
 }

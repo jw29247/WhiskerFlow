@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import Foundation
 @preconcurrency import Speech
 import WhiskerFlowAppSupport
@@ -31,8 +32,19 @@ actor AppleSpeechEngine: Sendable {
         if recognizer.supportsOnDeviceRecognition {
             speechRequest.requiresOnDeviceRecognition = true
         }
+        // Dictionary words bias the recogniser towards those spellings. Apple
+        // recommends at most 100 phrases; more are accepted but dilute each one.
+        let terms = request.hints.terms(for: .appleSpeech)
+        if !terms.isEmpty {
+            speechRequest.contextualStrings = Array(terms.prefix(Self.maximumContextualStrings))
+        }
 
-        return try await withTimeout(seconds: 90) {
+        // File recognition runs at roughly real time on older Macs, so a long
+        // recording (typically a fallback after the primary engine failed) needs
+        // a budget that follows its length.
+        let timeout = DecodeTimeoutPolicy.appleSpeechTimeout(
+            forAudioSeconds: Self.audioSeconds(at: request.audioURL) ?? 0)
+        return try await withTimeout(seconds: timeout) {
             let taskBox = SpeechRecognitionTaskBox()
             return try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { continuation in
@@ -64,6 +76,15 @@ actor AppleSpeechEngine: Sendable {
                 taskBox.cancel()
             }
         }
+    }
+
+    static let maximumContextualStrings = 100
+
+    private static func audioSeconds(at url: URL) -> Double? {
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        let sampleRate = file.fileFormat.sampleRate
+        guard sampleRate > 0 else { return nil }
+        return Double(file.length) / sampleRate
     }
 
     /// Map a bare language code (e.g. "en") to a sensible recognizer locale.

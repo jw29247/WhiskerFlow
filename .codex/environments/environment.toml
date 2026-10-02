@@ -1,3 +1,3 @@
 [[actions]]
 name = "Run"
-command = "./script/build_and_run.sh --verify"
+command = """SIGN_IDENTITY=70C7AE332EB4AB53C5DF2D22E46302FB6E3A2EA2 BUNDLE_IDENTIFIER_OVERRIDE=agency.thatworks.WhiskerFlow BUNDLE_NAME_OVERRIDE='WhiskerFlow 2' APP_BUNDLE="$PWD/.build/WhiskerFlow 2 Render Safe.app" ./script/build_and_run.sh --verify"""

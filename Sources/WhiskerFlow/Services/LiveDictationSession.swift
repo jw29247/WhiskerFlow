@@ -2,14 +2,11 @@ import Foundation
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
-/// Live, low-latency dictation using the app-owned AVAudioEngine capture service.
+/// Dictation capture using the app-owned HAL input capture service.
 ///
-/// While the key is held, audio streams into a 16 kHz float buffer and a decode
-/// loop continuously re-transcribes only the audio after the last confirmed cut,
-/// so the cost per pass stays flat however long the hold runs. The text before a
-/// cut is kept verbatim and the freshest transcript is the confirmed prefix plus
-/// the current window, ready the instant the key is released. On `finish()` we
-/// return that transcript (plus the raw samples, for history / retry).
+/// While the key is held, audio streams into a 16 kHz float buffer and,
+/// optionally, a preview loop shows the latest words in the HUD. On `finish()`
+/// the captured samples are returned for the release-time decode.
 @MainActor
 final class LiveDictationSession {
     private let transcription: TranscriptionService
@@ -23,198 +20,146 @@ final class LiveDictationSession {
     /// Called after AVFoundation reports that the active input configuration changed.
     var onConfigurationChange: (() -> Void)?
 
-    private var decodeLoop: Task<Void, Never>?
+    private var previewLoop: Task<Void, Never>?
     private var language: String?
-    private var model: WhisperModel = .tiny
-    private var vocabulary = CompiledVocabulary(Vocabulary())
+    private var vocabulary = Vocabulary()
+    /// Compiled on first use, off the hotkey path, then reused for every partial.
+    private var compiledVocabulary: CompiledVocabulary?
+    private var tone: WritingTone = .formal
+    private var recognizeCorrections = false
     private var formatting = FormattingOptions()
-    private var confirmedText = ""
-    private var confirmedSampleCount = 0
-    private var windowText = ""
-    /// Absolute position in the capture buffer that the transcript reaches.
-    private var lastDecodedSampleCount = 0
+    /// Spool of the session in progress, known from `start()` so the caller can
+    /// file the audio for recovery before the release-time decode runs.
+    private(set) var currentAudioURL: URL?
     private var isRunning = false
-    private var isStreaming = false
-    private var reportedDecodeFailure = false
-    /// Bumped by every `start()`. A decode pass that was in flight when the session
-    /// restarted belongs to the previous generation and must not touch the
-    /// transcript, so a late-returning decode can never resurrect an old loop or
-    /// mix its text into the new session.
+    /// Bumped by every `start()`. A preview that was in flight when the session
+    /// restarted belongs to the previous generation and must not reach the HUD.
     private var generation = 0
 
     private static let sampleRate = 16_000.0
-    /// Re-decode once this much new audio has accumulated since the last pass.
+    /// Preview again once this much new audio has accumulated since the last pass.
     private static let minNewSamples = Int(sampleRate * 0.4)
-    /// On release, if more than this much audio went undecoded (only happens when
-    /// decoding fell behind real time on a long hold), do one final clean pass.
-    private static let staleSampleThreshold = Int(sampleRate * 1.5)
+    /// Live preview decodes only the recent tail: the HUD shows the latest words,
+    /// and a window under Parakeet's 15 s model input stays a single pass.
+    private static let previewWindowSamples = Int(sampleRate * 12)
 
     init(transcription: TranscriptionService) {
         self.transcription = transcription
+        audioCapture.keepsCaptureReady = true
         audioCapture.onLevel = { [weak self] level, peak in self?.onLevel?(level, peak) }
         audioCapture.onConfigurationChange = { [weak self] in self?.onConfigurationChange?() }
     }
 
-    /// Begin capturing and (if `streaming`) live-decoding. Throws if the mic
+    /// Begin capturing and (with a `previewEngine`) previewing. Throws if the mic
     /// engine can't start. Requires microphone permission to already be granted.
     func start(
         selection: AudioInputSelection,
         language: String?,
-        model: WhisperModel,
         vocabulary: Vocabulary,
         formatting: FormattingOptions,
-        streaming: Bool
-    ) throws {
+        tone: WritingTone = .formal,
+        recognizeCorrections: Bool = false,
+        previewEngine: TranscriptionEngineKind? = nil
+    ) async throws {
         self.language = language
-        self.model = model
-        self.vocabulary = CompiledVocabulary(vocabulary)
+        self.vocabulary = vocabulary
+        compiledVocabulary = nil
+        self.tone = tone
+        self.recognizeCorrections = recognizeCorrections
         self.formatting = formatting
         generation &+= 1
-        resetTranscript()
-        reportedDecodeFailure = false
-        isStreaming = streaming
+        currentAudioURL = nil
         do {
-            try audioCapture.start(selection: selection)
+            let audioURL = try AudioFileWriter.makeRecordingURL()
+            try await audioCapture.start(selection: selection, spoolTo: audioURL)
+            currentAudioURL = audioURL
             isRunning = true
         } catch {
             isRunning = false
-            isStreaming = false
             throw error
         }
 
-        if streaming {
-            startDecodeLoop(generation: generation)
+        if let previewEngine {
+            startPreviewLoop(engine: previewEngine, generation: generation)
         }
     }
 
-    /// Stop capture and return the freshest transcript plus the captured samples.
+    /// Stop capture and return the captured samples for the release-time decode.
+    ///
+    /// `storageFailed` means the recording file stopped accepting audio (for
+    /// example a full disk), so everything after that point is missing.
     func finish(
         reason: CaptureStopReason = .userReleased
-    ) async -> (text: String, samples: [Float], conversionFailures: Int) {
-        let myGeneration = generation
+    ) -> (samples: [Float], conversionFailures: Int, audioURL: URL?, totalSampleCount: Int, storageFailed: Bool) {
         isRunning = false
-        let loop = decodeLoop
-        decodeLoop = nil
+        // Not awaited: the release-time decode waits only for a preview already
+        // inside the model, never for the loop to wind down.
+        previewLoop?.cancel()
+        previewLoop = nil
+        currentAudioURL = nil
         let captured = audioCapture.stop(reason: reason)
-        await loop?.value
-        let samples = captured.samples
-
-        if isStreaming, generation == myGeneration {
-            // A confirm pass throws away the window text it had already decoded past
-            // the cut, so an empty window with audio still after it always needs one
-            // more pass — otherwise a release right after the final phrase loses it.
-            // The other case is decoding having lagged badly on a long hold.
-            let undecoded = samples.count - lastDecodedSampleCount
-            if windowText.isEmpty || undecoded > Self.staleSampleThreshold {
-                await decodeWindow(
-                    Array(samples[min(confirmedSampleCount, samples.count)...]),
-                    generation: myGeneration
-                )
-            }
-        }
-
-        // A `start()` during the teardown (the finish watchdog releases the
-        // coordinator without waiting for us) means the state now belongs to a newer
-        // session: hand back nothing rather than wiping its transcript.
-        guard generation == myGeneration else {
-            return ("", samples, captured.conversionFailureCount)
-        }
-
-        let finalText = emittedText()
-        resetTranscript()
         onLevel?(0, 0)
-        return (finalText, samples, captured.conversionFailureCount)
+        return (captured.samples, captured.conversionFailureCount, captured.audioURL,
+                captured.totalSampleCount, captured.storageFailed)
+    }
+
+    /// Refines the tone once a slower lookup (a browser tab) resolves. Applies to
+    /// previews from now on.
+    func setTone(_ tone: WritingTone) {
+        self.tone = tone
+    }
+
+    /// Build the next capture's engine in the background so a hotkey press only
+    /// has to start it.
+    func prepareCapture(selection: AudioInputSelection) {
+        audioCapture.prepareCapture(for: selection)
+    }
+
+    func invalidatePreparedCapture() {
+        audioCapture.invalidatePreparedCapture()
     }
 
     /// Abort without producing a transcript (e.g. permission revoked mid-flight).
     func cancel() {
         isRunning = false
         generation &+= 1
-        decodeLoop?.cancel()
-        decodeLoop = nil
+        previewLoop?.cancel()
+        previewLoop = nil
         audioCapture.cancel()
-        resetTranscript()
+        currentAudioURL = nil
         onLevel?(0, 0)
     }
 
-    // MARK: - Decode loop
+    // MARK: - Preview
 
-    private func startDecodeLoop(generation myGeneration: Int) {
-        decodeLoop = Task { @MainActor [weak self] in
+    /// Show what is being heard, so the user can see dictation working.
+    /// Display only — never part of the result.
+    private func startPreviewLoop(engine: TranscriptionEngineKind, generation myGeneration: Int) {
+        previewLoop = Task { @MainActor [weak self] in
+            var lastPreviewed = 0
             while let self, self.isRunning, self.generation == myGeneration, !Task.isCancelled {
                 let total = self.audioCapture.sampleCount()
-                if total - self.lastDecodedSampleCount >= Self.minNewSamples {
-                    self.lastDecodedSampleCount = total
-                    let window = self.audioCapture.snapshotTail(from: self.confirmedSampleCount)
-                    await self.decodeWindow(window, generation: myGeneration)
-                    await self.confirmSettledPrefix(of: window, generation: myGeneration)
-                } else {
-                    try? await Task.sleep(nanoseconds: 80_000_000) // 80 ms
+                guard total - lastPreviewed >= Self.minNewSamples else {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    continue
                 }
+                lastPreviewed = total
+                let window = self.audioCapture.snapshotTail(from: max(0, total - Self.previewWindowSamples))
+                guard let text = await self.transcription.previewDictation(
+                    samples: window, kind: engine, language: self.language),
+                    !text.isEmpty, !Task.isCancelled, self.isRunning, self.generation == myGeneration
+                else { continue }
+                self.onPartial?(AssistantTextProcessing.process(
+                    text, tone: self.tone, vocabulary: self.compiled(),
+                    formatting: self.formatting, recognizeCorrections: self.recognizeCorrections))
             }
         }
     }
 
-    private func decodeWindow(_ window: [Float], generation myGeneration: Int) async {
-        guard let text = await decodedText(for: window), !text.isEmpty else { return }
-        guard generation == myGeneration else { return }
-        windowText = text
-        onPartial?(emittedText())
+    private func compiled() -> CompiledVocabulary {
+        if let compiledVocabulary { return compiledVocabulary }
+        let compiled = CompiledVocabulary(vocabulary)
+        compiledVocabulary = compiled
+        return compiled
     }
-
-    /// Formatting is applied to the joined transcript, never to a lone window: a
-    /// window edge is not a sentence edge, so formatting fragments would
-    /// capitalise mid-sentence at every seam and split spoken commands in half.
-    private func emittedText() -> String {
-        TranscriptFormatter.format(
-            LiveDecodeWindowPolicy.join(confirmedText, windowText),
-            options: formatting
-        )
-    }
-
-    /// Fold everything up to a mid-silence cut into the confirmed prefix so the
-    /// next window starts short again. The prefix is decoded on its own: the
-    /// window text can cover audio past the cut, which stays unconfirmed and is
-    /// dropped here — `finish()` re-decodes an empty window's tail for exactly that
-    /// reason, so a release seconds after a cut still keeps the words spoken since.
-    private func confirmSettledPrefix(of window: [Float], generation myGeneration: Int) async {
-        guard let cut = LiveDecodeWindowPolicy.cutPoint(
-            windowSampleCount: window.count,
-            frameRMS: LiveDecodeWindowPolicy.frameRMS(window)
-        ), let text = await decodedText(for: Array(window[..<cut])) else { return }
-        guard generation == myGeneration else { return }
-
-        confirmedText = LiveDecodeWindowPolicy.join(confirmedText, text)
-        confirmedSampleCount += cut
-        windowText = ""
-        lastDecodedSampleCount = confirmedSampleCount
-    }
-
-    private func decodedText(for samples: [Float]) async -> String? {
-        guard !samples.isEmpty else { return nil }
-        do {
-            let result = try await transcription.transcribeSamples(samples, language: language, model: model)
-            return vocabulary.apply(to: result.text)
-        } catch {
-            // Partial decode failures are non-fatal — keep the previous text. The
-            // decode loop runs several times a second, so report once per session.
-            if !reportedDecodeFailure {
-                reportedDecodeFailure = true
-                DiagnosticsService.capture(
-                    error: error,
-                    category: "model",
-                    code: "live_decode_failed"
-                )
-            }
-            return nil
-        }
-    }
-
-    private func resetTranscript() {
-        confirmedText = ""
-        confirmedSampleCount = 0
-        windowText = ""
-        lastDecodedSampleCount = 0
-    }
-
 }

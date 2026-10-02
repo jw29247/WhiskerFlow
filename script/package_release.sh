@@ -17,8 +17,6 @@ export COPYFILE_DISABLE=1
 CONFIGURATION=release "$ROOT_DIR/script/bundle_app.sh" "$APP_BUNDLE" >/dev/null
 
 cp "$ROOT_DIR/Distribution/README.txt" "$STAGING_DIR/README.txt"
-cp "$ROOT_DIR/Distribution/Install Whisper.command" "$STAGING_DIR/Install Whisper.command"
-chmod +x "$STAGING_DIR/Install Whisper.command"
 ln -s /Applications "$STAGING_DIR/Applications"
 
 ditto -c -k --keepParent --norsrc "$STAGING_DIR" "$ZIP_PATH"

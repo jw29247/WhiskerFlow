@@ -1,5 +1,32 @@
 import Foundation
 
+/// A bounded calendar query for automatic capture.
+///
+/// Atlas bounds schedule reads and returns events in chronological order. A
+/// dense calendar can otherwise fill the result with stale events from the
+/// beginning of a wide look-back window before the current meeting is read.
+public struct MeetingScheduleWindow: Equatable, Sendable {
+    public let fromMs: Int64
+    public let toMs: Int64
+
+    public init(fromMs: Int64, toMs: Int64) {
+        self.fromMs = fromMs
+        self.toMs = toMs
+    }
+
+    public static func automaticCapture(
+        nowMs: Int64,
+        lookaheadMs: Int64,
+        // Keep a bounded late-poll recovery window. A short poll or a local
+        // app rebuild can otherwise miss a live meeting that has already
+        // started, while an unbounded look-back lets dense task blocks crowd
+        // real calls out of Atlas's bounded schedule response.
+        lookbackMs: Int64 = 30 * 60 * 1_000
+    ) -> Self {
+        Self(fromMs: nowMs - lookbackMs, toMs: nowMs + lookaheadMs)
+    }
+}
+
 public enum MeetingAudioTrack: String, Codable, CaseIterable, Hashable, Sendable {
     case microphone
     case system
@@ -76,10 +103,18 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
     public let occurredAtMs: Int64?
     public var atlasMeetingID: String?
     public var atlasArtifactID: String?
+    /// Atlas's opaque `wm1_` reference, when Atlas returns one. Reading the
+    /// meeting back (`notetaker.getMeeting`) requires it.
+    public var atlasMeetingReference: String?
     public var state: MeetingLocalRecordingState
     public var durationMs: Int64?
     public var sourceGapDetected: Bool
     public var chunks: [MeetingRecordingChunkDescriptor]
+    /// Failed delivery attempts that count toward the automatic retry limit.
+    /// Persisted so an app relaunch does not restart the budget.
+    public var deliveryFailureCount: Int
+    /// Automatic recovery skips this session until the user presses Retry.
+    public var awaitingManualRetry: Bool
 
     public init(
         sessionID: UUID,
@@ -94,7 +129,9 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
         state: MeetingLocalRecordingState = .recording,
         durationMs: Int64? = nil,
         sourceGapDetected: Bool = false,
-        chunks: [MeetingRecordingChunkDescriptor] = []
+        chunks: [MeetingRecordingChunkDescriptor] = [],
+        deliveryFailureCount: Int = 0,
+        awaitingManualRetry: Bool = false
     ) {
         self.sessionID = sessionID
         self.meetingID = meetingID
@@ -109,12 +146,15 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
         self.durationMs = durationMs
         self.sourceGapDetected = sourceGapDetected
         self.chunks = chunks
+        self.deliveryFailureCount = deliveryFailureCount
+        self.awaitingManualRetry = awaitingManualRetry
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionID, meetingID, createdAt, expectedChunkCounts, title, calendarEventID, occurredAtMs
-        case atlasMeetingID, atlasArtifactID
+        case atlasMeetingID, atlasArtifactID, atlasMeetingReference
         case state, durationMs, sourceGapDetected, chunks
+        case deliveryFailureCount, awaitingManualRetry
     }
 
     public init(from decoder: Decoder) throws {
@@ -128,19 +168,78 @@ public struct MeetingRecordingSessionManifest: Codable, Equatable, Sendable {
         self.occurredAtMs = try container.decodeIfPresent(Int64.self, forKey: .occurredAtMs)
         self.atlasMeetingID = try container.decodeIfPresent(String.self, forKey: .atlasMeetingID)
         self.atlasArtifactID = try container.decodeIfPresent(String.self, forKey: .atlasArtifactID)
+        self.atlasMeetingReference = try container.decodeIfPresent(String.self, forKey: .atlasMeetingReference)
         self.state = try container.decodeIfPresent(MeetingLocalRecordingState.self, forKey: .state) ?? .recording
         self.durationMs = try container.decodeIfPresent(Int64.self, forKey: .durationMs)
         self.sourceGapDetected = try container.decodeIfPresent(Bool.self, forKey: .sourceGapDetected) ?? false
         self.chunks = try container.decodeIfPresent([MeetingRecordingChunkDescriptor].self, forKey: .chunks) ?? []
+        self.deliveryFailureCount = try container.decodeIfPresent(Int.self, forKey: .deliveryFailureCount) ?? 0
+        self.awaitingManualRetry = try container.decodeIfPresent(Bool.self, forKey: .awaitingManualRetry) ?? false
     }
 
     public var pendingChunks: [MeetingRecordingChunkDescriptor] {
         chunks.filter { $0.uploadState == .pending }
     }
 
-    public mutating func attachAtlasReferences(meetingID: String, artifactID: String) {
+    public var isCompleteLocally: Bool {
+        expectedChunkCounts.allSatisfy { track, expected in
+            chunks.filter { $0.track == track }.count == expected
+        }
+    }
+
+    /// Whether the persisted chunks contain an observable gap in a source.
+    ///
+    /// Structure only: the lifecycle state is not considered here. Delivery
+    /// marks a session interrupted in `.recording` as a gap separately, and
+    /// missing tracks remain the caller's responsibility to report to Atlas.
+    public var hasStructuralSourceGap: Bool {
+        guard !sourceGapDetected else { return true }
+
+        for track in MeetingAudioTrack.allCases {
+            let descriptors = chunks
+                .filter { $0.track == track }
+                .sorted { $0.sequence < $1.sequence }
+            guard let first = descriptors.first else { continue }
+            guard first.sequence == 0, first.startMs == 0 else { return true }
+
+            for pair in zip(descriptors, descriptors.dropFirst()) {
+                let previous = pair.0
+                let current = pair.1
+                guard current.sequence == previous.sequence + 1,
+                      current.startMs <= previous.endMs else {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /// Put the newest interrupted recording at the front of recovery work.
+    ///
+    /// A previous process can leave more than one encrypted session behind.
+    /// Recovering an old, long recording first can delay the meeting that just
+    /// finished indefinitely, even though every session is independently
+    /// recoverable.
+    public static func orderedForRecovery(_ sessions: [Self]) -> [Self] {
+        sessions.sorted { lhs, rhs in
+            let lhsTimestamp = lhs.occurredAtMs
+                ?? Int64((lhs.createdAt.timeIntervalSince1970 * 1_000).rounded())
+            let rhsTimestamp = rhs.occurredAtMs
+                ?? Int64((rhs.createdAt.timeIntervalSince1970 * 1_000).rounded())
+            if lhsTimestamp != rhsTimestamp {
+                return lhsTimestamp > rhsTimestamp
+            }
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt > rhs.createdAt
+            }
+            return lhs.sessionID.uuidString > rhs.sessionID.uuidString
+        }
+    }
+
+    public mutating func attachAtlasReferences(meetingID: String, artifactID: String, meetingReference: String? = nil) {
         atlasMeetingID = meetingID
         atlasArtifactID = artifactID
+        if let meetingReference { atlasMeetingReference = meetingReference }
     }
 }
 
@@ -163,6 +262,14 @@ public struct MeetingSpeakerIdentity: Codable, Equatable, Sendable {
         resolution: .selfSpeaker
     )
 
+    /// Everyone on the call who isn't you, when no name is known.
+    public static let others = MeetingSpeakerIdentity(
+        key: "others",
+        displayName: "Them",
+        resolution: .unknown
+    )
+
+    /// Older meetings only: voices were once split into numbered speakers.
     public static func diarized(key: String, index: Int) -> MeetingSpeakerIdentity {
         let safeIndex = max(1, index)
         return MeetingSpeakerIdentity(

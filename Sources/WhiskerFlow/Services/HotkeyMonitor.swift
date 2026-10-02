@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import WhiskerFlowCore
 
 /// Watches for the configured push-to-talk key globally and locally, reporting
@@ -15,6 +16,8 @@ final class HotkeyMonitor {
     private var flagsGlobalMonitor: Any?
     private var keyLocalMonitor: Any?
     private var keyGlobalMonitor: Any?
+    private var trustObserver: NSObjectProtocol?
+    private var trustPoll: Timer?
 
     init(combo: KeyCombo, onChange: @escaping (Bool) -> Void) {
         self.matcher = HotkeyMatcher(combo: combo)
@@ -34,20 +37,20 @@ final class HotkeyMonitor {
     }
 
     func start() {
+        stop()
         flagsLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             self?.handleFlags(event)
             return event
-        }
-        flagsGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            Task { @MainActor in self?.handleFlags(event) }
         }
         keyLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
             self?.handleKey(event)
             return event
         }
-        keyGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
-            Task { @MainActor in self?.handleKey(event) }
-        }
+        installGlobalMonitors()
+        // Global key monitors only receive events if the process was trusted
+        // when they were created. Re-create them once Accessibility is granted,
+        // so a first-run grant works without relaunching.
+        if !AXIsProcessTrusted() { watchForAccessibilityGrant() }
     }
 
     func stop() {
@@ -58,6 +61,50 @@ final class HotkeyMonitor {
         flagsGlobalMonitor = nil
         keyLocalMonitor = nil
         keyGlobalMonitor = nil
+        stopWatchingAccessibility()
+    }
+
+    private func installGlobalMonitors() {
+        for monitor in [flagsGlobalMonitor, keyGlobalMonitor] {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+        flagsGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            Task { @MainActor in self?.handleFlags(event) }
+        }
+        keyGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
+            Task { @MainActor in self?.handleKey(event) }
+        }
+    }
+
+    /// `AXIsProcessTrusted` is a cheap local check. The distributed notification
+    /// usually arrives as the user flips the switch; the slow poll covers the
+    /// cases where it does not, and both stop as soon as the grant is seen.
+    private func watchForAccessibilityGrant() {
+        guard trustPoll == nil else { return }
+        trustObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.accessibility.api"), object: nil, queue: .main
+        ) { [weak self] _ in
+            // The trust database is updated just after the notification is posted.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                MainActor.assumeIsolated { self?.rearmIfTrusted() }
+            }
+        }
+        trustPoll = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.rearmIfTrusted() }
+        }
+    }
+
+    private func rearmIfTrusted() {
+        guard trustPoll != nil, AXIsProcessTrusted() else { return }
+        stopWatchingAccessibility()
+        installGlobalMonitors()
+    }
+
+    private func stopWatchingAccessibility() {
+        trustPoll?.invalidate()
+        trustPoll = nil
+        if let trustObserver { DistributedNotificationCenter.default().removeObserver(trustObserver) }
+        trustObserver = nil
     }
 
     private func handleFlags(_ event: NSEvent) {
