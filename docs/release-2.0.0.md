@@ -5,11 +5,11 @@ Branch `codex/whiskerflow-2-assistant` against `origin/main` (`b04a2c7`, the 0.8
 | | |
 | --- | --- |
 | Version | 2.0.0, build 22 (from 0.8.7, build 21). Set by `script/bump_version.sh` |
-| Ahead of main | 53 commits; main has nothing the branch lacks |
-| Size | 317 files, +38,232 / −3,494 lines. About half is tests and validation records |
+| Ahead of main | 66 commits; main has nothing the branch lacks |
+| Size | 320 files, +38,950 / −3,501 lines. About half is tests and validation records |
 | Platform | Unchanged: Apple Silicon (arm64), macOS 14 and later |
 | Signing | Developer ID team G9U38P58ZY. The signed 2.0.0 candidate passes `verify_upgrade_identity.sh` against the installed app, so permissions carry over |
-| Tests | `swift test` 771 passed, 17 opt-in skips. `test_version_source.sh`, `test_bundle_app.sh` and `test_upgrade_identity.sh` pass |
+| Tests | CI (macOS 26, Xcode 26.6) on the review-fix head: `swift test` ran 784 tests, 0 failures, 15 opt-in skips. `test_version_source.sh`, `test_bundle_app.sh` and `test_upgrade_identity.sh` pass |
 
 ## What's new for users (release notes)
 
@@ -39,11 +39,29 @@ Branch `codex/whiskerflow-2-assistant` against `origin/main` (`b04a2c7`, the 0.8
 
 ## Must happen before anyone gets 2.0
 
-1. **Merge and deploy Atlas PR [#3697](https://github.com/thatworkagency/atlas/pull/3697).** Without it, sign-in fails for Finance and Contractor roles (they're locked out of dictation entirely), and the leaderboard shows "not available".
+1. **Deploy Atlas PR [#3697](https://github.com/thatworkagency/atlas/pull/3697)** (merged 2 October; confirm it's live). Without it, sign-in fails for Finance and Contractor roles (they're locked out of dictation entirely), and the leaderboard shows "not available".
    - After deploying, check that custom role presets have WhiskerFlow access.
    - Decide whether Contractors appear on the board.
-2. **Push this branch and merge it to `main`.** Local is 44 commits ahead of `origin/codex/whiskerflow-2-assistant`. Sparkle reads `appcast.xml` from `main`, so nothing reaches users until the release commit is there.
+2. **Merge PR #13 to `main`.** Sparkle reads `appcast.xml` from `main`, so nothing reaches users until the release commit is there.
 3. **Rotate the Atlas staging admin key** that leaked into a session log (see the leaderboard notes).
+4. **Make the release Mac able to build and sign 2.0.**
+   - Install Xcode 26.6, as CI uses, and select it with `sudo xcode-select -s /Applications/Xcode.app`. The code needs Swift 6.3. On 2 October the Mac had only Command Line Tools with Swift 6.2 and a mismatched SDK, and `swift build` failed.
+   - Check that `security find-identity -v -p codesigning` lists the Developer ID Application certificate. On 2 October it listed none.
+
+## Review fixes (2 October)
+
+Nine review comments on PR #13: eight fixed, one already handled by later commits.
+
+| Fix | Effect |
+| --- | --- |
+| Interrupted recordings count as a source gap | A session cut off by a crash or quit is never marked fully covered in Atlas (0.8.7 behaviour) |
+| "Not now" is honoured by scheduled capture | Declining the prompt for a calendar Meet call no longer lets the next schedule poll record it |
+| Long notes reach Atlas in full | Notes over 200 characters go as numbered bookmark parts; a note counts as sent, and can be deleted by retention, only when every part is in Atlas |
+| Audio is kept until the library copy is saved | A full disk or unwritable library no longer loses the local transcript; delivery retries instead |
+| Reused Meet links match the current event | Back-to-back meetings in one room get the right title and calendar event |
+| Call-end detection follows a prompt-started recording | Turning off "Ask to record" mid-call no longer leaves the recording running after the call |
+| A failed Keychain read is retried | A transient Keychain error no longer signs the user out (and blocks dictation) until restart |
+| Retried assistant captures keep their purpose | A failed quick capture becomes its draft on retry, not dictation. History's SQLite schema goes to v2; databases from earlier 2.0 test builds are upgraded in place |
 
 ## Release steps (from `main`, after the merge)
 
