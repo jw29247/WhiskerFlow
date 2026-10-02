@@ -119,6 +119,7 @@ enum UIPreview {
             let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: identifier))
             settings.showMenuBarExtra = false
             if mode == "toggle" { settings.recordingMode = .toggle; settings.delivery = .copyOnly }
+            if let language = argument("--ui-language=") { settings.language = language }
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(identifier, isDirectory: true)
             let store = TranscriptStore(fileURL: root.appendingPathComponent("transcripts.json"), removeAudioFile: { _ in })
             let samples = [

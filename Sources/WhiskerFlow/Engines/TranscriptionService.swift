@@ -18,6 +18,11 @@ struct MeetingAudioWindow: Sendable {
 actor TranscriptionService {
   private let parakeetTDTv3 = ParakeetTDTv3Engine()
   private let appleSpeech = AppleSpeechEngine()
+  /// `AppleDictationEngine` on macOS 26; stored untyped so the app still runs on 14.
+  private let appleDictationEngine: Any? = {
+    if #available(macOS 26.0, *) { return AppleDictationEngine() }
+    return nil
+  }()
   private var meetingSpeakerKit: SpeakerKit?
   /// The one in-flight SpeakerKit download/load; overlapping warm-ups and
   /// diarization join it instead of fetching pyannote twice into one folder.
@@ -44,6 +49,10 @@ actor TranscriptionService {
       }
     case .appleSpeech:
       return await appleSpeech.requestAuthorization()
+    case .appleDictation:
+      guard #available(macOS 26.0, *), let engine = appleDictationEngine as? AppleDictationEngine,
+            let language else { return false }
+      return (try? await engine.prepare(locale: language)) != nil
     }
   }
 
@@ -283,6 +292,11 @@ actor TranscriptionService {
       return try await parakeetTDTv3.transcribe(request)
     case .appleSpeech:
       return try await appleSpeech.transcribe(request)
+    case .appleDictation:
+      guard #available(macOS 26.0, *), let engine = appleDictationEngine as? AppleDictationEngine else {
+        throw TranscriptionError.engineUnavailable(.appleDictation)
+      }
+      return try await engine.transcribe(request, locale: request.language ?? "en-US")
     }
   }
 }

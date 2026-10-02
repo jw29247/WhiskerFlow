@@ -4,8 +4,14 @@ import Foundation
 public enum TranscriptionEngineKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case parakeetTDTv3
     case appleSpeech
+    /// Apple's on-device dictation model (macOS 26). Not chosen directly:
+    /// dictation in a language Parakeet doesn't speak is routed to it.
+    case appleDictation
 
     public var id: String { rawValue }
+
+    /// The engines offered in Settings.
+    public static let selectableCases: [TranscriptionEngineKind] = [.parakeetTDTv3, .appleSpeech]
 
     public static let defaultEngine: TranscriptionEngineKind = .parakeetTDTv3
 
@@ -30,6 +36,7 @@ public enum TranscriptionEngineKind: String, Codable, CaseIterable, Sendable, Id
         switch self {
         case .parakeetTDTv3: return "Parakeet TDT v3 (on-device)"
         case .appleSpeech: return "Apple Speech (built-in)"
+        case .appleDictation: return "Apple Dictation (on-device)"
         }
     }
 
@@ -38,6 +45,7 @@ public enum TranscriptionEngineKind: String, Codable, CaseIterable, Sendable, Id
         switch self {
         case .parakeetTDTv3: return "parakeet-tdt-0.6b-v3"
         case .appleSpeech: return "apple-speech"
+        case .appleDictation: return "apple-dictation-transcriber"
         }
     }
 
@@ -45,6 +53,7 @@ public enum TranscriptionEngineKind: String, Codable, CaseIterable, Sendable, Id
         switch self {
         case .parakeetTDTv3: return "Fast, accurate on-device dictation, recommended for near-instant results."
         case .appleSpeech: return "No download, fully offline, built into macOS."
+        case .appleDictation: return "Apple's on-device dictation model, for languages Parakeet doesn't cover."
         }
     }
 }
@@ -101,6 +110,7 @@ public struct RecognizerHints: Sendable, Equatable {
         switch engine {
         case .appleSpeech: return appleSpeech ? terms : []
         case .parakeetTDTv3: return parakeet ? terms : []
+        case .appleDictation: return []
         }
     }
 }

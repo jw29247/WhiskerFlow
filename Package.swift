@@ -70,7 +70,9 @@ let package = Package(
             resources: [.copy("Resources/shared-vocabulary.json")],
             // The on-device coach model ships with macOS 26. Weak-link it so the
             // app still launches on macOS 14 and 15, where the feature is hidden.
-            linkerSettings: [.unsafeFlags(["-Xlinker", "-weak_framework", "-Xlinker", "FoundationModels"])]
+            // Translation is weak-linked for the same reason (macOS 15 and later).
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-weak_framework", "-Xlinker", "FoundationModels",
+                                           "-Xlinker", "-weak_framework", "-Xlinker", "Translation"])]
         ),
         .testTarget(
             name: "WhiskerFlowCoreTests",

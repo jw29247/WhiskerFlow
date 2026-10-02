@@ -53,6 +53,16 @@ struct ContentView: View {
                             .buttonStyle(.plain).help("Dismiss").accessibilityLabel("Dismiss")
                     }.foregroundStyle(FlowStyle.ink).padding(15).background(FlowStyle.selection)
                 }
+                if let notice = appState.translationNotice {
+                    HStack(spacing: 12) {
+                        Label(notice, systemImage: "character.bubble").font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Open Settings") { openSettings() }
+                        Button { appState.translationNotice = nil } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.plain).help("Dismiss").accessibilityLabel("Dismiss")
+                    }.foregroundStyle(FlowStyle.ink).padding(15).background(FlowStyle.selection)
+                }
                 switch destination {
                 case .dictate:
                     DictationView(appState: appState, openSetup: { appState.onboarding.present() }) { record in

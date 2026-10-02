@@ -3,7 +3,7 @@ import Foundation
 /// The first-run setup screens, in order. Raw values are the only thing
 /// telemetry ever records about onboarding, so they must stay fixed words.
 public enum OnboardingStep: String, CaseIterable, Codable, Sendable, Comparable {
-    case welcome, permissions, microphone, shortcut, model, practice, extras, done
+    case welcome, permissions, microphone, shortcut, language, model, practice, extras, done
 
     public var index: Int { Self.allCases.firstIndex(of: self) ?? 0 }
 
@@ -22,6 +22,7 @@ public enum OnboardingStep: String, CaseIterable, Codable, Sendable, Comparable 
         case .permissions: return "Permissions"
         case .microphone: return "Microphone"
         case .shortcut: return "Shortcut"
+        case .language: return "Language"
         case .model: return "Speech model"
         case .practice: return "Practice"
         case .extras: return "Extras"
@@ -134,6 +135,8 @@ public struct OnboardingFlow: Equatable, Sendable {
         // A heard voice is meaningless once access is revoked.
         case .microphone: return conditions.microphoneGranted && progress.completed.contains(.microphone)
         case .shortcut: return progress.completed.contains(.shortcut)
+        // A language is always chosen (English unless changed), so Continue.
+        case .language: return true
         case .model: return conditions.modelReady
         case .practice: return progress.completed.contains(.practice)
         case .extras: return conditions.atlasConnected && conditions.meetingRecordingReady

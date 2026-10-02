@@ -19,6 +19,7 @@ struct OnboardingView: View {
                 case .permissions: OnboardingPermissionsStep(appState: appState)
                 case .microphone: OnboardingMicrophoneStep(appState: appState)
                 case .shortcut: OnboardingShortcutStep(appState: appState)
+                case .language: OnboardingLanguageStep(appState: appState)
                 case .model: OnboardingModelStep(appState: appState)
                 case .practice: OnboardingPracticeStep(appState: appState)
                 case .extras: OnboardingExtrasStep(appState: appState)

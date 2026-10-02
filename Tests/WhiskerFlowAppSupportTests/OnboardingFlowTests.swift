@@ -6,7 +6,7 @@ final class OnboardingFlowTests: XCTestCase {
     private let fresh = OnboardingConditions()
 
     func testStepsRunInTheSpecifiedOrder() {
-        XCTAssertEqual(OnboardingStep.allCases, [.welcome, .permissions, .microphone, .shortcut, .model, .practice, .extras, .done])
+        XCTAssertEqual(OnboardingStep.allCases, [.welcome, .permissions, .microphone, .shortcut, .language, .model, .practice, .extras, .done])
         XCTAssertEqual(OnboardingStep.welcome.next, .permissions)
         XCTAssertNil(OnboardingStep.done.next)
         XCTAssertNil(OnboardingStep.welcome.previous)
@@ -50,7 +50,7 @@ final class OnboardingFlowTests: XCTestCase {
         XCTAssertEqual(flow.markPassed(.shortcut), [], "passing twice records once")
         XCTAssertTrue(flow.isSatisfied(.shortcut, ready))
         // Continuing from a passed tested step does not record a second completion.
-        XCTAssertEqual(flow.advance(ready), [OnboardingTelemetryEvent(step: .model, outcome: .viewed)])
+        XCTAssertEqual(flow.advance(ready), [OnboardingTelemetryEvent(step: .language, outcome: .viewed)])
     }
 
     func testChangingWhatWasTestedRequiresTestingAgain() {
@@ -104,7 +104,7 @@ final class OnboardingFlowTests: XCTestCase {
         XCTAssertEqual(flow.jump(to: .practice), [])
         XCTAssertEqual(flow.jump(to: .model), [OnboardingTelemetryEvent(step: .model, outcome: .viewed)])
         flow.back()
-        XCTAssertEqual(flow.current, .shortcut)
+        XCTAssertEqual(flow.current, .language)
         XCTAssertEqual(flow.progress.furthest, .model, "going back keeps the furthest screen")
     }
 

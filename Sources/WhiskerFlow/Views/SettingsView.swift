@@ -97,10 +97,7 @@ struct SettingsView: View {
             }
 
             Section("Language") {
-                Picker("Language", selection: $appState.settings.language) {
-                    ForEach(Self.languages, id: \.code) { Text($0.name).tag($0.code) }
-                }
-                .onChange(of: appState.settings.language) { _, _ in appState.warmUpEngine() }
+                DictationLanguageControls(appState: appState)
             }
             Section("Output") {
                 Picker("When done", selection: $appState.settings.delivery) {
@@ -185,7 +182,7 @@ struct SettingsView: View {
         Form {
             Section("Transcription engine") {
                 Picker("Engine", selection: $appState.settings.engine) {
-                    ForEach(TranscriptionEngineKind.allCases) { Text($0.displayName).tag($0) }
+                    ForEach(TranscriptionEngineKind.selectableCases) { Text($0.displayName).tag($0) }
                 }
                 .onChange(of: appState.settings.engine) { _, _ in appState.warmUpEngine() }
                 Text(appState.settings.engine.blurb)
@@ -320,20 +317,6 @@ struct SettingsView: View {
         }
     }
 
-    static let languages: [(code: String, name: String)] = [
-        ("auto", "Auto-detect"),
-        ("en", "English"),
-        ("es", "Spanish"),
-        ("fr", "French"),
-        ("de", "German"),
-        ("it", "Italian"),
-        ("pt", "Portuguese"),
-        ("nl", "Dutch"),
-        ("ja", "Japanese"),
-        ("zh", "Chinese"),
-        ("ko", "Korean"),
-        ("ru", "Russian")
-    ]
 }
 
 private enum SettingsCategory: String, CaseIterable, Identifiable {

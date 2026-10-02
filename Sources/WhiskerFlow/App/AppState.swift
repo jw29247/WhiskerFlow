@@ -58,6 +58,8 @@ final class AppState {
     private struct TranscriptionJobConfiguration {
         let engine: TranscriptionEngineKind
         let language: String?
+        /// Which recogniser hears the chosen language, and whether it's translated.
+        var languagePlan = DictationLanguagePlan(language: "en", translateToEnglish: false)
         let vocabulary: Vocabulary
         let formatting: FormattingOptions
         let allowAppleFallback: Bool
@@ -137,6 +139,9 @@ final class AppState {
     private let atlasAuthSession = AtlasAuthSession()
     private let live: LiveDictationSession
     private let mediaPauser = DictationMediaPauser()
+    let translator = DictationTranslator()
+    /// Why the last dictation wasn't translated (a language still to download).
+    var translationNotice: String?
     private var devicePrepareTask: Task<Void, Never>?
     private let recordingCoordinator = RecordingCoordinator()
     private var pasteService: any TextDeliveryService
@@ -767,6 +772,7 @@ final class AppState {
 
     func warmUpEngine() {
         guard !UIPreview.isEnabled else { return }
+        prepareDictationLanguage()
         warmUpTask?.cancel()
         let engine = settings.engine
         let language = settings.resolvedLanguage
@@ -1275,8 +1281,9 @@ final class AppState {
                                                        language: configuration.language,
                                                        allowAppleFallback: false)
                 }
+                let english = await self.englishText(for: outcome.result.text, configuration: configuration)
                 let text = await Task.detached(priority: .userInitiated) {
-                    AssistantTextProcessing.process(outcome.result.text, tone: configuration.writing.tone,
+                    AssistantTextProcessing.process(english.text, tone: configuration.writing.tone,
                                                     vocabulary: configuration.vocabulary, formatting: configuration.formatting,
                                                     recognizeCorrections: configuration.recognizeCorrections)
                 }.value
@@ -1667,6 +1674,10 @@ final class AppState {
             ])
             activeRecordingConfiguration = configuration
             assistant.capturePurpose = .dictation
+            if let code = translationWarmUpLanguage {
+                let translator = translator
+                Task.detached(priority: .userInitiated) { await translator.warmUp(from: code) }
+            }
             if settings.pauseMediaWhileDictating {
                 mediaPauser.dictationStarted(inCall: meetingCapture.isCapturing || !meetingCapture.callDetector.activeCalls.isEmpty)
             }
@@ -2267,11 +2278,16 @@ final class AppState {
                 throw TranscriptionError.timedOut(seconds: Int(backstop))
             }
             lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "recognition", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - recognitionStarted) * 1000)"])
+            let translationStarted = ProcessInfo.processInfo.systemUptime
+            let english = await englishText(for: outcome.result.text, configuration: configuration)
+            if english.translated || english.notice != nil {
+                lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "translation", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - translationStarted) * 1000)", "outcome": english.translated ? "translated" : "kept"])
+            }
             let text_processingStarted = ProcessInfo.processInfo.systemUptime
             lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "text_processing", "session": "\(sessionID ?? record.id)"])
             let processed = await Task.detached(priority: .userInitiated) {
                 let started = ProcessInfo.processInfo.systemUptime
-                let text = AssistantTextProcessing.process(outcome.result.text, tone: configuration.writing.tone,
+                let text = AssistantTextProcessing.process(english.text, tone: configuration.writing.tone,
                     vocabulary: configuration.vocabulary, formatting: configuration.formatting,
                     recognizeCorrections: configuration.recognizeCorrections)
                 let completed = ProcessInfo.processInfo.systemUptime
@@ -2538,12 +2554,26 @@ final class AppState {
 
     private func makeTranscriptionConfiguration() -> TranscriptionJobConfiguration {
         let accountReady = assistant.synchronizeAccount()
+        let plan = settings.languagePlan
+        var engine = settings.engine
+        var language = settings.resolvedLanguage
+        var allowAppleFallback = settings.allowAppleFallback
+        if case .appleDictation(let locale) = plan.route, #available(macOS 26.0, *) {
+            engine = .appleDictation
+            language = locale
+            // The older Apple recogniser sends most languages to Apple's
+            // servers; nothing leaves the Mac, so there is no fallback here.
+            allowAppleFallback = false
+        }
+        var formatting = settings.formatting
+        formatting.language = plan.outputLanguage
         return TranscriptionJobConfiguration(
-            engine: settings.engine,
-            language: settings.resolvedLanguage,
+            engine: engine,
+            language: language,
+            languagePlan: plan,
             vocabulary: accountReady ? effectiveVocabulary : Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: dictionary.vocabulary),
-            formatting: settings.formatting,
-            allowAppleFallback: settings.allowAppleFallback,
+            formatting: formatting,
+            allowAppleFallback: allowAppleFallback,
             delivery: settings.delivery,
             playSounds: settings.playSounds,
             writing: assistant.resolveWritingStyle(AppContext(bundleIdentifier: pasteTargetApplication?.bundleIdentifier)),
@@ -2554,6 +2584,66 @@ final class AppState {
             clientReference: accountReady ? assistant.saved.selectedClient : nil,
             accountIdentity: accountReady ? assistant.saved.accountIdentity : nil
         )
+    }
+
+    /// Apple's speech model for the chosen language, if it isn't Parakeet's.
+    private(set) var languageModelState: LanguageModelState = .notNeeded
+
+    enum LanguageModelState: Equatable { case notNeeded, downloading, ready, unavailable }
+
+    /// Readies the chosen language: downloads Apple's speech model for it when
+    /// Parakeet doesn't speak it, and loads its translation model.
+    func prepareDictationLanguage() {
+        guard !UIPreview.isEnabled else { return }
+        if case .appleDictation(let locale) = settings.languagePlan.route {
+            languageModelState = .downloading
+            let transcription = transcription
+            Task { @MainActor [weak self] in
+                let ready = await transcription.prepare(kind: .appleDictation, language: locale)
+                guard let self, self.settings.languagePlan.route == .appleDictation(locale: locale) else { return }
+                self.languageModelState = ready ? .ready : .unavailable
+            }
+        } else {
+            languageModelState = .notNeeded
+        }
+        if let code = translationWarmUpLanguage {
+            let translator = translator
+            Task.detached(priority: .utility) { await translator.warmUp(from: code) }
+        }
+    }
+
+    /// The language to warm the translator for, when one is chosen.
+    private var translationWarmUpLanguage: String? {
+        if case .language(let code) = settings.languagePlan.translationSource { return code }
+        return nil
+    }
+
+    /// The transcript in English when the dictation language asks for it.
+    /// Text that already reads as English is left alone (bilingual people
+    /// switch). A failed translation keeps the words as heard, with a notice.
+    private func englishText(for text: String, configuration: TranscriptionJobConfiguration) async
+        -> (text: String, translated: Bool, notice: String?) {
+        guard let source = configuration.languagePlan.translationSource else { return (text, false, nil) }
+        let detected = DictationTextLanguage.detect(text)
+        if detected == "en" { return (text, false, nil) }
+        let code: String
+        switch source {
+        case .language(let chosen): code = chosen
+        case .detected:
+            guard let detected else { return (text, false, nil) }
+            code = detected
+        }
+        let name = Locale(identifier: "en").localizedString(forIdentifier: code) ?? code
+        do {
+            let english = try await translator.translate(text, from: code, displayName: name,
+                                                         keep: configuration.hints.terms)
+            return (english, true, nil)
+        } catch {
+            logger.warning("Translation failed", metadata: ["error.code": "\((error as NSError).code)"])
+            let notice = (error as? LocalizedError)?.errorDescription ?? "Couldn't translate into English; pasted as heard."
+            translationNotice = notice
+            return (text, false, notice)
+        }
     }
 
     private func canUpdateLifecycleUI(for sessionID: UUID?) -> Bool {
@@ -2586,6 +2676,10 @@ final class AppState {
                 + 2 * (queuedDecode + DecodeTimeoutPolicy.longFormTimeout(forAudioSeconds: seconds))
         case .appleSpeech:
             engineBudget = DecodeTimeoutPolicy.appleSpeechTimeout(forAudioSeconds: seconds)
+        case .appleDictation:
+            // A first use downloads the language's model.
+            engineBudget = DecodeTimeoutPolicy.modelPreparationWait
+                + DecodeTimeoutPolicy.appleSpeechTimeout(forAudioSeconds: seconds)
         }
         let fallbackBudget = allowAppleFallback && engine != .appleSpeech
             ? DecodeTimeoutPolicy.appleSpeechTimeout(forAudioSeconds: seconds) : 0

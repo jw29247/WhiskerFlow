@@ -6,8 +6,9 @@ final class TranscriptionEngineTests: XCTestCase {
         XCTAssertEqual(TranscriptionEngineKind.defaultEngine, .parakeetTDTv3)
     }
 
-    func testOnlyParakeetAndAppleSpeechRemain() {
-        XCTAssertEqual(TranscriptionEngineKind.allCases, [.parakeetTDTv3, .appleSpeech])
+    func testOnlyParakeetAndAppleSpeechAreOfferedInSettings() {
+        XCTAssertEqual(TranscriptionEngineKind.selectableCases, [.parakeetTDTv3, .appleSpeech])
+        XCTAssertEqual(TranscriptionEngineKind.engineForStoredPreferences(rawValue: "appleDictation"), .appleDictation)
     }
 
     func testStoredWhisperChoicesMoveToParakeet() {

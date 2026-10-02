@@ -267,6 +267,28 @@ struct OnboardingLevelBars: View {
 
 // MARK: - 4. Shortcut
 
+struct OnboardingLanguageStep: View {
+    @Bindable var appState: AppState
+
+    var body: some View {
+        VStack(spacing: 12) {
+            OnboardingHeading(symbol: nil, title: "Which language will you speak?",
+                              detail: "Tell WhiskerFlow once. It's faster than working it out every time, and you can change it in Settings.")
+            OnboardingCard {
+                DictationLanguageControls(appState: appState)
+            }
+            .frame(maxWidth: 520)
+        }
+        .onAppear {
+            // Start from the Mac's own language the first time.
+            if !appState.onboarding.flow.progress.completed.contains(.language), appState.settings.language == "en" {
+                let suggested = DictationLanguageCatalog.suggested()
+                if suggested != "en" { appState.settings.language = suggested }
+            }
+        }
+    }
+}
+
 struct OnboardingShortcutStep: View {
     @Bindable var appState: AppState
     @State private var monitor: HotkeyMonitor?

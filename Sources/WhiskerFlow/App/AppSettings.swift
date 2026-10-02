@@ -26,6 +26,8 @@ final class AppSettings {
             formatting.language = language
         }
     }
+    /// Write dictation in another language in English (on-device translation).
+    var translateToEnglish: Bool { didSet { defaults.set(translateToEnglish, forKey: Keys.translateToEnglish) } }
     var hotkey: HotkeyTrigger { didSet { defaults.set(hotkey.rawValue, forKey: Keys.hotkey) } }
     /// The key combination used when `hotkey == .custom`.
     var customHotkey: KeyCombo { didSet { persist(customHotkey, key: Keys.customHotkey) } }
@@ -171,8 +173,9 @@ final class AppSettings {
         // Whisper was removed: a stored Whisper engine moves to Parakeet, and
         // its model size and command-line settings are dropped.
         let storedEngine = defaults.string(forKey: Keys.engine)
+        let storedChoice = TranscriptionEngineKind.engineForStoredPreferences(rawValue: storedEngine)
         let resolvedEngine = Self.supportsParakeet
-            ? TranscriptionEngineKind.engineForStoredPreferences(rawValue: storedEngine)
+            ? (TranscriptionEngineKind.selectableCases.contains(storedChoice) ? storedChoice : .defaultEngine)
             : .appleSpeech
         engine = resolvedEngine
         if storedEngine != resolvedEngine.rawValue, storedEngine != nil {
@@ -181,6 +184,7 @@ final class AppSettings {
         for key in Keys.removedWhisperSettings { defaults.removeObject(forKey: key) }
         let initialLanguage = Self.migratedLanguage(from: defaults)
         language = initialLanguage
+        translateToEnglish = defaults.object(forKey: Keys.translateToEnglish) as? Bool ?? true
         hotkey = defaults.string(forKey: Keys.hotkey).flatMap(HotkeyTrigger.init) ?? .fn
         customHotkey = Self.loadCustomHotkey(from: defaults) ?? .default
         recordingMode = defaults.string(forKey: Keys.recordingMode).flatMap(RecordingMode.init) ?? .holdToTalk
@@ -236,6 +240,11 @@ final class AppSettings {
     /// Defaults follow docs/validation/2026-09-25-dictionary-biasing.md.
     static let defaultBiasAppleSpeech = true
     static let defaultBiasParakeet = false
+
+    /// How dictation in the chosen language becomes text.
+    var languagePlan: DictationLanguagePlan {
+        DictationLanguagePlan(language: language, translateToEnglish: translateToEnglish)
+    }
 
     var resolvedLanguage: String? {
         language.lowercased() == "auto" ? nil : language
@@ -366,6 +375,7 @@ final class AppSettings {
         static let recordingMode = "recordingMode"
         static let liveTranscription = "liveTranscription"
         static let pauseMediaWhileDictating = "pauseMediaWhileDictating"
+        static let translateToEnglish = "translateToEnglish"
         static let ignoreSpeakerAudio = "ignoreSpeakerAudio"
         static let voiceProcessingHungInputs = "voiceProcessingHungInputs"
         static let delivery = "delivery"
