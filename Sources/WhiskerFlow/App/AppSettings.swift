@@ -90,17 +90,29 @@ final class AppSettings {
         didSet { defaults.set(meetingTranscriptRetention.rawValue, forKey: Keys.meetingTranscriptRetention) }
     }
 
-    /// Keychain reads are synchronous securityd IPC, and this token is read on
-    /// every hotkey press and in several view bodies. Only this setter writes
-    /// it, so a read-through cache stays authoritative.
+    /// Keychain reads are synchronous securityd IPC. Only this setter writes
+    /// the token, so a read-through cache of a definite answer (the token, or
+    /// none) stays authoritative.
     @ObservationIgnored private var cachedAtlasDeviceToken: String?
 
     var atlasDeviceToken: String {
         get {
             if let cachedAtlasDeviceToken { return cachedAtlasDeviceToken }
-            let token = meetingTokenStore.read() ?? ""
-            cachedAtlasDeviceToken = token
-            return token
+            switch meetingTokenStore.lookup() {
+            case .found(let token):
+                cachedAtlasDeviceToken = token
+                return token
+            case .missing, .denied:
+                // A declined access prompt is an answer for this run; asking
+                // again on every read would repeat the prompt.
+                cachedAtlasDeviceToken = ""
+                return ""
+            case .unavailable(let status):
+                // Not cached: a locked Keychain is not a sign-out. The next
+                // read, at the latest when the app is next activated, retries.
+                logger.warning("Atlas token read failed", metadata: ["status": "\(status)"])
+                return ""
+            }
         }
         set {
             cachedAtlasDeviceToken = nil
