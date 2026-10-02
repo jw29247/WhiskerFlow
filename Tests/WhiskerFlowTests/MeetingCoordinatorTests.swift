@@ -52,6 +52,13 @@ final class MeetingCoordinatorTests: XCTestCase {
         )
     }
 
+    func testCallDetectionFollowsAPromptStartedRecordingAfterAskingIsTurnedOff() {
+        XCTAssertTrue(MeetingCallDetectionPolicy.shouldDetect(asksToRecordCalls: true, followsDetectedCall: false))
+        XCTAssertTrue(MeetingCallDetectionPolicy.shouldDetect(asksToRecordCalls: false, followsDetectedCall: true),
+                      "Only its call ending stops a prompt-started recording")
+        XCTAssertFalse(MeetingCallDetectionPolicy.shouldDetect(asksToRecordCalls: false, followsDetectedCall: false))
+    }
+
     func testRecoveryCanPublishBeforeAnyNewCaptureClaimsStatus() {
         XCTAssertTrue(
             MeetingStatusPublicationPolicy.canPublish(

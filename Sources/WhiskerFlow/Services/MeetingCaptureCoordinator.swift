@@ -335,14 +335,17 @@ final class MeetingCaptureCoordinator {
 
   private func updateCallDetection() {
     guard didStart else { return }
-    if settings.askToRecordCalls && Self.isSupportedMac {
+    let asks = settings.askToRecordCalls && Self.isSupportedMac
+    if MeetingCallDetectionPolicy.shouldDetect(asksToRecordCalls: asks, followsDetectedCall: activeDetectedCallID != nil) {
       callDetector.start()
     } else {
       callDetector.stop()
-      callPrompt = nil
-      promptedCallIDs.removeAll()
       // A stopped detector never reports these calls ending.
       declinedCalls.removeAll()
+    }
+    if !asks {
+      callPrompt = nil
+      promptedCallIDs.removeAll()
     }
   }
 
@@ -817,6 +820,8 @@ final class MeetingCaptureCoordinator {
     audioCapture = nil
     activeIntent = nil
     activeDetectedCallID = nil
+    // Detection kept running only to follow this call stops if asking is off.
+    updateCallDetection()
     capture.onMicrophoneSamples = nil
     speechSampler?.reset()
     status = .uploading
@@ -1364,6 +1369,15 @@ enum MeetingRecoveryPriority {
 enum MeetingRecoveryBatchOwnership {
   static func shouldClear(completing: UUID, current: UUID?) -> Bool {
     completing == current
+  }
+}
+
+enum MeetingCallDetectionPolicy {
+  /// A recording started from "Record this meeting?" has no calendar stop:
+  /// only its call ending stops it. Detection keeps running for it after
+  /// asking is turned off, or the microphone would record until stopped by hand.
+  static func shouldDetect(asksToRecordCalls: Bool, followsDetectedCall: Bool) -> Bool {
+    asksToRecordCalls || followsDetectedCall
   }
 }
 
