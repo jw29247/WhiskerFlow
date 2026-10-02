@@ -263,6 +263,14 @@ public struct MeetingSpeakerIdentity: Codable, Equatable, Sendable {
         resolution: .selfSpeaker
     )
 
+    /// Everyone on the call who isn't you, when no name is known.
+    public static let others = MeetingSpeakerIdentity(
+        key: "others",
+        displayName: "Them",
+        resolution: .unknown
+    )
+
+    /// Older meetings only: voices were once split into numbered speakers.
     public static func diarized(key: String, index: Int) -> MeetingSpeakerIdentity {
         let safeIndex = max(1, index)
         return MeetingSpeakerIdentity(

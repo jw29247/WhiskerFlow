@@ -215,6 +215,38 @@ final class MeetingCoordinatorTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: processingRoot.appendingPathComponent(sessionID.uuidString).path))
     }
 
+    /// Splitting the other voices apart came back as five speakers for a 1:1
+    /// huddle, so it was dropped: everyone who isn't you is "Them".
+    func testEveryoneButYouIsThem() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = EncryptedMeetingChunkStore(
+            rootURL: root.appendingPathComponent("recordings"),
+            keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))
+        )
+        let sessionID = UUID()
+        try store.beginSession(sessionID: sessionID, meetingID: nil, expectedChunkCounts: [.microphone: 2, .mixed: 2])
+        for track in [MeetingAudioTrack.microphone, .mixed] {
+            for sequence in 0..<2 {
+                _ = try store.writeChunk(sessionID: sessionID, track: track, sequence: sequence,
+                                         startMs: Int64(sequence * 10_000), endMs: Int64((sequence + 1) * 10_000),
+                                         plaintext: Data(repeating: 0, count: 640_000))
+            }
+        }
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { url, language in
+            var segments = [TranscriptionSegment(text: "my update is ready", start: 10, end: 14)]
+            if url.lastPathComponent.contains("-mixed-") {
+                segments.insert(TranscriptionSegment(text: "morning, how did it go", start: 1, end: 4), at: 0)
+                segments.append(TranscriptionSegment(text: "great, thanks", start: 15, end: 17))
+            }
+            return TranscriptionResult(text: segments.map(\.text).joined(separator: " "), segments: segments,
+                                       language: language, duration: 20)
+        }
+        let result = try await processor.process(manifest: store.loadManifest(sessionID: sessionID), store: store, language: "en")
+        XCTAssertEqual(result.turns.map(\.speaker.displayName), ["Them", "You", "Them"])
+        XCTAssertEqual(Set(result.turns.map(\.speaker.key)), ["others", "microphone"])
+    }
+
     func testCancelledWindowProcessingRemovesTemporaryFiles() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

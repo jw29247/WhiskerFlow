@@ -2,7 +2,6 @@ import AVFoundation
 import CryptoKit
 import Foundation
 import Logging
-import SpeakerKit
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
@@ -48,8 +47,10 @@ struct MeetingLocalProcessingProgress: Codable, Sendable {
 
 /// Post-meeting-only local processing. The canonical text comes from Parakeet
 /// over the mixed track; microphone transcription is used only as an explicit
-/// timing/text alignment signal for the `You` label. SpeakerKit supplies stable
-/// diarized labels for the remaining turns. No audio leaves this process.
+/// timing/text alignment signal for the `You` label. Everyone else is "Them",
+/// or their name where Google Meet's tiles showed who was speaking. Splitting
+/// the other voices apart (diarization) was dropped: a 1:1 huddle came back as
+/// five speakers, and two-hour calls as 34. No audio leaves this process.
 actor MeetingLocalProcessor {
   private static let audibleChunkRetryCount = 3
   private static let audibleChunkSubwindowCount = 2
@@ -63,21 +64,14 @@ actor MeetingLocalProcessor {
   private static let launchID = UUID()
 
   typealias MeetingTranscriber = @Sendable (URL, String?) async throws -> TranscriptionResult
-  typealias MeetingDiarizer = @Sendable (
-    @escaping @Sendable () async throws -> MeetingAudioWindow?
-  ) async throws -> [SpeakerSegment]
 
   private let transcribeMeeting: MeetingTranscriber
-  private let diarizeMeeting: MeetingDiarizer
   private let processingRoot: URL?
   private let transientRetryUnitNanoseconds: UInt64
 
   init(transcription: TranscriptionService, processingRoot: URL? = nil) {
     self.transcribeMeeting = { url, language in
       try await transcription.transcribeMeeting(audioURL: url, language: language)
-    }
-    self.diarizeMeeting = { nextWindow in
-      try await transcription.diarizeMeeting(nextWindow: nextWindow)
     }
     self.processingRoot = processingRoot
     self.transientRetryUnitNanoseconds = 1_000_000_000
@@ -86,11 +80,9 @@ actor MeetingLocalProcessor {
   init(
     processingRoot: URL,
     transcribeMeeting: @escaping MeetingTranscriber,
-    diarizeMeeting: @escaping MeetingDiarizer = { _ in [] },
     transientRetryUnitNanoseconds: UInt64 = 1_000_000_000
   ) {
     self.transcribeMeeting = transcribeMeeting
-    self.diarizeMeeting = diarizeMeeting
     self.processingRoot = processingRoot
     self.transientRetryUnitNanoseconds = transientRetryUnitNanoseconds
   }
@@ -143,12 +135,6 @@ actor MeetingLocalProcessor {
       selfTranscript = nil
     }
     try Task.checkCancellation()
-    let systemReader = MeetingSystemAudioWindowReader(manifest: manifest, store: store)
-
-    let diarized = await (try? diarizeMeeting {
-      try await systemReader.nextWindow()
-    }) ?? []
-    try Task.checkCancellation()
     let speakerEvidence = (try? store.loadSpeakerEvidence(sessionID: manifest.sessionID)) ?? []
     // The microphone is captured without echo cancellation: on speakers it
     // also hears remote participants. Loaded only if a fuzzy match needs it.
@@ -162,7 +148,7 @@ actor MeetingLocalProcessor {
           energy = .some(try? (MeetingTrackEnergyProfile(track: .microphone, manifest: manifest, store: store),
                                MeetingTrackEnergyProfile(track: .system, manifest: manifest, store: store)))
         }
-        // Unreadable energy fails closed to the diarized label.
+        // Unreadable energy fails closed to "Them".
         guard let profiles = energy ?? nil else { return false }
         return Self.microphoneDominates(segment, microphone: profiles.microphone, system: profiles.system)
       }) {
@@ -170,14 +156,8 @@ actor MeetingLocalProcessor {
       } else if !(selfTranscript?.segments ?? []).contains(where: { $0.end > segment.start && $0.start < segment.end }),
                 let named = MeetingSpeakerEvidenceMatcher.identity(startMs: startMs, endMs: endMs, evidence: speakerEvidence) {
         identity = named
-      } else if let diarizedSpeaker = diarizedSpeaker(
-        start: segment.start,
-        end: segment.end,
-        segments: diarized
-      ) {
-        identity = .diarized(key: "speaker-\(diarizedSpeaker + 1)", index: diarizedSpeaker + 1)
       } else {
-        identity = .unknown(key: "unknown")
+        identity = .others
       }
       return MeetingSpeakerTurn(
         startMs: startMs,
@@ -689,20 +669,6 @@ actor MeetingLocalProcessor {
     return microphoneEnergy >= Self.selfDominanceRatio * systemEnergy
   }
 
-  private func diarizedSpeaker(
-    start: Double,
-    end: Double,
-    segments: [SpeakerSegment]
-  ) -> Int? {
-    let best = segments.compactMap { segment -> (Int, Double)? in
-      guard let speakerID = segment.speaker.speakerId else { return nil }
-      let overlap = max(
-        0, min(end, Double(segment.endTime)) - max(start, Double(segment.startTime)))
-      return overlap > 0 ? (speakerID, overlap) : nil
-    }.max { $0.1 < $1.1 }
-    return best?.0
-  }
-
   private func normalize(_ value: String) -> String {
     value.lowercased()
       .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
@@ -868,50 +834,3 @@ enum MeetingTranscriptionWindowPolicy {
   }
 }
 
-private actor MeetingSystemAudioWindowReader {
-  private static let sampleRate = 16_000.0
-  private static let windowSampleCount = 30 * Int(sampleRate)
-
-  private let manifest: MeetingRecordingSessionManifest
-  private let store: EncryptedMeetingChunkStore
-  private let descriptors: [MeetingRecordingChunkDescriptor]
-  private var descriptorIndex = 0
-  private var pendingSamples: [Float] = []
-  private var pendingStartMs: Int64?
-
-  init(manifest: MeetingRecordingSessionManifest, store: EncryptedMeetingChunkStore) {
-    self.manifest = manifest
-    self.store = store
-    self.descriptors = manifest.chunks
-      .filter { $0.track == .system }
-      .sorted { $0.sequence < $1.sequence }
-  }
-
-  func nextWindow() throws -> MeetingAudioWindow? {
-    while pendingSamples.count < Self.windowSampleCount, descriptorIndex < descriptors.count {
-      let descriptor = descriptors[descriptorIndex]
-      descriptorIndex += 1
-      let data = try store.readChunk(sessionID: manifest.sessionID, descriptor: descriptor)
-      guard data.count % MemoryLayout<Float>.size == 0 else {
-        throw TranscriptionError.underlying("Meeting audio chunk is not aligned")
-      }
-      if pendingStartMs == nil { pendingStartMs = descriptor.startMs }
-      pendingSamples.append(contentsOf: data.withUnsafeBytes { rawBuffer in
-        Array(rawBuffer.bindMemory(to: Float.self))
-      })
-    }
-
-    guard !pendingSamples.isEmpty, let startMs = pendingStartMs else { return nil }
-    let count = min(Self.windowSampleCount, pendingSamples.count)
-    let samples = Array(pendingSamples.prefix(count))
-    pendingSamples.removeFirst(count)
-    if pendingSamples.isEmpty {
-      pendingStartMs = nil
-    } else {
-      pendingStartMs = Int64(
-        (Double(startMs) + Double(count) / Self.sampleRate * 1_000).rounded()
-      )
-    }
-    return MeetingAudioWindow(offsetSeconds: Double(startMs) / 1_000, samples: samples)
-  }
-}

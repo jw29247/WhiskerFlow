@@ -13,10 +13,6 @@ let package = Package(
         .library(name: "WhiskerFlowAppSupport", targets: ["WhiskerFlowAppSupport"])
     ],
     dependencies: [
-        // SpeakerKit (meeting diarization) ships in Argmax's OSS package. Only
-        // SpeakerKit is linked; WhisperKit is not used. Server targets are
-        // disabled by default upstream, so no cloud service comes with it.
-        .package(url: "https://github.com/argmaxinc/argmax-oss-swift", exact: "1.1.0"),
         // Parakeet TDT v3 provides the fast, high-quality on-device default.
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.6"),
         // In-app auto-updates (appcast + EdDSA-signed updates). Sparkle ships as a
@@ -60,7 +56,6 @@ let package = Package(
                 "WhiskerFlowAppSupport",
                 "WhiskerFlowObjCSupport",
                 .product(name: "FluidAudio", package: "FluidAudio"),
-                .product(name: "SpeakerKit", package: "argmax-oss-swift"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "Sentry", package: "sentry-cocoa"),
                 .product(name: "Logging", package: "swift-log"),

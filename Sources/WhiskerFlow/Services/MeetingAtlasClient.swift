@@ -316,7 +316,10 @@ final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendabl
                     // Atlas's contract value for the self-attributed label;
                     // it names no recogniser (transcription is Parakeet).
                     case .selfSpeaker: return "whisperkit"
-                    case .diarized, .unknown: return "speakerkit"
+                    case .diarized: return "speakerkit"
+                    // "Them": no recogniser split it out. Atlas keeps only
+                    // the providers it knows and drops this one.
+                    case .unknown: return "whiskerflow"
                     case .googleMeet: return "google_meet"
                     case .manual: return "manual"
                     }

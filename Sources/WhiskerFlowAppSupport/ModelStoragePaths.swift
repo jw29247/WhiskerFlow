@@ -9,8 +9,8 @@ public enum ModelStoragePaths {
     }
 
     /// Where WhisperKit kept its Core ML models and tokenizers. Whisper was
-    /// removed, so these are dead weight (often several GB). SpeakerKit and
-    /// Parakeet keep their models elsewhere, and other apps' Whisper models
+    /// removed, so these are dead weight (often several GB). Parakeet keeps
+    /// its models elsewhere, and other apps' Whisper models
     /// (in the shared Hugging Face folder) are never touched.
     public static func removedWhisperFolders(in applicationSupport: URL) -> [URL] {
         let models = modelsBase(in: applicationSupport).appendingPathComponent("models", isDirectory: true)
