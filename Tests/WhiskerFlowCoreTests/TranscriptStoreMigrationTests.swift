@@ -140,6 +140,38 @@ final class TranscriptStoreMigrationTests: XCTestCase {
         XCTAssertNil(reloaded.records.first { $0.text == "none" }?.appCategory)
     }
 
+    func testCaptureIntentIsKeptAndAVersion1DatabaseIsUpgraded() throws {
+        // A history written by the first SQLite builds, before capture intents.
+        let existing = UUID()
+        let v1 = try SQLiteDatabase(url: directory.appendingPathComponent("transcripts.sqlite"))
+        try v1.execute("""
+            CREATE TABLE transcripts (
+                id TEXT PRIMARY KEY NOT NULL, created_at REAL NOT NULL, updated_at REAL, status TEXT NOT NULL,
+                error_message TEXT, text TEXT NOT NULL, raw_recognition TEXT, audio_path TEXT NOT NULL, duration REAL,
+                model TEXT, engine TEXT, language TEXT, app_category TEXT
+            )
+            """)
+        try v1.execute("""
+            INSERT INTO transcripts (id, created_at, status, text, audio_path)
+            VALUES ('\(existing.uuidString)', \(Date().timeIntervalSince1970 - 60), 'transcribed', 'kept', '')
+            """)
+        try v1.execute("PRAGMA user_version = 1")
+        v1.close()
+
+        let store = TranscriptStore(fileURL: jsonURL)
+        try store.load()
+        XCTAssertEqual(store.records.map(\.id), [existing])
+        XCTAssertNil(store.records.first?.captureIntent, "Records from before intents are dictation")
+        let intent = TranscriptCaptureIntent(purpose: .quickCapture, quickKind: .taskDraft, clientReference: "client-7")
+        let capture = TranscriptRecord(text: "", audioFilePath: "", status: .failed(errorMessage: "Timed out"), captureIntent: intent)
+        try store.add(capture)
+
+        let reloaded = TranscriptStore(fileURL: jsonURL)
+        try reloaded.load()
+        XCTAssertEqual(reloaded.records.first { $0.id == capture.id }?.captureIntent, intent)
+        XCTAssertEqual(reloaded.records.first { $0.id == existing.id }?.text, "kept")
+    }
+
     // MARK: - Scale
 
     private func largeHistory(count: Int, now: Date) -> [TranscriptRecord] {

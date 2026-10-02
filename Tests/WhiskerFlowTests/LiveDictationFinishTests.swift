@@ -78,4 +78,42 @@ final class RetryDeliveryTests: XCTestCase {
         XCTAssertTrue(paste.copies.isEmpty, "A retry must not overwrite the clipboard")
         XCTAssertEqual(state.status, .success("Retry saved to History"))
     }
+
+    /// A quick capture whose first transcription failed finishes as the draft
+    /// it was recorded for, not as dictation: nothing is pasted or copied.
+    @MainActor
+    func testRetriedQuickCaptureBecomesItsDraft() async throws {
+        let name = "WhiskerFlow.retry-tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        settings.allowAppleFallback = false
+        settings.delivery = .pasteAtCursor
+        settings.playSounds = false
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TranscriptStore(fileURL: root.appendingPathComponent("transcripts.json"))
+        let audio = root.appendingPathComponent("capture.wav")
+        try Data(count: 44 + 32_000).write(to: audio)
+        let record = TranscriptRecord(text: "", audioFilePath: audio.path, status: .failed(errorMessage: "Timed out"),
+                                      captureIntent: TranscriptCaptureIntent(purpose: .quickCapture, quickKind: .taskDraft))
+        try store.add(record)
+        let paste = CountingDeliveryService()
+        let state = AppState(settings: settings, store: store, pasteService: paste,
+                             transcription: FakeRecognizer(text: "Book the venue").service)
+        state.records = store.records
+
+        state.retry(record)
+        let deadline = Date().addingTimeInterval(20)
+        while state.records.contains(where: { $0.status != .transcribed }), Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTAssertEqual(state.assistant.saved.drafts.map(\.kind), [.taskDraft])
+        XCTAssertEqual(state.assistant.saved.drafts.first?.text.contains("Book the venue"), true)
+        XCTAssertTrue(paste.pastes.isEmpty, "A retry must never paste")
+        XCTAssertTrue(paste.copies.isEmpty, "A retry must not overwrite the clipboard")
+    }
 }

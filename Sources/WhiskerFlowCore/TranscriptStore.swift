@@ -19,6 +19,28 @@ public enum TranscriptStatus: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+/// What a capture other than plain dictation was for. Kept on its record so
+/// a retry finishes that job instead of treating the audio as dictation.
+public struct TranscriptCaptureIntent: Codable, Equatable, Hashable, Sendable {
+    public enum Purpose: String, Codable, Sendable {
+        /// Saved as an Assistant draft.
+        case quickCapture
+        /// A spoken instruction for the text selected at the time.
+        case selectionInstruction
+    }
+
+    public var purpose: Purpose
+    /// The draft a quick capture becomes.
+    public var quickKind: AssistantRecordKind?
+    public var clientReference: String?
+
+    public init(purpose: Purpose, quickKind: AssistantRecordKind? = nil, clientReference: String? = nil) {
+        self.purpose = purpose
+        self.quickKind = quickKind
+        self.clientReference = clientReference
+    }
+}
+
 public struct TranscriptRecord: Codable, Equatable, Hashable, Identifiable, Sendable {
     public let id: UUID
     public var text: String
@@ -35,6 +57,8 @@ public struct TranscriptRecord: Codable, Equatable, Hashable, Identifiable, Send
     public var updatedAt: Date?
     /// The app category the dictation was written for, for per-category insights.
     public var appCategory: AppCategory?
+    /// `nil` for dictation; otherwise the assistant capture this audio was for.
+    public var captureIntent: TranscriptCaptureIntent?
 
     public init(
         id: UUID = UUID(),
@@ -48,7 +72,8 @@ public struct TranscriptRecord: Codable, Equatable, Hashable, Identifiable, Send
         language: String? = nil,
         updatedAt: Date? = nil,
         rawRecognition: String? = nil,
-        appCategory: AppCategory? = nil
+        appCategory: AppCategory? = nil,
+        captureIntent: TranscriptCaptureIntent? = nil
     ) {
         self.id = id
         self.text = text
@@ -62,6 +87,7 @@ public struct TranscriptRecord: Codable, Equatable, Hashable, Identifiable, Send
         self.language = language
         self.updatedAt = updatedAt
         self.appCategory = appCategory
+        self.captureIntent = captureIntent
     }
 
     public var wordCount: Int { text.transcriptWordCount }
@@ -362,35 +388,41 @@ public final class TranscriptStore {
         return db
     }
 
-    private static let schemaVersion = 1
+    private static let schemaVersion = 2
 
     private static func openSchema(at url: URL) throws -> SQLiteDatabase {
         let db = try SQLiteDatabase(url: url)
         let version = try db.scalarInt("PRAGMA user_version")
         if version < schemaVersion {
             try db.transaction {
-                try db.execute("""
-                    CREATE TABLE IF NOT EXISTS transcripts (
-                        id TEXT PRIMARY KEY NOT NULL,
-                        created_at REAL NOT NULL,
-                        updated_at REAL,
-                        status TEXT NOT NULL,
-                        error_message TEXT,
-                        text TEXT NOT NULL,
-                        raw_recognition TEXT,
-                        audio_path TEXT NOT NULL,
-                        duration REAL,
-                        model TEXT,
-                        engine TEXT,
-                        language TEXT,
-                        app_category TEXT
-                    )
-                    """)
-                try db.execute("CREATE INDEX IF NOT EXISTS transcripts_created_at ON transcripts(created_at DESC, id DESC)")
+                if version < 1 { try Self.createVersion1(in: db) }
+                // 2: what an assistant capture was for, so a retry can finish it.
+                try db.execute("ALTER TABLE transcripts ADD COLUMN capture_intent TEXT")
                 try db.execute("PRAGMA user_version = \(schemaVersion)")
             }
         }
         return db
+    }
+
+    private static func createVersion1(in db: SQLiteDatabase) throws {
+        try db.execute("""
+            CREATE TABLE IF NOT EXISTS transcripts (
+                id TEXT PRIMARY KEY NOT NULL,
+                created_at REAL NOT NULL,
+                updated_at REAL,
+                status TEXT NOT NULL,
+                error_message TEXT,
+                text TEXT NOT NULL,
+                raw_recognition TEXT,
+                audio_path TEXT NOT NULL,
+                duration REAL,
+                model TEXT,
+                engine TEXT,
+                language TEXT,
+                app_category TEXT
+            )
+            """)
+        try db.execute("CREATE INDEX IF NOT EXISTS transcripts_created_at ON transcripts(created_at DESC, id DESC)")
     }
 
     /// Imports `transcripts.json` from before the SQLite store, then moves it to
@@ -455,10 +487,10 @@ public final class TranscriptStore {
         }
     }
 
-    private static let columns = "id, created_at, updated_at, status, error_message, text, raw_recognition, audio_path, duration, model, engine, language, app_category"
+    private static let columns = "id, created_at, updated_at, status, error_message, text, raw_recognition, audio_path, duration, model, engine, language, app_category, capture_intent"
 
     private static func insertSQL(orIgnore: Bool) -> String {
-        "INSERT OR \(orIgnore ? "IGNORE" : "REPLACE") INTO transcripts (\(columns)) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT OR \(orIgnore ? "IGNORE" : "REPLACE") INTO transcripts (\(columns)) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     }
 
     private static func values(for record: TranscriptRecord) -> [SQLiteValue] {
@@ -470,6 +502,9 @@ public final class TranscriptStore {
         case .transcribed: status = "transcribed"
         case .failed(let message): status = "failed"; errorMessage = message
         }
+        let captureIntent = record.captureIntent
+            .flatMap { try? JSONEncoder().encode($0) }
+            .flatMap { String(data: $0, encoding: .utf8) }
         return [
             .text(record.id.uuidString),
             .double(record.createdAt.timeIntervalSince1970),
@@ -483,7 +518,8 @@ public final class TranscriptStore {
             .optional(record.model),
             .optional(record.engine),
             .optional(record.language),
-            .optional(record.appCategory?.rawValue)
+            .optional(record.appCategory?.rawValue),
+            .optional(captureIntent)
         ]
     }
 
@@ -508,6 +544,8 @@ public final class TranscriptStore {
             case "transcribed": status = .transcribed
             default: status = .failed(errorMessage: statement.text(4) ?? "")
             }
+            let captureIntent = statement.text(13)
+                .flatMap { try? JSONDecoder().decode(TranscriptCaptureIntent.self, from: Data($0.utf8)) }
             records.append(TranscriptRecord(
                 id: id,
                 text: statement.text(5) ?? "",
@@ -520,7 +558,8 @@ public final class TranscriptStore {
                 language: statement.text(11),
                 updatedAt: statement.optionalDouble(2).map(Date.init(timeIntervalSince1970:)),
                 rawRecognition: statement.text(6),
-                appCategory: statement.text(12).map { AppCategory(rawValue: $0) ?? .other }
+                appCategory: statement.text(12).map { AppCategory(rawValue: $0) ?? .other },
+                captureIntent: captureIntent
             ))
         }
         // `uuidString` order and SQLite's text order agree, but a record written

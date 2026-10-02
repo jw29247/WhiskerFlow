@@ -80,6 +80,16 @@ final class AppState {
         /// also finds no words means nothing was said: discard it rather than
         /// file a failure that no retry can ever recover.
         var discardsWithoutSpeech = false
+
+        /// Kept on the History record, so a retry finishes an assistant capture.
+        var captureIntent: TranscriptCaptureIntent? {
+            switch purpose {
+            case .dictation: return nil
+            case .quickCapture:
+                return TranscriptCaptureIntent(purpose: .quickCapture, quickKind: quickKind, clientReference: clientReference)
+            case .selectionInstruction: return TranscriptCaptureIntent(purpose: .selectionInstruction)
+            }
+        }
     }
 
     /// How long a `.finishing` session may take before the UI is force-recovered.
@@ -756,7 +766,8 @@ final class AppState {
                 model: pending.configuration.engine.modelIdentifier,
                 engine: pending.configuration.engine.rawValue,
                 language: pending.configuration.language,
-                appCategory: pending.configuration.writing.category
+                appCategory: pending.configuration.writing.category,
+                captureIntent: pending.configuration.captureIntent
             )
             do {
                 try store.add(record)
@@ -1437,6 +1448,22 @@ final class AppState {
         var configuration = makeTranscriptionConfiguration()
         configuration.deliversText = false
         configuration.purpose = .dictation
+        // An assistant capture finishes the job it was recorded for, and never
+        // counts as dictation. A quick capture becomes its draft, which pastes
+        // nothing; an instruction's selection is long gone, so it stays in History.
+        switch record.captureIntent?.purpose {
+        case .quickCapture?:
+            configuration.purpose = .quickCapture
+            configuration.quickKind = record.captureIntent?.quickKind ?? .note
+            if configuration.accountIdentity != nil {
+                configuration.clientReference = record.captureIntent?.clientReference
+            }
+            configuration.deliversText = true
+        case .selectionInstruction?:
+            configuration.purpose = .selectionInstruction
+        case nil:
+            break
+        }
         // The app is long gone: write the retry for the category it was dictated
         // into, or — for a recording from before categories — as it was then.
         configuration.writing = record.appCategory.map(assistant.writingStyles.resolve(category:))
@@ -2055,7 +2082,8 @@ final class AppState {
             model: configuration.engine.modelIdentifier,
             engine: configuration.engine.rawValue,
             language: configuration.language,
-            appCategory: configuration.writing.category
+            appCategory: configuration.writing.category,
+            captureIntent: configuration.captureIntent
         )
         do {
             try store.add(record)
@@ -2148,7 +2176,8 @@ final class AppState {
             model: configuration.engine.modelIdentifier,
             engine: configuration.engine.rawValue,
             language: configuration.language,
-            appCategory: configuration.writing.category
+            appCategory: configuration.writing.category,
+            captureIntent: configuration.captureIntent
         )
         // History is best-effort here: the audio is on disk and the recognizer
         // does not need the record, so a full disk or an unwritable history must
