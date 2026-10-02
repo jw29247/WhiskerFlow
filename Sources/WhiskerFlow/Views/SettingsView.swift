@@ -72,6 +72,11 @@ struct SettingsView: View {
                     ForEach(RecordingMode.allCases) { Text($0.displayName).tag($0) }
                 }
 
+                Toggle("Pause media while dictating", isOn: $appState.settings.pauseMediaWhileDictating)
+                Text("Pauses music or video when you start dictating and plays it again when you stop. Nothing happens if nothing is playing or you're in a call.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Toggle("Live transcription", isOn: $appState.settings.liveTranscription)
                 Text("Show what's being heard in the recording panel while you speak. The pasted text still comes from a full pass when you finish.")
                     .font(.caption)

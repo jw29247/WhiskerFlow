@@ -147,48 +147,7 @@ enum NativeCallSignalReader {
 
     /// CoreAudio's per-process input state (macOS 14.2 and later).
     static func processesUsingMicrophone() -> [AudioInputProcess] {
-        guard #available(macOS 14.2, *) else { return [] }
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyProcessObjectList,
-            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain
-        )
-        var size: UInt32 = 0
-        let system = AudioObjectID(kAudioObjectSystemObject)
-        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr, size > 0 else { return [] }
-        var objects = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
-        guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &objects) == noErr else { return [] }
-        return objects.compactMap { object in
-            guard uint32(object, kAudioProcessPropertyIsRunningInput) != 0 else { return nil }
-            var pid: pid_t = 0
-            var pidSize = UInt32(MemoryLayout<pid_t>.size)
-            var pidAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioProcessPropertyPID, mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-            AudioObjectGetPropertyData(object, &pidAddress, 0, nil, &pidSize, &pid)
-            return AudioInputProcess(pid: pid, bundleID: bundleID(object))
-        }
-    }
-
-    private static func uint32(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32 {
-        var value: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        var address = AudioObjectPropertyAddress(
-            mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain
-        )
-        return AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr ? value : 0
-    }
-
-    private static func bundleID(_ object: AudioObjectID) -> String? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioProcessPropertyBundleID, mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var value: Unmanaged<CFString>?
-        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        guard AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr,
-              let string = value?.takeRetainedValue() as String?, !string.isEmpty else { return nil }
-        return string
+        CoreAudioProcesses.current().filter(\.isRunningInput).map { AudioInputProcess(pid: $0.pid, bundleID: $0.bundleID) }
     }
 
     /// Window titles plus tab titles (tab strips expose tabs as radio buttons

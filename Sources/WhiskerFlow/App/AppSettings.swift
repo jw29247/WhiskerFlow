@@ -31,6 +31,9 @@ final class AppSettings {
     /// Show what is being heard in the HUD while speaking. Display only: the
     /// pasted text always comes from the full decode on release.
     var liveTranscription: Bool { didSet { defaults.set(liveTranscription, forKey: Keys.liveTranscription) } }
+    /// Press play/pause when dictation starts and again when it stops, only
+    /// when something is playing.
+    var pauseMediaWhileDictating: Bool { didSet { defaults.set(pauseMediaWhileDictating, forKey: Keys.pauseMediaWhileDictating) } }
     var rememberCorrections: Bool { didSet { defaults.set(rememberCorrections, forKey: "rememberCorrections") } }
     /// Add a remembered correction to the Dictionary as soon as it is seen.
     var autoAddLearnedWords: Bool { didSet { defaults.set(autoAddLearnedWords, forKey: Keys.autoAddLearnedWords) } }
@@ -180,6 +183,7 @@ final class AppSettings {
         customHotkey = Self.loadCustomHotkey(from: defaults) ?? .default
         recordingMode = defaults.string(forKey: Keys.recordingMode).flatMap(RecordingMode.init) ?? .holdToTalk
         liveTranscription = defaults.object(forKey: Keys.liveTranscription) as? Bool ?? true
+        pauseMediaWhileDictating = defaults.object(forKey: Keys.pauseMediaWhileDictating) as? Bool ?? true
         rememberCorrections = defaults.object(forKey: "rememberCorrections") as? Bool ?? true
         autoAddLearnedWords = defaults.object(forKey: Keys.autoAddLearnedWords) as? Bool ?? true
         biasAppleSpeech = defaults.object(forKey: Keys.biasAppleSpeech) as? Bool ?? Self.defaultBiasAppleSpeech
@@ -354,6 +358,7 @@ final class AppSettings {
         static let customHotkey = "customHotkey"
         static let recordingMode = "recordingMode"
         static let liveTranscription = "liveTranscription"
+        static let pauseMediaWhileDictating = "pauseMediaWhileDictating"
         static let ignoreSpeakerAudio = "ignoreSpeakerAudio"
         static let voiceProcessingHungInputs = "voiceProcessingHungInputs"
         static let delivery = "delivery"

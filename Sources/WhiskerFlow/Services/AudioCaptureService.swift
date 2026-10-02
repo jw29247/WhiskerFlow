@@ -93,8 +93,27 @@ enum CoreAudioDeviceCatalog {
     }
 
     static func defaultInputDeviceID() -> AudioDeviceID? {
+        defaultDeviceID(kAudioHardwarePropertyDefaultInputDevice)
+    }
+
+    static func defaultOutputDeviceID() -> AudioDeviceID? {
+        defaultDeviceID(kAudioHardwarePropertyDefaultOutputDevice)
+    }
+
+    /// Whether an idle engine for `deviceID` may be kept ready; see
+    /// `CaptureReadinessPolicy`.
+    static func keepsEngineReady(for deviceID: AudioDeviceID) -> Bool {
+        func traits(_ id: AudioDeviceID?) -> AudioDeviceTraits? {
+            id.map { AudioDeviceTraits(transport: transport(of: $0), name: name(of: $0)) }
+        }
+        guard let selected = traits(deviceID) else { return false }
+        return CaptureReadinessPolicy.keepsEngineReady(
+            selected: selected, defaultInput: traits(defaultInputDeviceID()), defaultOutput: traits(defaultOutputDeviceID()))
+    }
+
+    private static func defaultDeviceID(_ selector: AudioObjectPropertySelector) -> AudioDeviceID? {
         var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mSelector: selector,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
@@ -429,6 +448,8 @@ final class AudioCaptureService {
     private var startGeneration = 0
     private var readyObserver: NSObjectProtocol?
     private var readyGeneration = 0
+    private var readyAdoptedAt: TimeInterval = 0
+    private var lastReadyRebuildAt: TimeInterval?
     /// A background build for the next capture, until it becomes `ready` or a
     /// press claims it.
     private var preparation: Preparation?
@@ -633,9 +654,7 @@ final class AudioCaptureService {
         let generation = readyGeneration
         let task = Task.detached(priority: .userInitiated) { () -> PreparedCapture? in
             guard let descriptor = CoreAudioDeviceCatalog.resolve(selection),
-                  CaptureReadinessPolicy.keepsEngineReady(
-                    transport: CoreAudioDeviceCatalog.transport(of: descriptor.transientID), name: descriptor.name
-                  ) else { return nil }
+                  CoreAudioDeviceCatalog.keepsEngineReady(for: descriptor.transientID) else { return nil }
             return try? await Self.onEngineQueue(
                 timeout: Self.engineBuildTimeoutSeconds, discardLate: { Self.retire($0) }
             ) {
@@ -674,6 +693,7 @@ final class AudioCaptureService {
 
     private func adoptReadyCapture(_ capture: PreparedCapture) {
         ready = capture
+        readyAdoptedAt = ProcessInfo.processInfo.systemUptime
         readyObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: capture.engine,
@@ -682,12 +702,18 @@ final class AudioCaptureService {
             Task { @MainActor [weak self] in
                 guard let self, self.ready === capture else { return }
                 // The hardware changed under the idle engine. Rebuild once the
-                // change has settled, rather than querying it mid-change.
+                // change has settled, rather than querying it mid-change, but
+                // never for the change the engine's own build posted.
+                let now = ProcessInfo.processInfo.systemUptime
+                guard let delay = ReadyEngineRebuildPolicy.rebuildDelay(
+                    changeAt: now, adoptedAt: self.readyAdoptedAt, lastRebuildAt: self.lastReadyRebuildAt
+                ) else { return }
                 let selection = capture.selection
                 self.discardReadyCapture()
                 let generation = self.readyGeneration
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 guard self.readyGeneration == generation else { return }
+                self.lastReadyRebuildAt = ProcessInfo.processInfo.systemUptime
                 self.prepareCapture(for: selection)
             }
         }
@@ -1011,10 +1037,7 @@ final class AudioCaptureService {
         active.sink.end()
         // A Bluetooth microphone is released at once, so the headset returns
         // to its high-quality playback profile as soon as dictation ends.
-        if reusable, keepsCaptureReady, ready == nil,
-           CaptureReadinessPolicy.keepsEngineReady(
-            transport: CoreAudioDeviceCatalog.transport(of: active.deviceID), name: CoreAudioDeviceCatalog.name(of: active.deviceID)
-           ) {
+        if reusable, keepsCaptureReady, ready == nil, CoreAudioDeviceCatalog.keepsEngineReady(for: active.deviceID) {
             adoptReadyCapture(active)
         } else {
             Self.engineQueue.async { _ = active }

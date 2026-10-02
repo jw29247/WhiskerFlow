@@ -90,6 +90,47 @@ public enum CaptureReadinessPolicy {
             return !["airpods", "beats", "bluetooth", "buds", "headset"].contains { lowered.contains($0) }
         }
     }
+
+    /// AVAudioEngine builds its I/O on an aggregate of the system default
+    /// input and output, whichever mic it is given. With a Bluetooth headset
+    /// as either default, every build opens the headset and flips it to its
+    /// call profile, so no engine is kept ready then.
+    public static func keepsEngineReady(
+        selected: AudioDeviceTraits, defaultInput: AudioDeviceTraits?, defaultOutput: AudioDeviceTraits?
+    ) -> Bool {
+        [selected, defaultInput, defaultOutput].allSatisfy { device in
+            guard let device else { return true }
+            return keepsEngineReady(transport: device.transport, name: device.name)
+        }
+    }
+}
+
+public struct AudioDeviceTraits: Sendable, Equatable {
+    public var transport: AudioInputTransport?
+    public var name: String
+
+    public init(transport: AudioInputTransport?, name: String) {
+        self.transport = transport
+        self.name = name
+    }
+}
+
+/// When an idle ready engine is rebuilt after a configuration change. Each
+/// build posts a change of its own about 110 ms later; rebuilding on that
+/// kept rebuilding every 2 seconds forever (27 builds a minute on 2 October).
+public enum ReadyEngineRebuildPolicy {
+    /// Changes this soon after the engine was adopted are its own.
+    public static let settleSeconds = 1.5
+    public static let rebuildAfterSeconds = 2.0
+    public static let minimumIntervalSeconds = 10.0
+
+    /// Seconds to wait before rebuilding, or nil to ignore the change. A
+    /// press still checks the ready engine's format, so ignoring is safe.
+    public static func rebuildDelay(changeAt now: Double, adoptedAt: Double, lastRebuildAt: Double?) -> Double? {
+        guard now - adoptedAt >= settleSeconds else { return nil }
+        let spacing = lastRebuildAt.map { $0 + minimumIntervalSeconds - now } ?? 0
+        return max(rebuildAfterSeconds, spacing)
+    }
 }
 
 public enum MicrophoneInputAdvice: Equatable, Sendable {

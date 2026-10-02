@@ -195,4 +195,31 @@ final class CaptureReadinessPolicyTests: XCTestCase {
         XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(transport: .usb, name: "C920 HD Pro Webcam"))
         XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(transport: .virtual, name: "Krisp Microphone"))
     }
+
+    /// 2 October: the C920 was selected, but every engine build also opened the
+    /// Soundcore headset (the system default input and output) and flipped it
+    /// to its call profile.
+    func testNoPreparedEngineWhileTheDefaultDevicesAreBluetooth() {
+        let webcam = AudioDeviceTraits(transport: .usb, name: "C920 HD Pro Webcam")
+        let headset = AudioDeviceTraits(transport: .bluetooth, name: "Soundcore Life Q35")
+        let speakers = AudioDeviceTraits(transport: .builtIn, name: "MacBook Pro Speakers")
+        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: headset, defaultOutput: headset))
+        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: webcam, defaultOutput: headset),
+                       "Bluetooth output alone: the engine's aggregate still opens the headset")
+        XCTAssertFalse(CaptureReadinessPolicy.keepsEngineReady(
+            selected: webcam, defaultInput: AudioDeviceTraits(transport: .builtIn, name: "AirPods Pro"), defaultOutput: speakers))
+        XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: webcam, defaultOutput: speakers))
+        XCTAssertTrue(CaptureReadinessPolicy.keepsEngineReady(selected: webcam, defaultInput: nil, defaultOutput: nil))
+    }
+
+    func testTheReadyEngineIgnoresTheChangesItPostsItself() {
+        // Each build posts a configuration change about 110 ms later.
+        XCTAssertNil(ReadyEngineRebuildPolicy.rebuildDelay(changeAt: 100.11, adoptedAt: 100, lastRebuildAt: nil))
+        XCTAssertEqual(ReadyEngineRebuildPolicy.rebuildDelay(changeAt: 105, adoptedAt: 100, lastRebuildAt: nil), 2)
+    }
+
+    func testReadyEngineRebuildsAreSpacedOut() {
+        XCTAssertEqual(ReadyEngineRebuildPolicy.rebuildDelay(changeAt: 105, adoptedAt: 103, lastRebuildAt: 101), 6)
+        XCTAssertEqual(ReadyEngineRebuildPolicy.rebuildDelay(changeAt: 200, adoptedAt: 150, lastRebuildAt: 101), 2)
+    }
 }

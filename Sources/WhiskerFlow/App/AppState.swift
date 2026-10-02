@@ -136,6 +136,8 @@ final class AppState {
     private let meetingCapture: MeetingCaptureCoordinator
     private let atlasAuthSession = AtlasAuthSession()
     private let live: LiveDictationSession
+    private let mediaPauser = DictationMediaPauser()
+    private var devicePrepareTask: Task<Void, Never>?
     private let recordingCoordinator = RecordingCoordinator()
     private var pasteService: any TextDeliveryService
     var lastPasteReceipt: PasteDeliveryReceipt?
@@ -668,6 +670,7 @@ final class AppState {
         switch recordingCoordinator.phase {
         case .preparing:
             live.cancel()
+            mediaPauser.dictationEnded()
             _ = recordingCoordinator.forceIdle()
             isRecording = false
         case .recording:
@@ -958,9 +961,18 @@ final class AppState {
 
     private func startAudioDeviceMonitor() {
         let monitor = AudioDeviceChangeMonitor { [weak self] in
-            self?.refreshDevices()
-            self?.live.invalidatePreparedCapture()
-            self?.prepareNextCapture()
+            guard let self else { return }
+            self.refreshDevices()
+            self.live.invalidatePreparedCapture()
+            // A headset connecting posts a burst of changes over a few seconds;
+            // building during it wedged engines on 2 October. Prepare once the
+            // devices have been quiet for a moment.
+            self.devicePrepareTask?.cancel()
+            self.devicePrepareTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                guard !Task.isCancelled else { return }
+                self?.prepareNextCapture()
+            }
         }
         monitor.start()
         audioDeviceMonitor = monitor
@@ -1599,6 +1611,9 @@ final class AppState {
             ])
             activeRecordingConfiguration = configuration
             assistant.capturePurpose = .dictation
+            if settings.pauseMediaWhileDictating {
+                mediaPauser.dictationStarted(inCall: meetingCapture.isCapturing || !meetingCapture.callDetector.activeCalls.isEmpty)
+            }
             // The engine decodes the captured samples on release, with audio
             // persistence following delivery.
             var inputSelection: AudioInputSelection?
@@ -1636,6 +1651,7 @@ final class AppState {
             }
             guard recordingCoordinator.didStart(sessionID) else {
                 live.cancel()
+                mediaPauser.dictationEnded()
                 activeRecordingConfiguration = nil
                 telemetryOutcome = "cancelled"
                 return
@@ -1668,6 +1684,7 @@ final class AppState {
         } catch {
             _ = recordingCoordinator.fail(sessionID)
             isRecording = false
+            mediaPauser.dictationEnded()
             activeRecordingConfiguration = nil
             let message = CaptureErrorPresentation.message(for: error)
             lastError = message
@@ -1760,6 +1777,7 @@ final class AppState {
         isRecording = false
         recordingStartedAt = nil
         meetingCapture.dictationEnded()
+        mediaPauser.dictationEnded()
         status = .transcribing
         DiagnosticsService.breadcrumb(
             category: "recording",
