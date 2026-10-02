@@ -28,7 +28,7 @@ final class MeetingActivityProbeTests: XCTestCase {
         let mic = try samples(.microphone), system = try samples(.system)
         let seconds = min(mic.count, system.count) / 16_000
         func rms(_ s: ArraySlice<Float>) -> Double { s.isEmpty ? 0 : sqrt(s.reduce(0.0) { $0 + Double($1 * $1) } / Double(s.count)) }
-        // Live rule: a second is active when any 100 ms buffer reaches RMS 0.015.
+        /// Live rule: a second is active when any 100 ms buffer reaches RMS 0.015.
         func active(_ s: [Float], _ second: Int) -> Bool {
             (0..<10).contains { b in rms(s[(second * 16_000 + b * 1_600)..<(second * 16_000 + (b + 1) * 1_600)]) >= 0.015 }
         }

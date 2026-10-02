@@ -28,8 +28,7 @@ enum MeetingVisualSpeakerReader {
   /// Capture, confirm with a fresh AX read, then analyse. The recording loop
   /// instead confirms with its next scheduled read (see `capture`/`analyze`).
   @MainActor static func read(_ snapshot: MeetingAccessibilitySnapshot) async
-    -> MeetingAccessibilitySnapshot?
-  {
+    -> MeetingAccessibilitySnapshot? {
     guard let pid = snapshot.processID, let frame = await capture(snapshot) else { return nil }
     return await Task.detached(priority: .utility) {
       guard let fresh = MeetingAccessibilityReader.read(pids: [pid]).snapshot else {
@@ -40,8 +39,7 @@ enum MeetingVisualSpeakerReader {
   }
 
   @MainActor static func capture(_ snapshot: MeetingAccessibilitySnapshot) async
-    -> MeetingVisualFrame?
-  {
+    -> MeetingVisualFrame? {
     guard let pid = snapshot.processID, let frame = snapshot.windowFrame,
       !snapshot.visualTiles.isEmpty, snapshot.visualTiles.count <= 60,
       CGPreflightScreenCaptureAccess()
@@ -76,8 +74,7 @@ enum MeetingVisualSpeakerReader {
   @MainActor private static func shareableWindow(pid: Int32, frame: CGRect) async -> SCWindow? {
     let now = ProcessInfo.processInfo.systemUptime
     if let cached = cachedWindow, cached.pid == pid, cached.frame == frame,
-      now - cached.fetchedAt < windowCacheSeconds, isOnScreen(cached.window.windowID)
-    {
+      now - cached.fetchedAt < windowCacheSeconds, isOnScreen(cached.window.windowID) {
       return cached.window
     }
     cachedWindow = nil
@@ -110,8 +107,7 @@ enum MeetingVisualSpeakerReader {
 
   /// Pure and off-main. `fresh` must be an AX read completed after the frame.
   static func analyze(_ captured: MeetingVisualFrame, verifiedBy fresh: MeetingAccessibilitySnapshot)
-    -> MeetingAccessibilitySnapshot?
-  {
+    -> MeetingAccessibilitySnapshot? {
     let snapshot = captured.snapshot
     let image = captured.image
     guard let frame = snapshot.windowFrame else { return nil }

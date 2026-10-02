@@ -280,7 +280,7 @@ final class MeetingLibraryController {
                 elapsedMilliseconds: min(note.elapsedMs, limit), label: note.atlasLabel
             )
             let outcome: (AssistantSyncState, String?)
-            do { outcome = (.synced, try await sync(request)) } catch { outcome = (.failed, nil) }
+            do { outcome = await (.synced, try sync(request)) } catch { outcome = (.failed, nil) }
             update(sessionID) { entry in
                 guard let index = entry.notes.firstIndex(where: { $0.id == note.id }) else { return }
                 entry.notes[index].syncState = outcome.0

@@ -1074,8 +1074,8 @@ final class MeetingCaptureCoordinator {
   private func recoverLocalSessions(releasingManualRetryHolds: Bool = false) async {
     guard uploadTask == nil else { return }
     do {
-      let sessions = MeetingRecordingSessionManifest.orderedForRecovery(
-        try await scanRecoverySessions(releasingManualRetryHolds: releasingManualRetryHolds))
+      let sessions = await MeetingRecordingSessionManifest.orderedForRecovery(
+        try scanRecoverySessions(releasingManualRetryHolds: releasingManualRetryHolds))
       guard !Task.isCancelled else { return }
       guard activeSessionID == nil else {
         scheduleUploadRetry()

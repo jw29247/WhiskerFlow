@@ -664,7 +664,7 @@ actor MeetingLocalProcessor {
     system: MeetingTrackEnergyProfile
   ) -> Bool {
     guard let systemEnergy = system.meanSquare(start: segment.start, end: segment.end),
-          systemEnergy >= Self.audibleMeanSquare else { return true }
+          systemEnergy >= audibleMeanSquare else { return true }
     let microphoneEnergy = microphone.meanSquare(start: segment.start, end: segment.end) ?? 0
     return microphoneEnergy >= Self.selfDominanceRatio * systemEnergy
   }
@@ -798,8 +798,8 @@ enum MeetingSegmentReconciler {
 }
 
 enum MeetingTranscriptionWindowPolicy {
-  // Windows of at most 30 seconds keep each decode short, so dictation never
-  // waits long behind a meeting window, and a resumed meeting re-decodes little.
+  /// Windows of at most 30 seconds keep each decode short, so dictation never
+  /// waits long behind a meeting window, and a resumed meeting re-decodes little.
   static let maximumDurationMs: Int64 = 30_000
 
   static func windows(
@@ -833,4 +833,3 @@ enum MeetingTranscriptionWindowPolicy {
     return result
   }
 }
-

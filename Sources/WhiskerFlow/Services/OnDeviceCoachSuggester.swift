@@ -23,8 +23,8 @@ protocol MeetingCoachSuggesting: Sendable {
 extension MeetingCoachSuggesting {
     /// The advice to show, combining the model with countable signals.
     func advice(for request: MeetingCoachSuggestionRequest) async -> MeetingCoachAdvice {
-        MeetingCoachJudgement.advice(
-            judgement: await judgement(for: request), recentWords: request.recentOwnWords, goal: request.goal
+        await MeetingCoachJudgement.advice(
+            judgement: judgement(for: request), recentWords: request.recentOwnWords, goal: request.goal
         )
     }
 }

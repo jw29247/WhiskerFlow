@@ -1865,7 +1865,7 @@ final class AppState {
         if let lookup = websiteLookup {
             // Normally finished long ago; bounded by the reader's own budget.
             websiteLookup = nil
-            configuration.writing = assistant.resolveWritingStyle(await lookup.value)
+            configuration.writing = await assistant.resolveWritingStyle(lookup.value)
             live.setTone(configuration.writing.tone)
         }
         if configuration.purpose == .dictation {

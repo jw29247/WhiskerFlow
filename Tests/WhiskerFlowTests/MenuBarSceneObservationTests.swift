@@ -7,7 +7,7 @@ import WhiskerFlowAppSupport
 
 final class MenuBarSceneObservationTests: XCTestCase {
     @MainActor
-    func testRecordingChangeDoesNotInvalidateSceneConstruction() async throws {
+    func testRecordingChangeDoesNotInvalidateSceneConstruction() async {
         let name = "MenuBarObservation.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }

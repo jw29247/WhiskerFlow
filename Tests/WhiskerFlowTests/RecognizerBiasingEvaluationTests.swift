@@ -75,7 +75,7 @@ final class RecognizerBiasingEvaluationTests: XCTestCase {
         let engine = ParakeetTDTv3Engine()
         try await engine.prepare()
         await engine.booster.prepare()
-        for _ in 0..<600 where !(await engine.booster.isReady) { try await Task.sleep(for: .milliseconds(500)) }
+        for _ in 0..<600 where await !(engine.booster.isReady) { try await Task.sleep(for: .milliseconds(500)) }
         let ready = await engine.booster.isReady
         XCTAssertTrue(ready, "CTC boosting model failed to load")
         for biased in [false, true] {

@@ -24,7 +24,7 @@ final class AbandonedGateHolderTests: XCTestCase {
 
         await release.open()
         for _ in 0..<200 {
-            if !(await gate.isOccupied) { break }
+            if await !(gate.isOccupied) { break }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
         try await gate.runQueued(waitingUpTo: nil) {}
@@ -40,7 +40,7 @@ final class AbandonedGateHolderTests: XCTestCase {
                 return "late"
             }
         }
-        while !(await gate.isOccupied) { await Task.yield() }
+        while await !(gate.isOccupied) { await Task.yield() }
         let load = Task {
             try await gate.runQueued(waitingUpTo: nil) { XCTFail("Must not run beside the wedged decode") }
         }

@@ -128,7 +128,7 @@ final class MeetingCoordinatorTests: XCTestCase {
 
         await releaseWork.open()
         for _ in 0..<100 {
-            if !(await gate.isOccupied) { break }
+            if await !(gate.isOccupied) { break }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
         let occupiedAfterSettlement = await gate.isOccupied

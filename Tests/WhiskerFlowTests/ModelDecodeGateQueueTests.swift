@@ -17,7 +17,7 @@ final class ModelDecodeGateQueueTests: XCTestCase {
                 await order.append("first-end")
             }
         }
-        while !(await gate.isOccupied) { await Task.yield() }
+        while await !(gate.isOccupied) { await Task.yield() }
         let second = Task {
             try await gate.runQueued(waitingUpTo: nil) { await order.append("second") }
         }
@@ -42,7 +42,7 @@ final class ModelDecodeGateQueueTests: XCTestCase {
         let gate = ModelDecodeGate()
         let release = GateLatch()
         let holder = Task { try await gate.runQueued(waitingUpTo: nil) { await release.wait() } }
-        while !(await gate.isOccupied) { await Task.yield() }
+        while await !(gate.isOccupied) { await Task.yield() }
 
         do {
             _ = try await gate.run(seconds: 1, waitingUpTo: 0.05) { "must not start" }
@@ -79,7 +79,7 @@ final class ModelDecodeGateQueueTests: XCTestCase {
 
         await release.open()
         for _ in 0..<200 {
-            if !(await gate.isOccupied) { break }
+            if await !(gate.isOccupied) { break }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
         let stillWedged = await gate.isHeldByAbandonedOperation
@@ -92,7 +92,7 @@ final class ModelDecodeGateQueueTests: XCTestCase {
         let gate = ModelDecodeGate()
         let release = GateLatch()
         let holder = Task { try await gate.runQueued(waitingUpTo: nil) { await release.wait() } }
-        while !(await gate.isOccupied) { await Task.yield() }
+        while await !(gate.isOccupied) { await Task.yield() }
         let waiter = Task { try await gate.runQueued(waitingUpTo: nil) { XCTFail("Cancelled waiter must not run") } }
         try await Task.sleep(nanoseconds: 20_000_000)
         waiter.cancel()

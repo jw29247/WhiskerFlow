@@ -83,7 +83,7 @@ private final class AbandonableWait<T: Sendable>: @unchecked Sendable {
         self.continuation = continuation
         work = Task {
             do {
-                self.resume(with: .success(try await operation()))
+                await self.resume(with: .success(try operation()))
             } catch {
                 self.resume(with: .failure(error))
             }

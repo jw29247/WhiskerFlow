@@ -25,7 +25,9 @@
           let visual =
             if let snapshot = result.snapshot {
               await MeetingVisualSpeakerReader.read(snapshot)
-            } else { nil as WhiskerFlowAppSupport.MeetingAccessibilitySnapshot? }
+            } else {
+              nil as WhiskerFlowAppSupport.MeetingAccessibilitySnapshot?
+            }
           let atMs = Int64((ProcessInfo.processInfo.systemUptime - epoch) * 1000)
           rowCount += timeline.observe(visual, atMs: atMs).count
           print(

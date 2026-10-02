@@ -6,7 +6,7 @@ struct MeetingAtlasCreatedMeeting: Sendable {
     let meetingID: String
     let created: Bool
     /// Atlas's opaque `wm1_` reference, if the response carries one.
-    var meetingReference: String? = nil
+    var meetingReference: String?
 }
 
 struct MeetingAtlasRecordingCompletion: Sendable {

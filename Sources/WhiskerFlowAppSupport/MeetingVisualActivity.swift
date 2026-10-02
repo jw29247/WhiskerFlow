@@ -106,8 +106,7 @@ public enum MeetingVisualActivity {
   }
 
   static func isSpeaking(bytes: [UInt8], width: Int, height: Int, tile: CGRect, scale: CGFloat)
-    -> Bool
-  {
+    -> Bool {
     guard scale > 0, tile.width >= 120 * scale, tile.height >= 90 * scale,
       CGRect(x: 0, y: 0, width: width, height: height).contains(tile),
       bytes.count >= width * height * 4
@@ -122,7 +121,7 @@ public enum MeetingVisualActivity {
       let (r, g, b) = pixel(x, y)
       return r >= 100 && r <= 205 && g >= 155 && g <= 230 && b >= 200 && b > r + 25 && g > r + 8
     }
-    // Require long opposing edges, excluding rounded corners and name text.
+    /// Require long opposing edges, excluding rounded corners and name text.
     func edge(left: Bool) -> Bool {
       (0..<20).filter { sample in
         let y = tile.minY + tile.height * (0.12 + CGFloat(sample) * 0.038)

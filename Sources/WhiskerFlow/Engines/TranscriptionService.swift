@@ -42,7 +42,7 @@ actor TranscriptionService {
     case .appleDictation:
       guard #available(macOS 26.0, *), let engine = appleDictationEngine as? AppleDictationEngine,
             let language else { return false }
-      return (try? await engine.prepare(locale: language)) != nil
+      return await (try? engine.prepare(locale: language)) != nil
     }
   }
 
@@ -111,7 +111,7 @@ actor TranscriptionService {
 
     do {
       if let recognizerOverride {
-        return TranscriptionOutcome(result: try await recognizerOverride(request, kind), engine: kind)
+        return await TranscriptionOutcome(result: try recognizerOverride(request, kind), engine: kind)
       }
       if kind == .parakeetTDTv3, let capturedSamples {
         do {

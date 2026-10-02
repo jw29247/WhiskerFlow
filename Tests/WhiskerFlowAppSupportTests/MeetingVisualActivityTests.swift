@@ -1,7 +1,6 @@
 import CoreGraphics
 import ImageIO
 import XCTest
-
 @testable import WhiskerFlowAppSupport
 
 final class MeetingVisualActivityTests: XCTestCase {

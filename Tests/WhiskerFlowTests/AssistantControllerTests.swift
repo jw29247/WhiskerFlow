@@ -244,7 +244,7 @@ final class AssistantControllerTests: XCTestCase {
         XCTAssertEqual(restarted.resolveWritingStyle(AppContext(bundleIdentifier: "com.tinyspeck.slackmacgap")).tone, .veryCasual)
     }
 
-    @MainActor func testClientPaginationStopsOnEmptyPagesAndRepeatedCursors() async throws {
+    @MainActor func testClientPaginationStopsOnEmptyPagesAndRepeatedCursors() async {
         for emptyPages in [true, false] {
             let url = location(); defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
             let controller = AssistantController(fileURL: url)

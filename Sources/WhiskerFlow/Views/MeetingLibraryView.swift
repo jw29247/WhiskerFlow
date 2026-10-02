@@ -411,7 +411,6 @@ struct MeetingDetailView: View {
         }
     }
 
-    @ViewBuilder
     private func transcript(_ entry: MeetingLibraryEntry, timeline: [MeetingTimelineItem], matchSet: Set<String>, isLive: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {

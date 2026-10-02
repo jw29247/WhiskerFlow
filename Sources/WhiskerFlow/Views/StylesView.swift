@@ -146,7 +146,9 @@ private struct AppStyleRow: View {
                             if styles.resolve(AppContext(bundleIdentifier: app.bundleIdentifier)).category == category,
                                !app.isBrowser || override?.category != nil {
                                 Label(category.displayName, systemImage: "checkmark")
-                            } else { Text(category.displayName) }
+                            } else {
+                                Text(category.displayName)
+                            }
                         }
                     }
                     if app.isBrowser, override?.category != nil {
@@ -157,13 +159,21 @@ private struct AppStyleRow: View {
                     Button {
                         edit { $0.setTone(nil, forApp: app.bundleIdentifier) }
                     } label: {
-                        if override?.tone == nil { Label("Category tone", systemImage: "checkmark") } else { Text("Category tone") }
+                        if override?.tone == nil {
+                            Label("Category tone", systemImage: "checkmark")
+                        } else {
+                            Text("Category tone")
+                        }
                     }
                     ForEach(tones(current: override?.tone)) { tone in
                         Button {
                             edit { $0.setTone(tone, forApp: app.bundleIdentifier) }
                         } label: {
-                            if override?.tone == tone { Label(tone.displayName, systemImage: "checkmark") } else { Text(tone.displayName) }
+                            if override?.tone == tone {
+                                Label(tone.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(tone.displayName)
+                            }
                         }
                     }
                 }

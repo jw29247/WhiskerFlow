@@ -59,7 +59,7 @@ final class MeetingLocalProcessorResilienceTests: XCTestCase {
         XCTAssertNotEqual(result.turns.last?.speaker, .microphone)
     }
 
-    func testSelfMatchToleratesPunctuationBoundariesAndBackchannel() async throws {
+    func testSelfMatchToleratesPunctuationBoundariesAndBackchannel() async {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let processor = MeetingLocalProcessor(processingRoot: root) { _, _ in TranscriptionResult(text: "") }
         let mixed = TranscriptionSegment(text: "Yeah, so the plan is, we ship Friday. OK.", start: 10, end: 14)

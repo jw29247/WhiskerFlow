@@ -45,8 +45,8 @@ enum UIPreview {
             context.scaleBy(x: scale, y: scale)
             layer.render(in: context)
             try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
-            // Scroll content isn't part of the window's layer render: also write
-            // the largest scroll view's whole document beside it.
+            /// Scroll content isn't part of the window's layer render: also write
+            /// the largest scroll view's whole document beside it.
             func scrollViews(in view: NSView) -> [NSScrollView] {
                 (view as? NSScrollView).map { [$0] } ?? view.subviews.flatMap(scrollViews(in:))
             }

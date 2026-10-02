@@ -84,7 +84,7 @@ struct PasteService: TextDeliveryService {
               NSWorkspace.shared.frontmostApplication?.processIdentifier == destination.processIdentifier else {
             return receipt(.failed, "Could not reach the destination. Your text is ready to copy.", .notFrontmost)
         }
-        if let selection, !(await selection.restoreSelectionWhenReady()) {
+        if let selection, await !(selection.restoreSelectionWhenReady()) {
             return receipt(.failed, "The original selection changed. Copy the preview instead.", .selectionChanged)
         }
         let context: TextFieldSnapshot?

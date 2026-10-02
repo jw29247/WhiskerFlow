@@ -103,7 +103,7 @@ final class MeetingAccessibilityCapture {
                 // Batched: one encrypted file per flush interval, not per cycle.
                 let due = buffer.drain(atMs: readMs)
                 if !due.isEmpty {
-                    saveFailed = !(await save(due))
+                    saveFailed = await !(save(due))
                     guard !Task.isCancelled else { break }
                 }
                 if !evidence.isEmpty {
@@ -200,8 +200,6 @@ private struct MeetingAccessibilityWalk {
     private static let requiredNodeAttributes: Set<String> = [
         kAXRoleAttribute, kAXDescriptionAttribute, kAXTitleAttribute, kAXChildrenAttribute
     ]
-
-    init(deadline: TimeInterval) { self.deadline = deadline }
 
     mutating func run(pids: [pid_t]) {
         for pid in pids {
