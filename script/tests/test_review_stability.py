@@ -109,6 +109,41 @@ class StabilityAssessmentTests(unittest.TestCase):
 
 
 class StabilityCommandTests(unittest.TestCase):
+    def test_older_replayed_rows_cannot_replace_newer_persisted_timing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state.json"
+            now = time.time()
+            state.write_text(json.dumps({
+                "since": now - 4 * 86400, "reason": "rotation",
+                "sessions": {}, "faults": {}, "previous_windows": [],
+            }))
+            rows = []
+            for index in range(50):
+                row = {"timestamp": now - 7200 - index % 3 * 86400,
+                       "build": "candidate", "launch": "launch", "session": str(index)}
+                rows.extend([
+                    {**row, "event": "decode_returned", "samples": 16000},
+                    {**row, "event": "finish_returned", "elapsed_ms": 100},
+                    {**row, "event": "paste_returned", "outcome": "verified"},
+                ])
+            (root / "diagnostics.1.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
+            latest = root / "diagnostics.jsonl"
+            latest.write_text(json.dumps({
+                "timestamp": now - 3600, "build": "candidate", "launch": "launch",
+                "session": "0", "event": "finish_returned", "elapsed_ms": 5001,
+            }))
+            command = [sys.executable, str(SCRIPT), "--state", str(state),
+                       "--directory", str(root), "--build", "candidate"]
+            first = json.loads(subprocess.run(command, check=True, capture_output=True,
+                                              text=True).stdout)
+            self.assertFalse(first["passing"])
+            latest.unlink()
+            second = json.loads(subprocess.run(command, check=True, capture_output=True,
+                                               text=True).stdout)
+            self.assertFalse(second["passing"])
+            self.assertEqual(second["slow_completions"], 1)
+
     def test_rotated_logs_keep_builds_separate_and_persist_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

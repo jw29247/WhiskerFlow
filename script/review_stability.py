@@ -103,9 +103,13 @@ def main():
                     entry['build_conflict'] = True
                 else:
                     entry['build'] = build
-            if event == 'decode_returned': entry['samples'] = int(row['samples'])
-            if event == 'finish_returned': entry['finish_ms'] = float(row['elapsed_ms'])
-            if event == 'paste_returned': entry['paste_outcome'] = row.get('outcome')
+            observed = entry.setdefault('event_timestamps', {})
+            if stamp >= observed.get(event, -math.inf):
+                if event == 'decode_returned': entry['samples'] = int(row['samples'])
+                elif event == 'finish_returned': entry['finish_ms'] = float(row['elapsed_ms'])
+                elif event == 'paste_returned': entry['paste_outcome'] = row.get('outcome')
+                if event in ('decode_returned', 'finish_returned', 'paste_returned'):
+                    observed[event] = stamp
         if event in ('main_thread_stalled', 'finish_timeout', 'stack_capture_failed') or (event == 'state_changed' and row.get('state') == 'failure') or (event == 'paste_returned' and row.get('outcome') in ('failed', 'copied')):
             state['faults'][row.get('launch', '') + ':' + str(stamp)] = {'event': event, 'build': build}
     state['updated_at'] = now

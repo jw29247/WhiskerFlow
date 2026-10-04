@@ -26,8 +26,13 @@ def main():
     license_path = root / lock["license_path"]
     if not license_path.is_file() or not license_path.read_text().strip():
         failures.append("upstream licence is missing")
-    for location in (root / "agent/skills", root / ".claude/skills"):
-        for alias in location.iterdir():
+    for relative, names in lock["aliases"].items():
+        location = root / relative
+        actual = {p.name for p in location.iterdir()} if location.is_dir() else set()
+        if actual != set(names):
+            failures.append(f"{relative}: alias inventory differs from lock")
+        for name in names:
+            alias = location / name
             canonical = root / ".agents/skills" / alias.name
             if not alias.is_symlink() or alias.resolve() != canonical.resolve() or not canonical.is_dir():
                 failures.append(f"{alias.relative_to(root)}: expected a link to .agents/skills/{alias.name}")
