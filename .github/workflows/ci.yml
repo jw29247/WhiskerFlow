@@ -10,6 +10,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  agent-environment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stability evidence regression tests
+        run: python3 -m unittest discover -s script/tests -p 'test_*.py' -v
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+      - name: Verify shared agent skills
+        run: python3 script/verify_agent_skills.py
+
   build-test:
     runs-on: macos-26
     steps:
