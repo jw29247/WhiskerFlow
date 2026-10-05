@@ -14,7 +14,7 @@ The existing gate requires at least 50 completed dictations on three active days
 
 ## Existing ledgers
 
-The checker retains the previous timestamp window and evidence. Retained log rows can backfill build identity in older sessions and faults. Evidence whose build remains unknown, or a session with conflicting build IDs, returns `coverage: missing_build_identity` and blocks passing. Known faults from another build affect that build's assessment.
+The checker retains the previous timestamp window and evidence. Retained log rows can backfill build identity in older sessions and faults. Legacy measurements are protected by the ledger's last update time until newer events arrive, so replay cannot replace newer persisted timings with older retained rows. Evidence whose build remains unknown, or a session with conflicting build IDs, returns `coverage: missing_build_identity` and blocks passing. Known faults from another build affect that build's assessment.
 
 Inspect missing-identity counts before deciding on a new window. After a relevant behaviour change, start a fresh window deliberately:
 

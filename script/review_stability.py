@@ -79,6 +79,15 @@ def main():
     if args.build is not None:
         state['target_build'] = build_identity(args.build)
     now = time.time()
+    # Legacy measurements may be newer than the log rows still retained.
+    # Preserve them until an event newer than the last ledger update arrives.
+    migration_floor = state.get('updated_at', now)
+    for entry in state['sessions'].values():
+        observed = entry.setdefault('event_timestamps', {})
+        for event, field in (('decode_returned', 'samples'), ('finish_returned', 'finish_ms'),
+                             ('paste_returned', 'paste_outcome')):
+            if field in entry:
+                observed.setdefault(event, migration_floor)
     rows = []
     for path in sorted(args.directory.glob('diagnostics*.jsonl')):
         for line in path.open():

@@ -109,6 +109,34 @@ class StabilityAssessmentTests(unittest.TestCase):
 
 
 class StabilityCommandTests(unittest.TestCase):
+    def test_legacy_migration_keeps_newer_persisted_timing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = root / "state.json"
+            now = time.time()
+            evidence = sessions(None, 50)
+            evidence["session-0"]["finish_ms"] = 5001
+            state.write_text(json.dumps({
+                "since": now - 4 * 86400, "updated_at": now - 60,
+                "reason": "legacy", "sessions": {
+                    "launch:" + key: entry for key, entry in evidence.items()
+                }, "faults": {}, "previous_windows": [],
+            }))
+            rows = [{
+                "timestamp": now - 3600, "build": "candidate", "launch": "launch",
+                "session": key, "event": "finish_returned", "elapsed_ms": 100,
+            } for key in evidence]
+            (root / "diagnostics.jsonl").write_text("\n".join(json.dumps(row) for row in rows))
+            command = [sys.executable, str(SCRIPT), "--state", str(state),
+                       "--directory", str(root), "--build", "candidate"]
+            result = json.loads(subprocess.run(command, check=True, capture_output=True,
+                                               text=True).stdout)
+            saved = json.loads(state.read_text())
+            self.assertEqual(result["coverage"], "build_identified")
+            self.assertFalse(result["passing"])
+            self.assertEqual(result["slow_completions"], 1)
+            self.assertEqual(saved["sessions"]["launch:session-0"]["finish_ms"], 5001)
+
     def test_older_replayed_rows_cannot_replace_newer_persisted_timing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
