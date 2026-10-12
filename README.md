@@ -16,7 +16,8 @@ transcribes locally and pastes the text wherever your cursor is.
 
 ## Requirements
 
-- macOS 14 (Sonoma) or later on an Apple Silicon Mac. The release is arm64-only:
+- macOS 26 (Tahoe) or later on an Apple Silicon Mac. WhiskerFlow 0.8.7 remains
+  available for macOS 14 and 15. The release is arm64-only:
   FluidAudio, which runs the default Parakeet engine, does not build for Intel yet.
 
 ## Install

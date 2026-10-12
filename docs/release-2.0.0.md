@@ -7,7 +7,7 @@ Branch `codex/whiskerflow-2-assistant` against `origin/main` (`b04a2c7`, the 0.8
 | Version | 2.0.0, build 22 (from 0.8.7, build 21). Set by `script/bump_version.sh` |
 | Ahead of main | 66 commits; main has nothing the branch lacks |
 | Size | 320 files, +38,950 / −3,501 lines. About half is tests and validation records |
-| Platform | Unchanged: Apple Silicon (arm64), macOS 14 and later |
+| Platform | Apple Silicon (arm64), **macOS 26 and later**. 2.0 was never tested on macOS 14 or 15, so the app, the update feed item and the Homebrew cask all require 26; Macs on 14 or 15 stay on 0.8.7 |
 | Signing | Developer ID team G9U38P58ZY. The signed 2.0.0 candidate passes `verify_upgrade_identity.sh` against the installed app, so permissions carry over |
 | Tests | CI (macOS 26, Xcode 26.6) on the review-fix head: `swift test` ran 784 tests, 0 failures, 15 opt-in skips. `test_version_source.sh`, `test_bundle_app.sh` and `test_upgrade_identity.sh` pass |
 
@@ -116,7 +116,7 @@ git add Resources/Info.plist appcast.xml Casks/whiskerflow.rb && git commit -m "
 **Not verified:**
 - **Real users:** a long day with the new mic capture, and a real call with the new You/Them labels.
 - **Leaderboard and sign-in against a deployed Atlas.**
-- **macOS 14 and 15:** the app has never been launched there. Translation and FoundationModels are weak-linked, and Apple dictation and translation need macOS 26.
+- **macOS 14 and 15:** never launched there, so 2.0 requires macOS 26 (`LSMinimumSystemVersion`, the appcast item and the cask). The compile target stays at macOS 14 so the existing availability checks are unchanged.
 - **Translation details:** the translation download sheet, and whether `.highFidelity` stays on the Mac with no network.
 - **Mixed engines:** non-English dictation with Apple's dictation model on a second Mac.
 

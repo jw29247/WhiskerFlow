@@ -20,7 +20,9 @@ ZIP="${ZIP:?set ZIP=path to the .zip archive}"
 VERSION="${VERSION:?set VERSION=short version, e.g. 0.4.0}"
 BUILD="${BUILD:?set BUILD=CFBundleVersion, e.g. 4}"
 URL="${URL:?set URL=public download URL for the .zip}"
-MIN_SYSTEM="${MIN_SYSTEM:-14.0}"
+# Offer the update only to Macs the app can launch on: default to the bundle's
+# LSMinimumSystemVersion so the feed and the app can't disagree.
+MIN_SYSTEM="${MIN_SYSTEM:-$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$ROOT_DIR/Resources/Info.plist")}"
 # The release binary is arm64-only (FluidAudio doesn't compile for x86_64), so
 # Intel Macs must never be offered an update they cannot launch. Set
 # HARDWARE_REQUIREMENTS= (empty) once the release is universal.
