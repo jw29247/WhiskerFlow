@@ -50,6 +50,21 @@ final class AppSettingsMigrationTests: XCTestCase {
         }
     }
 
+    /// 0.8.x wrote `languageAutoMigrated` only when migrating "auto", so an
+    /// upgrade is recognised from what those builds did leave behind.
+    func testUpgradeFromAnEarlierBuildCountsAsAPreviousLaunch() {
+        withDefaults { defaults, name in
+            XCTAssertFalse(settings(defaults, name).hadPreviousLaunch, "A fresh install")
+            XCTAssertTrue(settings(defaults, name).hadPreviousLaunch, "Its second launch")
+        }
+        for marker in ["SUHasLaunchedBefore", "hotkey"] {
+            withDefaults { defaults, name in
+                defaults.set(marker == "hotkey" ? "rightOption" : true, forKey: marker)
+                XCTAssertTrue(settings(defaults, name).hadPreviousLaunch, marker)
+            }
+        }
+    }
+
     func testLegacyStoredAutoStillMigratesOnce() {
         withDefaults { defaults, name in
             defaults.set("auto", forKey: "language")

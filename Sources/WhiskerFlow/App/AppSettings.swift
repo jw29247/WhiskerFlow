@@ -157,7 +157,9 @@ final class AppSettings {
 
     @ObservationIgnored private(set) var legacySelectedDeviceID: String?
     /// Whether this install launched before this process: read before `init`
-    /// writes its one-shot migration flags, which every launch sets.
+    /// writes its one-shot migration flags, which every launch sets. Builds
+    /// before 2.0 wrote that flag only when migrating, so an upgrade is also
+    /// recognised by any setting or Sparkle key they left behind.
     @ObservationIgnored let hadPreviousLaunch: Bool
 
     /// Parakeet refuses to run off Apple Silicon; Apple Speech is the only
@@ -180,7 +182,7 @@ final class AppSettings {
     init(defaults: UserDefaults = .standard, meetingTokenStore: MeetingCaptureTokenStore = MeetingCaptureTokenStore()) {
         self.defaults = defaults
         self.meetingTokenStore = meetingTokenStore
-        hadPreviousLaunch = defaults.object(forKey: Keys.languageAutoMigrated) != nil
+        hadPreviousLaunch = Keys.previousLaunchMarkers.contains { defaults.object(forKey: $0) != nil }
 
         // Whisper was removed: a stored Whisper engine moves to Parakeet, and
         // its model size and command-line settings are dropped.
@@ -374,6 +376,13 @@ final class AppSettings {
     }
 
     private enum Keys {
+        /// Written by every 2.0 launch (`languageAutoMigrated`), or left by an
+        /// earlier build: a changed setting, or Sparkle's own launch and
+        /// update-check records.
+        static let previousLaunchMarkers = [
+            languageAutoMigrated, engine, language, hotkey, recordingMode, delivery, selectedInputUID,
+            vocabulary, meetingModeEnabled, "SUHasLaunchedBefore", "SULastCheckTime",
+        ]
         static let engine = "engine"
         /// Whisper's model size, command and arguments, its dictionary-hint
         /// switch, and the one-shot WhisperKit-to-Parakeet migration flag.
