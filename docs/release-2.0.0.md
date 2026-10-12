@@ -63,6 +63,30 @@ Nine review comments on PR #13: eight fixed, one already handled by later commit
 | A failed Keychain read is retried | A transient Keychain error no longer signs the user out (and blocks dictation) until restart |
 | Retried assistant captures keep their purpose | A failed quick capture becomes its draft on retry, not dictation. History's SQLite schema goes to v2; databases from earlier 2.0 test builds are upgraded in place |
 
+## Second review round (12 October)
+
+The last automated review, at `5d1af1e`, left five more findings. All are fixed, and each has a test.
+
+| Fix | Effect |
+| --- | --- |
+| A quick capture whose draft can't be saved stays retryable | Previously reported success with no draft. With "Don't save history" on, the recording was also deleted. The record now fails with "Draft not saved; queued for retry", and its audio is kept |
+| Apple-only languages never go to Parakeet | On macOS 14 and 15, Japanese, Arabic and the others failed the availability check and were sent to Parakeet, which returns confident nonsense. They now fail as retryable, and Settings already says they need macOS 26 |
+| A meeting deletion that fails on disk keeps the meeting listed | Before, it vanished until relaunch and then came back. The next delete or retention sweep retries |
+| Notes and bookmarks use Atlas's opaque `wm1_` reference when there is one | Atlas still accepts the raw meeting ID from the capturing device (its legacy bridge), so this wasn't failing in production. The raw ID remains the fallback |
+| Upgrades from 0.8.x count as a previous launch | 0.8.x wrote `languageAutoMigrated` only when migrating "auto", so an existing user with no history could be shown the full first-run setup. Any 0.8.x setting key, or Sparkle's `SUHasLaunchedBefore`/`SULastCheckTime`, now counts |
+
+## Release-Mac status (12 October)
+
+| Check | Status |
+| --- | --- |
+| Atlas #3697 deployed | Yes. Production (`ba035f6`, 12 October) is 496 commits past its merge commit |
+| Xcode / Swift | Xcode 26.5, Swift 6.3.2. Builds and tests pass |
+| Developer ID certificate | Present: `70C7AE33…` (and the duplicate `492354E0…`) |
+| Sparkle EdDSA key | Present in the login keychain |
+| Notarization | **Blocked.** `notarytool` returns HTTP 403: "A required agreement is missing or has expired". Accept the latest Program License Agreement at developer.apple.com/account, then re-run |
+| Sentry dSYM upload | `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT` aren't set, so the upload will be skipped again unless they're exported |
+| Disk | Nearly full: under 10 GB free after clearing two merged branches' build caches |
+
 ## Release steps (from `main`, after the merge)
 
 ```bash
