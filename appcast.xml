@@ -9,6 +9,14 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>2.0.0</title>
+      <pubDate>Mon, 12 Oct 2026 15:43:56 +0000</pubDate>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <description><![CDATA[WhiskerFlow 2.0: meetings, a private coach, dictation in your own language, the team leaderboard, and Parakeet everywhere.]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v2.0.0/WhiskerFlow-2.0.0.zip" sparkle:version="22" sparkle:shortVersionString="2.0.0" sparkle:edSignature="r7YxDtC5zyyLhSLiOqKInD6ljPGR0PmVdLcavQH1EKkmZRIzqzgM+8LfZ4Dho3UPHTubTH10zGHFkXVxRAz7Dg==" length="18487933" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>0.8.7</title>
       <pubDate>Fri, 04 Sep 2026 21:34:55 +0000</pubDate>
       <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
