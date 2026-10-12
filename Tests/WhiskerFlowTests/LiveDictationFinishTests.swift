@@ -116,4 +116,44 @@ final class RetryDeliveryTests: XCTestCase {
         XCTAssertTrue(paste.pastes.isEmpty, "A retry must never paste")
         XCTAssertTrue(paste.copies.isEmpty, "A retry must not overwrite the clipboard")
     }
+
+    /// A quick capture whose draft can't be saved (here, over the 8,000-character
+    /// bound) stays a failed, retryable record, even with "Don't save history",
+    /// instead of reporting success with nothing in Assistant or History.
+    @MainActor
+    func testQuickCaptureWhoseDraftFailsStaysRetryable() async throws {
+        let name = "WhiskerFlow.retry-tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        settings.allowAppleFallback = false
+        settings.playSounds = false
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TranscriptStore(fileURL: root.appendingPathComponent("transcripts.json"), retention: .off)
+        let audio = root.appendingPathComponent("capture.wav")
+        try Data(count: 44 + 32_000).write(to: audio)
+        let record = TranscriptRecord(text: "", audioFilePath: audio.path, status: .failed(errorMessage: "Timed out"),
+                                      captureIntent: TranscriptCaptureIntent(purpose: .quickCapture, quickKind: .note))
+        try store.add(record)
+        let paste = CountingDeliveryService()
+        let state = AppState(settings: settings, store: store, pasteService: paste,
+                             transcription: FakeRecognizer(text: String(repeating: "Book the venue. ", count: 600)).service)
+        state.records = store.records
+
+        state.retry(record)
+        let deadline = Date().addingTimeInterval(20)
+        while state.status != .failure("Draft not saved; queued for retry"), Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTAssertEqual(state.status, .failure("Draft not saved; queued for retry"))
+        XCTAssertTrue(state.assistant.saved.drafts.isEmpty)
+        XCTAssertEqual(store.records.first { $0.id == record.id }?.status.isFailed, true)
+        XCTAssertEqual(store.records.first { $0.id == record.id }?.captureIntent?.purpose, .quickCapture)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audio.path), "The audio must survive for the retry")
+        XCTAssertTrue(paste.pastes.isEmpty)
+    }
 }

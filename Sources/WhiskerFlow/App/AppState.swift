@@ -2327,6 +2327,16 @@ final class AppState {
             lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "text_processing", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((resumed - text_processingStarted) * 1000)", "worker_elapsed_ms": "\(processed.workSeconds * 1000)", "resume_delay_ms": "\(max(0, resumed - processed.completed) * 1000)"])
             let history_saveStarted = ProcessInfo.processInfo.systemUptime
             lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "history_save", "session": "\(sessionID ?? record.id)"])
+            // A quick capture's draft is its delivery. Save it before History
+            // marks the record done (and "Don't save history" drops its audio),
+            // so a draft that can't be saved leaves a failed, retryable record.
+            if configuration.deliversText, configuration.purpose == .quickCapture {
+                guard assistant.saveLocalDraft(finalText, kind: configuration.quickKind,
+                                               clientReference: configuration.clientReference,
+                                               accountIdentity: configuration.accountIdentity) != nil else {
+                    throw QuickCaptureDraftError(reason: assistant.message)
+                }
+            }
             var historySaved = true
             do {
                 try store.markTranscribed(
@@ -2449,7 +2459,8 @@ final class AppState {
                 code: String((error as NSError).code)
             )
             if mayUpdateUI {
-                status = .failure("Transcription failed; queued for retry")
+                status = .failure(error is QuickCaptureDraftError
+                    ? "Draft not saved; queued for retry" : "Transcription failed; queued for retry")
                 if configuration.playSounds { soundService.play(.transcriptionFailed) }
             }
         }
@@ -2510,7 +2521,8 @@ final class AppState {
         if purpose != .dictation {
             switch purpose {
             case .quickCapture:
-                _ = assistant.saveLocalDraft(text, kind: quickKind, clientReference: clientReference, accountIdentity: accountIdentity)
+                // Saved before History marked the transcript done; see transcribeRecording.
+                break
             case .selectionInstruction:
                 guard mayUpdateStatus else { return }
                 // Spoken instructions are captured locally; the user explicitly requests the preview.
@@ -2587,7 +2599,10 @@ final class AppState {
         var engine = settings.engine
         var language = settings.resolvedLanguage
         var allowAppleFallback = settings.allowAppleFallback
-        if case .appleDictation(let locale) = plan.route, #available(macOS 26.0, *) {
+        // Before macOS 26 Apple's dictation model is missing, and the record
+        // fails as retryable: Parakeet would return confident nonsense for a
+        // language outside its catalog rather than throw.
+        if case .appleDictation(let locale) = plan.route {
             engine = .appleDictation
             language = locale
             // The older Apple recogniser sends most languages to Apple's
@@ -2816,4 +2831,11 @@ extension DictationStyleReceipt {
         case .builtInApp, .fallback: return "Written as \(style) for \(appName)"
         }
     }
+}
+
+/// A quick capture was transcribed but its draft couldn't be saved, so the
+/// History record fails and stays retryable instead of reporting success.
+struct QuickCaptureDraftError: LocalizedError {
+    var reason: String?
+    var errorDescription: String? { "The draft wasn't saved. \(reason ?? "")".trimmingCharacters(in: .whitespaces) }
 }
