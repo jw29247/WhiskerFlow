@@ -311,7 +311,10 @@ final class MeetingLibraryController {
     }
 
     func retryNoteSync(sessionID: UUID) async {
-        guard let entry = entry(sessionID), let reference = entry.atlasMeetingID else { return }
+        guard let entry = entry(sessionID),
+              let reference = AtlasDeviceMeetingReference.forBookmarks(
+                  reference: entry.atlasMeetingReference, meetingID: entry.atlasMeetingID
+              ) else { return }
         await syncNotes(sessionID: sessionID, meetingReference: reference, durationMs: entry.durationMs)
         applyRetention()
     }
@@ -366,12 +369,21 @@ final class MeetingLibraryController {
     }
 
     private func remove(_ sessionID: UUID) {
+        guard let removed = entry(sessionID) else { return }
         entries.removeAll { $0.sessionID == sessionID }
         let store = store
         persistQueue.async { [weak self] in
             do { try store.remove(sessionID: sessionID) } catch {
+                // The file is still on disk and would reappear at the next
+                // launch, so list it again; the next delete or retention sweep
+                // retries.
                 Task { @MainActor [weak self] in
-                    self?.storageError = "A meeting couldn’t be removed from this Mac. It will be tried again."
+                    guard let self else { return }
+                    if entry(sessionID) == nil {
+                        entries.append(removed)
+                        sortEntries()
+                    }
+                    storageError = "A meeting couldn’t be removed from this Mac, so it’s still listed. Try again later."
                 }
             }
         }

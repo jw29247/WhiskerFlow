@@ -928,7 +928,10 @@ final class MeetingCaptureCoordinator {
       }
       lastAtlasMeetingID = try store.loadManifest(sessionID: sessionID).atlasMeetingID
       let completedManifest = try store.loadManifest(sessionID: sessionID)
-      if let meetingReference = completedManifest.atlasMeetingID {
+      let bookmarkReference = AtlasDeviceMeetingReference.forBookmarks(
+        reference: completedManifest.atlasMeetingReference, meetingID: completedManifest.atlasMeetingID
+      )
+      if let meetingReference = bookmarkReference {
         await assistant.finalize(
           sessionID: sessionID,
           meetingReference: meetingReference,
@@ -942,7 +945,7 @@ final class MeetingCaptureCoordinator {
         atlasMeetingReference: completedManifest.atlasMeetingReference,
         bookmarks: bookmarks.isEmpty ? nil : bookmarks
       )
-      if let meetingReference = completedManifest.atlasMeetingID {
+      if let meetingReference = bookmarkReference {
         await library.syncNotes(
           sessionID: sessionID, meetingReference: meetingReference,
           durationMs: completedManifest.durationMs

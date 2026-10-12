@@ -258,6 +258,13 @@ public enum AtlasDeviceMeetingReference {
         let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
         return value.dropFirst(4).unicodeScalars.allSatisfy { allowed.contains($0) }
     }
+
+    /// What bookmarks and notes name the meeting by: the opaque reference when
+    /// Atlas returned one, else the raw meeting ID, which Atlas still bridges
+    /// for the device that captured it.
+    public static func forBookmarks(reference: String?, meetingID: String?) -> String? {
+        isValid(reference) ? reference : meetingID
+    }
 }
 
 /// One meeting kept on this Mac: its status, transcript, notes, bookmarks,

@@ -279,6 +279,45 @@ final class MeetingLibraryCoordinatorTests: XCTestCase {
         XCTAssertNil(library.entry(id))
     }
 
+    /// When Atlas returns an opaque device reference, notes are sent under it
+    /// rather than the raw meeting ID.
+    func testNotesUseTheOpaqueMeetingReference() async throws {
+        let f = try fixture()
+        let reference = "wm1_" + String(repeating: "A", count: 43)
+        f.client.meetingReference = reference
+        var noteRequests: [MeetingBookmarkSyncRequest] = []
+        f.library.noteSync = { request in noteRequests.append(request); return "bookmark-\(noteRequests.count)" }
+        try recordLiveMoments(f)
+
+        await f.coordinator.deliver(sessionID: f.sessionID)
+
+        XCTAssertEqual(f.library.entry(f.sessionID)?.atlasMeetingReference, reference)
+        XCTAssertEqual(noteRequests.map(\.meetingReference), [reference])
+    }
+
+    /// A delete whose file can't be removed lists the meeting again, rather
+    /// than hiding it until the still-present file reappears at relaunch.
+    func testFailedRemovalKeepsTheMeetingListed() async throws {
+        let root = temporaryRoot()
+        let library = MeetingLibraryController(
+            store: EncryptedMeetingLibraryStore(rootURL: root, keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256)))
+        )
+        let id = UUID()
+        library.beginRecording(sessionID: id, title: "T", startedAt: Date(), calendarEventID: nil)
+        library.finishRecording(id, endedAtMs: 1_000, coachRecap: nil, bookmarks: [])
+        library.setStatus(id, .delivered)
+        await library.flush()
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: root.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path) }
+
+        XCTAssertTrue(library.deleteDelivered(id))
+        await library.flush()
+        for _ in 0..<50 where library.entry(id) == nil { try await Task.sleep(nanoseconds: 20_000_000) }
+
+        XCTAssertEqual(library.entry(id)?.status, .delivered)
+        XCTAssertNotNil(library.storageError)
+    }
+
     func testAtlasInsightsAreReadOnlyWithADeviceReference() async throws {
         let f = try fixture()
         try recordLiveMoments(f)
@@ -292,6 +331,7 @@ final class MeetingLibraryCoordinatorTests: XCTestCase {
 final class LibraryDeliveryStub: MeetingAtlasClient, @unchecked Sendable {
     var events: [String] = []
     var failCreate = false
+    var meetingReference: String?
     var onEvent: ((String) -> Void)?
 
     private func record(_ event: String) {
@@ -304,7 +344,7 @@ final class LibraryDeliveryStub: MeetingAtlasClient, @unchecked Sendable {
     func createMeeting(captureSessionID: UUID, title: String, occurredAtMs: Int64, eventID: String?) async throws -> MeetingAtlasCreatedMeeting {
         if failCreate { throw URLError(.notConnectedToInternet) }
         record("create")
-        return MeetingAtlasCreatedMeeting(meetingID: "meeting", created: true)
+        return MeetingAtlasCreatedMeeting(meetingID: "meeting", created: true, meetingReference: meetingReference)
     }
     func prepareRecording(meetingID: String, captureSessionID: UUID, trackChunkCounts: [MeetingAudioTrack: Int], sourceManifestHash: String?, playbackChunkCount: Int?) async throws -> String { record("prepare"); return "artifact" }
     func uploadChunk(artifactID: String, descriptor: MeetingRecordingChunkDescriptor, body: Data) async throws { record("chunk") }

@@ -202,6 +202,10 @@ final class MeetingLibraryTests: XCTestCase {
         XCTAssertFalse(AtlasDeviceMeetingReference.isValid("jd7abc123"), "Raw Convex meeting IDs are not device references")
         XCTAssertFalse(AtlasDeviceMeetingReference.isValid("wm1_" + String(repeating: "=", count: 43)))
         XCTAssertFalse(AtlasDeviceMeetingReference.isValid(nil))
+        let reference = "wm1_" + String(repeating: "A", count: 43)
+        XCTAssertEqual(AtlasDeviceMeetingReference.forBookmarks(reference: reference, meetingID: "jd7abc123"), reference)
+        XCTAssertEqual(AtlasDeviceMeetingReference.forBookmarks(reference: nil, meetingID: "jd7abc123"), "jd7abc123")
+        XCTAssertEqual(AtlasDeviceMeetingReference.forBookmarks(reference: "bogus", meetingID: "jd7abc123"), "jd7abc123")
     }
 
     // MARK: Ordering and decoding
