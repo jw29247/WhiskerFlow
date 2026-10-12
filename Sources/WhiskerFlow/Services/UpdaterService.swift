@@ -20,15 +20,15 @@ final class UpdaterService: ObservableObject {
 
     /// Mirrors Sparkle's stored preference; writing flips the real setting.
     @Published var automaticallyChecksForUpdates: Bool {
-        didSet { updater.automaticallyChecksForUpdates = automaticallyChecksForUpdates }
+        didSet { if !UIPreview.isEnabled { updater.automaticallyChecksForUpdates = automaticallyChecksForUpdates } }
     }
 
-    init() {
+    init(startingUpdater: Bool = true) {
         // startingUpdater: true begins scheduled checks immediately. Nil delegates
         // keep Sparkle's standard behavior, including the first-run prompt asking
         // permission to check automatically.
         let controller = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: startingUpdater,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
@@ -40,6 +40,7 @@ final class UpdaterService: ObservableObject {
 
     /// Trigger a user-initiated check (shows progress + "you're up to date" UI).
     func checkForUpdates() {
+        guard !UIPreview.isEnabled else { return }
         updater.checkForUpdates()
     }
 }

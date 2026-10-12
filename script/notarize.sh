@@ -125,8 +125,6 @@ echo "==> Notarized & stapled the app"
 
 # --- 3. Stage DMG contents ----------------------------------------------------
 cp "$ROOT_DIR/Distribution/README.txt" "$STAGING_DIR/README.txt"
-cp "$ROOT_DIR/Distribution/Install Whisper.command" "$STAGING_DIR/Install Whisper.command"
-chmod +x "$STAGING_DIR/Install Whisper.command"
 ln -s /Applications "$STAGING_DIR/Applications"
 
 # --- 4. Build, notarize, and staple the DMG (the artifact the team downloads) -

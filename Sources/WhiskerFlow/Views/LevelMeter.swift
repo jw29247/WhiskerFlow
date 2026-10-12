@@ -2,6 +2,7 @@ import SwiftUI
 
 /// A compact animated bar meter that reacts to a 0...1 input level.
 struct LevelMeter: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var level: Float
     var barCount: Int = 5
     var tint: Color = .accentColor
@@ -17,7 +18,7 @@ struct LevelMeter: View {
             }
         }
         .frame(height: maxHeight)
-        .animation(.easeOut(duration: 0.12), value: level)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: level)
     }
 
     private func height(for index: Int) -> CGFloat {

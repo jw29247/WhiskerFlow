@@ -30,7 +30,8 @@ public enum VocabularyCorrectionDetector {
         original: String,
         edited: String,
         existingRules: Vocabulary = Vocabulary(),
-        maxSuggestions: Int = 3
+        maxSuggestions: Int = 3,
+        allowShortCorrections: Bool = false
     ) -> [VocabularyCorrection] {
         let originalTokens = tokens(in: original)
         let editedTokens = tokens(in: edited)
@@ -44,8 +45,13 @@ public enum VocabularyCorrectionDetector {
             runs.reduce(0) { $0 + $1.replaceWith.count }
         )
         let totalTokens = max(originalTokens.count, editedTokens.count)
-        guard Double(changedTokens) / Double(totalTokens) <= rewriteRatio else { return [] }
+        let shortWordCorrection = allowShortCorrections && totalTokens <= 3 && runs.count == 1
+            && runs[0].find.count == 1 && runs[0].replaceWith.count == 1
+        guard shortWordCorrection || Double(changedTokens) / Double(totalTokens) <= rewriteRatio else { return [] }
 
+        // One regex set for every run: `Vocabulary.apply` recompiles each rule per
+        // call, and this runs on the main actor when a History edit is saved.
+        let compiledRules = CompiledVocabulary(existingRules)
         var suggestions: [VocabularyCorrection] = []
         var seen: Set<VocabularyCorrection> = []
         for run in runs {
@@ -56,7 +62,7 @@ public enum VocabularyCorrectionDetector {
             guard find != replaceWith,
                   containsLetter(find),
                   containsLetter(replaceWith),
-                  existingRules.apply(to: find) != replaceWith else { continue }
+                  compiledRules.apply(to: find) != replaceWith else { continue }
             let suggestion = VocabularyCorrection(find: find, replaceWith: replaceWith)
             guard seen.insert(suggestion).inserted else { continue }
             suggestions.append(suggestion)

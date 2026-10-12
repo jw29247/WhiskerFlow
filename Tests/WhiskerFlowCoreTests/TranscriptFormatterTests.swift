@@ -92,6 +92,28 @@ final class TranscriptFormatterTests: XCTestCase {
         )
     }
 
+    func testFillerRemovalOnlyAppliesToEnglishOrUnknownLanguage() {
+        let german = FormattingOptions(removeFillerWords: true, language: "de")
+        let sentence = "Wir treffen uns um 5 Uhr, um das zu besprechen"
+        XCTAssertEqual(TranscriptFormatter.format(sentence, options: german), sentence)
+
+        for language in [nil, "auto", "en", "en-GB", "EN_us"] {
+            let options = FormattingOptions(removeFillerWords: true, language: language)
+            XCTAssertEqual(
+                TranscriptFormatter.format("so um the plan", options: options),
+                "so the plan",
+                language ?? "nil"
+            )
+        }
+    }
+
+    func testLanguageIsNotPersistedWithFormattingChoices() throws {
+        let options = FormattingOptions(removeFillerWords: true, language: "de")
+        let decoded = try JSONDecoder().decode(FormattingOptions.self, from: JSONEncoder().encode(options))
+        XCTAssertTrue(decoded.removeFillerWords)
+        XCTAssertNil(decoded.language)
+    }
+
     func testCapitalizationAfterTerminatorsAndNewlines() {
         let options = FormattingOptions(capitalizeSentences: true)
 

@@ -13,11 +13,6 @@ let package = Package(
         .library(name: "WhiskerFlowAppSupport", targets: ["WhiskerFlowAppSupport"])
     ],
     dependencies: [
-        // Argmax's OSS distribution keeps WhisperKit and SpeakerKit on one
-        // compatible Swift package. Server targets are disabled by default by
-        // the upstream package, so this does not bring a cloud ASR service into
-        // the app.
-        .package(url: "https://github.com/argmaxinc/argmax-oss-swift", exact: "1.1.0"),
         // Parakeet TDT v3 provides the fast, high-quality on-device default.
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.6"),
         // In-app auto-updates (appcast + EdDSA-signed updates). Sparkle ships as a
@@ -39,6 +34,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "WhiskerFlowCore"),
+        .target(name: "WhiskerFlowObjCSupport"),
         .target(
             name: "WhiskerFlowAppSupport",
             dependencies: [
@@ -58,16 +54,20 @@ let package = Package(
             dependencies: [
                 "WhiskerFlowCore",
                 "WhiskerFlowAppSupport",
+                "WhiskerFlowObjCSupport",
                 .product(name: "FluidAudio", package: "FluidAudio"),
-                .product(name: "WhisperKit", package: "argmax-oss-swift"),
-                .product(name: "SpeakerKit", package: "argmax-oss-swift"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "Sentry", package: "sentry-cocoa"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
                 .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core")
             ],
-            resources: [.copy("Resources/shared-vocabulary.json")]
+            resources: [.copy("Resources/shared-vocabulary.json")],
+            // The on-device coach model ships with macOS 26. Weak-link it so the
+            // app still launches on macOS 14 and 15, where the feature is hidden.
+            // Translation is weak-linked for the same reason (macOS 15 and later).
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-weak_framework", "-Xlinker", "FoundationModels",
+                                           "-Xlinker", "-weak_framework", "-Xlinker", "Translation"])]
         ),
         .testTarget(
             name: "WhiskerFlowCoreTests",
@@ -79,7 +79,7 @@ let package = Package(
         ),
         .testTarget(
             name: "WhiskerFlowTests",
-            dependencies: ["WhiskerFlow", .product(name: "FluidAudio", package: "FluidAudio")]
+            dependencies: ["WhiskerFlow", "WhiskerFlowObjCSupport", .product(name: "FluidAudio", package: "FluidAudio")]
         )
     ]
 )

@@ -27,6 +27,8 @@ public enum Observability {
         state.tracer
     }
 
+    public static var assistantOperations: LongCounterSdk { state.assistantOperations }
+
     public static var dictationSessions: LongCounterSdk {
         state.dictationSessions
     }
@@ -47,8 +49,17 @@ public enum Observability {
         state.transcriptPersistence
     }
 
+    /// Anonymous setup funnel: one count per step and outcome, nothing else.
+    public static func recordOnboarding(_ event: OnboardingTelemetryEvent) {
+        let attributes = DiagnosticPrivacy.safeMetadata(from: event.attributes)
+        state.onboardingSteps.add(value: 1, attributes: attributes.mapValues { .string($0) })
+    }
+
     public static func start() {
         guard state.markStarted() else { return }
+        MainThreadHealthMonitor.shared.start()
+        let lifecycle = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
+        lifecycle.info("Application diagnostics started", metadata: ["event": "app_started"])
 
         state.tracer.spanBuilder(spanName: "app.start").withActiveSpan { span in
             span.setAttribute(key: "app.lifecycle.phase", value: "started")
@@ -69,6 +80,12 @@ public enum Observability {
                 ]
             )
         }
+    }
+
+    /// Marks an audio capture (e.g. "dictation", "meeting") as running so stall
+    /// diagnostics don't spawn `sample`, which suspends every thread in the process.
+    public static func setAudioCaptureActive(_ active: Bool, source: String) {
+        MainThreadHealthMonitor.shared.setAudioCaptureActive(active, source: source)
     }
 
     @discardableResult
@@ -125,11 +142,13 @@ public enum Observability {
         let meterProvider: MeterProviderSdk
         let tracer: any Tracer
         let appLifecycle: LongCounterSdk
+        let assistantOperations: LongCounterSdk
         let dictationSessions: LongCounterSdk
         let transcriptionOperations: LongCounterSdk
         let transcriptionDuration: DoubleHistogramMeterSdk
         let recordingDuration: DoubleHistogramMeterSdk
         let transcriptPersistence: LongCounterSdk
+        let onboardingSteps: LongCounterSdk
         let telemetryVerification: LongCounterSdk
 
         private let startLock = NSLock()
@@ -221,6 +240,7 @@ public enum Observability {
                 .setDescription("Application lifecycle transitions")
                 .setUnit("1")
                 .build()
+            assistantOperations = meter.counterBuilder(name: "assistant.operations").setDescription("Assistant request outcomes without content").setUnit("1").build()
             dictationSessions = meter.counterBuilder(name: "dictation.sessions")
                 .setDescription("Dictation session state transitions")
                 .setUnit("1")
@@ -241,6 +261,10 @@ public enum Observability {
                 .setDescription("Transcript persistence outcomes")
                 .setUnit("1")
                 .build()
+            onboardingSteps = meter.counterBuilder(name: "onboarding.steps")
+                .setDescription("First-run setup step views, completions, skips and drop-offs")
+                .setUnit("1")
+                .build()
             telemetryVerification = meter.counterBuilder(name: "telemetry.verification")
                 .setDescription("Live telemetry smoke attempts")
                 .setUnit("1")
@@ -256,7 +280,7 @@ public enum Observability {
 
                 var systemHandler = UnifiedLogHandler(label: label)
                 systemHandler.logLevel = .info
-                return MultiplexLogHandler([systemHandler, otelHandler])
+                return MultiplexLogHandler([systemHandler, otelHandler, LocalDiagnosticLogHandler(label: label)])
             }
         }
 
@@ -350,11 +374,72 @@ private struct TelemetryHTTPStatusError: LocalizedError {
     }
 }
 
+/// Decides whether a failed OTLP export may be handed back to the exporter.
+/// The upstream OTLP HTTP exporters re-queue every failed batch and prepend it
+/// to the next export with no cap, so an offline Mac or a permanently rejecting
+/// intake would otherwise grow memory and re-encode an ever larger backlog.
+/// Reporting `.success` to the exporter drops the batch (and its backlog).
+final class TelemetryExportRetryPolicy: @unchecked Sendable {
+    enum Decision: Equatable {
+        case delivered
+        case retry
+        case drop
+    }
+
+    static let defaultMaxConsecutiveFailures = 6
+    static let defaultMaxRetainedBodyBytes = 1_000_000
+
+    private let lock = NSLock()
+    private let maxConsecutiveFailures: Int
+    private let maxRetainedBodyBytes: Int
+    private var consecutiveFailures = 0
+
+    init(
+        maxConsecutiveFailures: Int = TelemetryExportRetryPolicy.defaultMaxConsecutiveFailures,
+        maxRetainedBodyBytes: Int = TelemetryExportRetryPolicy.defaultMaxRetainedBodyBytes
+    ) {
+        self.maxConsecutiveFailures = max(0, maxConsecutiveFailures)
+        self.maxRetainedBodyBytes = max(0, maxRetainedBodyBytes)
+    }
+
+    /// `statusCode` is nil for transport failures (offline, DNS, timeout).
+    func decide(statusCode: Int?, bodyBytes: Int) -> Decision {
+        lock.lock()
+        defer { lock.unlock() }
+        if let statusCode, (200..<300).contains(statusCode) {
+            consecutiveFailures = 0
+            return .delivered
+        }
+        if let statusCode, !Self.isRetryable(statusCode) {
+            // Permanent rejection (revoked token, missing project, payload
+            // too large): resending the same batch can never succeed.
+            consecutiveFailures = 0
+            return .drop
+        }
+        consecutiveFailures += 1
+        guard consecutiveFailures <= maxConsecutiveFailures,
+              bodyBytes <= maxRetainedBodyBytes else {
+            consecutiveFailures = 0
+            return .drop
+        }
+        return .retry
+    }
+
+    static func isRetryable(_ statusCode: Int) -> Bool {
+        switch statusCode {
+        case 408, 429: true
+        case 400..<500: false
+        default: true
+        }
+    }
+}
+
 private final class StatusRecordingHTTPClient: HTTPClient {
     private let signal: TelemetrySignal
     private let statuses: ExportStatusStore
     private let requests: DispatchGroup
     private let base = BaseHTTPClient()
+    private let retryPolicy = TelemetryExportRetryPolicy()
 
     init(
         signal: TelemetrySignal,
@@ -371,12 +456,16 @@ private final class StatusRecordingHTTPClient: HTTPClient {
         completion: @escaping (Result<HTTPURLResponse, Error>) -> Void
     ) {
         requests.enter()
-        base.send(request: request) { [signal, statuses, requests] result in
+        let bodyBytes = request.httpBody?.count ?? 0
+        base.send(request: request) { [signal, statuses, requests, retryPolicy] result in
             defer { requests.leave() }
             switch result {
             case .success(let response):
                 statuses.record(response.statusCode, for: signal)
-                guard (200..<300).contains(response.statusCode) else {
+                switch retryPolicy.decide(statusCode: response.statusCode, bodyBytes: bodyBytes) {
+                case .delivered, .drop:
+                    completion(.success(response))
+                case .retry:
                     completion(
                         .failure(
                             TelemetryHTTPStatusError(
@@ -385,11 +474,26 @@ private final class StatusRecordingHTTPClient: HTTPClient {
                             )
                         )
                     )
-                    return
                 }
-                completion(.success(response))
             case .failure(let error):
-                completion(.failure(error))
+                switch retryPolicy.decide(statusCode: nil, bodyBytes: bodyBytes) {
+                case .delivered, .drop:
+                    // The exporter only re-queues on `.failure`; a synthetic
+                    // response discards the batch and its backlog.
+                    if let url = request.url,
+                       let dropped = HTTPURLResponse(
+                           url: url,
+                           statusCode: 599,
+                           httpVersion: nil,
+                           headerFields: nil
+                       ) {
+                        completion(.success(dropped))
+                    } else {
+                        completion(.failure(error))
+                    }
+                case .retry:
+                    completion(.failure(error))
+                }
             }
         }
     }

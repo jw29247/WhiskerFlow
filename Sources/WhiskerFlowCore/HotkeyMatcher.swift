@@ -26,17 +26,17 @@ public struct HotkeyMatcher {
     }
 
     /// Feed a modifier-flags-changed event. `modifiers` is the full, unmasked
-    /// device-independent modifier state. Returns the new pressed state if it
-    /// changed, else `nil`.
+    /// modifier state, including the device-dependent side bits when the event
+    /// carries them. Returns the new pressed state if it changed, else `nil`.
     public mutating func handleFlags(keyCode: UInt16, modifiers: KeyModifiers) -> Bool? {
         if combo.isModifierOnly {
             if keyCode == combo.keyCode {
-                return transition(to: modifiers.contains(combo.modifiers))
+                return transition(to: isModifierKeyHeld(modifiers))
             }
             // The shared flag (e.g. ⌘ exists on both sides) cleared via the
             // mirror key while we were held — treat that as a release so the
             // trigger can't get stuck on.
-            if isPressed, !modifiers.contains(combo.modifiers) {
+            if isPressed, !isModifierKeyHeld(modifiers) {
                 return transition(to: false)
             }
             return nil
@@ -71,6 +71,23 @@ public struct HotkeyMatcher {
         // (or the key first) both end the press.
         return transition(to: false)
     }
+
+    /// The shared flag stays set while the mirror key (e.g. Left ⌘) is down, so
+    /// prefer the side-specific device bit for the recorded key when present.
+    /// Events without device bits (some remappers) fall back to the shared flag.
+    private func isModifierKeyHeld(_ modifiers: KeyModifiers) -> Bool {
+        guard modifiers.contains(combo.modifiers) else { return false }
+        guard let side = Self.deviceSideMasks[combo.keyCode],
+              modifiers.rawValue & Self.allDeviceSideBits != 0 else { return true }
+        return modifiers.rawValue & side != 0
+    }
+
+    /// `NX_DEVICE*KEYMASK` bits carried in the low word of `NSEvent.ModifierFlags`.
+    private static let deviceSideMasks: [UInt16: UInt] = [
+        59: 0x0001, 56: 0x0002, 60: 0x0004, 55: 0x0008,
+        54: 0x0010, 58: 0x0020, 61: 0x0040, 62: 0x2000
+    ]
+    private static let allDeviceSideBits: UInt = 0x207F
 
     private mutating func transition(to pressed: Bool) -> Bool? {
         guard pressed != isPressed else { return nil }

@@ -13,6 +13,13 @@ SIGN_IDENTITY="${SIGN_IDENTITY:-}"
 ENTITLEMENTS="${ENTITLEMENTS:-$ROOT_DIR/Resources/WhiskerFlow.entitlements}"
 BUNDLE_IDENTIFIER_OVERRIDE="${BUNDLE_IDENTIFIER_OVERRIDE:-}"
 BUNDLE_NAME_OVERRIDE="${BUNDLE_NAME_OVERRIDE:-}"
+# Debug bundles keep DEBUG-only behavior (no Sparkle updates, verification
+# commands) but are compiled with -O by default: unoptimized FluidAudio decoding
+# is 1.5–1.8x slower, so a -Onone candidate misrepresents dictation latency.
+# The optimized build uses its own scratch path so `swift test` keeps its cache.
+# OPTIMIZE=0 restores the plain -Onone build for debugger sessions.
+OPTIMIZE="${OPTIMIZE:-1}"
+BUILD_ROOT="$ROOT_DIR/.build"
 
 cd "$ROOT_DIR"
 
@@ -23,11 +30,14 @@ if [[ "$CONFIGURATION" == "release" ]]; then
     -Xswiftc -debug-prefix-map -Xswiftc "$ROOT_DIR=." \
     -Xcc "-fdebug-prefix-map=$ROOT_DIR=." \
     -Xswiftc -Xfrontend -Xswiftc -no-clang-module-breadcrumbs
+elif [[ "$OPTIMIZE" == "1" ]]; then
+  BUILD_ROOT="$ROOT_DIR/.build/optimized"
+  swift build --configuration "$CONFIGURATION" --scratch-path "$BUILD_ROOT" -Xswiftc -O
 else
   swift build --configuration "$CONFIGURATION"
 fi
 
-BINARY="$ROOT_DIR/.build/$CONFIGURATION/$PRODUCT"
+BINARY="$BUILD_ROOT/$CONFIGURATION/$PRODUCT"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$PRODUCT"
 
 if [[ ! -x "$BINARY" ]]; then
@@ -39,6 +49,8 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$BINARY" "$APP_BINARY"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
+BUILD_REVISION="$(git rev-parse --short=12 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
+/usr/libexec/PlistBuddy -c "Add :WhiskerFlowBuildRevision string $BUILD_REVISION" "$APP_BUNDLE/Contents/Info.plist"
 if [[ -n "$BUNDLE_IDENTIFIER_OVERRIDE" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_IDENTIFIER_OVERRIDE" \
     "$APP_BUNDLE/Contents/Info.plist"
@@ -57,7 +69,7 @@ if [[ -f "$ROOT_DIR/Resources/AppIcon.icns" ]]; then
   cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 fi
 
-# Bundle SwiftPM dependency resource bundles (e.g. WhisperKit) so the app is self-contained.
+# Bundle SwiftPM dependency resource bundles so the app is self-contained.
 BUILD_DIR="$(dirname "$BINARY")"
 shopt -s nullglob
 for bundle in "$BUILD_DIR"/*.bundle; do
@@ -78,12 +90,24 @@ if [[ -d "$SPARKLE_FRAMEWORK" ]]; then
   fi
 fi
 
+# The Now Playing helper: MediaRemote answers only Apple-signed processes, so
+# WhiskerFlow loads this into /usr/bin/perl (see NowPlayingBridge.swift).
+mkdir -p "$APP_BUNDLE/Contents/Frameworks"
+clang -fblocks -dynamiclib -O2 -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
+  -framework CoreFoundation \
+  -o "$APP_BUNDLE/Contents/Frameworks/libWhiskerFlowNowPlaying.dylib" \
+  "$ROOT_DIR/Support/NowPlaying/WhiskerFlowNowPlaying.c"
+
 # Sign inner-to-outer (Apple discourages --deep for real signing). Only nested
 # bundles that actually contain Mach-O code need their own signature; resource-
 # only bundles (e.g. swift-transformers_Hub.bundle) are sealed by the app
 # signature and cannot be code-signed standalone.
 has_macho() {
-  find "$1" -type f -print0 2>/dev/null | xargs -0 file 2>/dev/null | grep -q "Mach-O"
+  # Count instead of `grep -q`: an early exit would SIGPIPE `file`, and under
+  # pipefail that failure would read as "no Mach-O" and skip signing.
+  local count
+  count="$(find "$1" -type f -exec file {} + 2>/dev/null | grep -c "Mach-O" || true)"
+  [[ "${count:-0}" -gt 0 ]]
 }
 
 # Sign one nested item with the active identity: Developer ID + hardened runtime
@@ -122,6 +146,8 @@ shopt -u nullglob
 if [[ -d "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework" ]]; then
   sign_sparkle_framework "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
 fi
+codesign_one "$APP_BUNDLE/Contents/Frameworks/libWhiskerFlowNowPlaying.dylib"
+
 
 if [[ -n "$SIGN_IDENTITY" ]]; then
   echo "Signing with: $SIGN_IDENTITY (hardened runtime)"

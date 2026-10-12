@@ -91,4 +91,68 @@ final class AsyncTimeoutTests: XCTestCase {
         release.set()
         try? await Task.sleep(nanoseconds: 100_000_000)
     }
+
+    /// A cancelled caller (quit drain, capture restart) must stop waiting at once
+    /// instead of sitting out the whole deadline behind a non-cooperative decode.
+    func testAbandoningDeadlineReturnsAsSoonAsTheCallerIsCancelled() async {
+        let release = TestFlag()
+        let caller = Task {
+            try await withAbandoningDeadline(seconds: 30) {
+                while !release.isSet { await Task.yield() }
+                return "late"
+            }
+        }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let started = Date()
+        caller.cancel()
+        do {
+            _ = try await caller.value
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        release.set()
+    }
+
+    func testAbandoningDeadlineInAlreadyCancelledTaskThrowsImmediately() async {
+        let caller = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await withAbandoningDeadline(seconds: 30) {
+                try await Task.sleep(nanoseconds: 30_000_000_000)
+                return "late"
+            }
+        }
+        do {
+            _ = try await caller.value
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
+    func testAbandoningCancellationWaitsWithoutADeadlineButHonoursCancel() async throws {
+        let value = try await withAbandoningCancellation {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            return "done"
+        }
+        XCTAssertEqual(value, "done")
+
+        let release = TestFlag()
+        let caller = Task {
+            try await withAbandoningCancellation {
+                while !release.isSet { await Task.yield() }
+                return "late"
+            }
+        }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        caller.cancel()
+        do {
+            _ = try await caller.value
+            XCTFail("Expected cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        release.set()
+    }
 }

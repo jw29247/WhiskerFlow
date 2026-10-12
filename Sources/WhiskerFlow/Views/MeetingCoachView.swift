@@ -1,0 +1,140 @@
+import SwiftUI
+import WhiskerFlowCore
+
+struct MeetingCoachView: View {
+    @Bindable var controller: MeetingAssistantController
+    let requestPreparation: @MainActor () async -> Void
+    let requestReview: @MainActor () async -> Void
+    @State private var bookmarkLabel = ""
+    @State private var bookmarkFeedback: String?
+    @State private var localRecapMessage: String?
+
+    init(
+        controller: MeetingAssistantController,
+        requestPreparation: @escaping @MainActor () async -> Void,
+        requestReview: @escaping @MainActor () async -> Void
+    ) {
+        self.controller = controller
+        self.requestPreparation = requestPreparation
+        self.requestReview = requestReview
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Private meeting coach", systemImage: "person.crop.circle.badge.checkmark")
+                    .font(.headline)
+                Spacer()
+                Toggle("Coach", isOn: $controller.isCoachEnabled).toggleStyle(.switch)
+            }
+            Text("Coaching stays private to you and on this Mac. Talk share and long turns come from your microphone and Mac-audio activity; pace from on-device transcription of your microphone.")
+                .font(.caption).foregroundStyle(FlowStyle.muted)
+
+            TextField("What do you want from this meeting?", text: $controller.goal)
+                .textFieldStyle(.roundedBorder)
+            TextField("Agenda or checklist", text: $controller.agenda, axis: .vertical)
+                .textFieldStyle(.roundedBorder).lineLimit(2...5)
+            if !controller.isActive {
+                Picker("Ad hoc planned duration", selection: $controller.plannedDurationMinutes) {
+                    Text("No wrap reminder").tag(nil as Int?)
+                    ForEach([15, 30, 45, 60, 90, 120], id: \.self) { minutes in
+                        Text("\(minutes) minutes").tag(Optional(minutes))
+                    }
+                }
+                Text("Scheduled meetings use their calendar end time. Ad hoc meetings use only the duration you choose.")
+                    .font(.caption).foregroundStyle(FlowStyle.muted)
+            }
+            Button("Prepare") { Task { await requestPreparation() } }
+                .disabled(controller.isActive)
+
+            if controller.isActive {
+                Divider()
+                HStack {
+                    Text(controller.activeTitle ?? "Meeting in progress").font(.subheadline.weight(.medium))
+                    Spacer()
+                    Text(Self.duration(controller.elapsedSeconds)).monospacedDigit()
+                }
+                if controller.isCoachEnabled {
+                    if controller.isCoachVisible {
+                        MeetingCoachLiveMetrics(controller: controller)
+                        Text(Self.certaintyLabel(controller.activity.certainty)).font(.caption).foregroundStyle(FlowStyle.muted)
+                        MeetingCoachPromptView(controller: controller)
+                    }
+                    HStack {
+                        Button(controller.isCoachPaused ? "Resume coaching" : "Pause coaching") {
+                            controller.isCoachPaused.toggle()
+                        }
+                        Button(controller.isCoachVisible ? "Hide coach" : "Show coach") {
+                            controller.isCoachVisible.toggle()
+                        }
+                    }
+                }
+                HStack {
+                    TextField("Optional bookmark label · ⌥⇧⌘B bookmarks immediately", text: $bookmarkLabel).textFieldStyle(.roundedBorder)
+                    Button("Bookmark") {
+                        do {
+                            let bookmark = try controller.addBookmark(label: bookmarkLabel)
+                            bookmarkFeedback = "Bookmarked at \(Self.duration(Double(bookmark.elapsedMilliseconds) / 1_000))."
+                            bookmarkLabel = ""
+                        } catch {
+                            bookmarkFeedback = "The bookmark could not be saved."
+                        }
+                    }
+                }
+                if let bookmarkFeedback {
+                    Text(bookmarkFeedback).font(.caption).foregroundStyle(FlowStyle.muted)
+                }
+            }
+            if !controller.isActive, let summary = controller.localReview {
+                DisclosureGroup("Local meeting recap") {
+                    Text(summary).font(.callout).textSelection(.enabled).padding(.top, 8)
+                    Button("Delete local recap", role: .destructive) {
+                        localRecapMessage = controller.deleteLocalReview() ? "Local recap deleted. Recording and bookmarks are unchanged." : nil
+                    }
+                }
+            }
+            if let localRecapMessage { Text(localRecapMessage).font(.caption) }
+            if !controller.isActive, controller.latestFinalizedMeetingReference != nil {
+                Button("Review latest meeting") { Task { await requestReview() } }
+            }
+            if let error = controller.storageError { Text(error).font(.callout).foregroundStyle(.orange) }
+            if !controller.bookmarks.isEmpty {
+                DisclosureGroup("Saved bookmarks (\(controller.bookmarks.count))") {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(controller.bookmarks.reversed()) { bookmark in
+                                HStack {
+                                    Text(Self.duration(Double(bookmark.elapsedMilliseconds) / 1000)).monospacedDigit()
+                                    Text(bookmark.label ?? "Bookmarked moment").lineLimit(2)
+                                    Spacer()
+                                    Text(bookmark.syncState == .synced ? "In Atlas" : "On this Mac")
+                                        .font(.caption).foregroundStyle(FlowStyle.muted)
+                                    if bookmark.syncState != .synced {
+                                        Button("Retry") { Task { await controller.retryPendingBookmarks(sessionID: bookmark.sessionID) } }
+                                    }
+                                }.font(.callout)
+                            }
+                        }.padding(.vertical, 10)
+                    }.frame(maxHeight: 220)
+                }
+            }
+        }
+        .padding(18)
+        .background(FlowStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    static func certaintyLabel(_ certainty: MeetingActivityCertainty) -> String {
+        switch certainty {
+        case .reliable: return "Estimated from both audio tracks."
+        case .missingOwnMicTrack: return "Estimate uncertain: microphone activity is missing."
+        case .missingSystemTrack: return "Estimate uncertain: Mac-audio activity is missing."
+        case .missingBothTracks: return "Estimate unavailable: both activity tracks are missing."
+        case .uncertainOverlap: return "Estimate uncertain: microphone and Mac audio overlap."
+        }
+    }
+
+    static func duration(_ seconds: TimeInterval) -> String {
+        let value = max(0, Int(seconds))
+        return String(format: "%02d:%02d", value / 60, value % 60)
+    }
+}

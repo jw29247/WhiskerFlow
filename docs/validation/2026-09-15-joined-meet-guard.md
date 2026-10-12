@@ -1,0 +1,9 @@
+# Calendar-only recording guard
+
+13:30 BST review found session F1262067-54E6-4D9D-A0E9-660E555C777C recording with 606 chunks despite no Meet browser tab or Meet PWA process; Jacob had said the next meeting was tomorrow. Native app confirmed scheduled recording and unavailable speaker information. Stopped through normal Stop recording, preserved chunks, and disabled automatic recording via app settings to prevent recurrence. Upload still active at last check.
+
+Root cause: calendar time was sufficient for pollSchedule to call startCapture; no joined-call check. Added a native AX joined-call requirement and exact scheduled Meet path match before automatic start. Prejoin page, absent/incomplete AX tree, wrong call, unsupported origin or multiple web areas fail closed. Local reader now requires a Leave call/Leave meeting button; visible speaking status is not required to recognise joining. A post-await guard rechecks cancellation, automatic mode and capture ownership. Manual recording stays available.
+
+Regression test testCalendarEntryAloneCannotStartRecording failed before guard by reaching recording setup; passes after. 37 tests passed, 1 optional live test skipped. Signed Joined Meet candidate verified. Not launched because current app is still uploading preserved capture. Do not claim current build has the guard until switched when idle. Keep automatic mode off until the guard is deployed and actual Meet presence verified; at tomorrow 10:30 inspect/join-check and manually start recording if needed.
+
+Current dictation review: 13 completed sessions in gate, one active day, p95 5659.6ms, 2 faults (one slow completion plus one stall), 13 unverified receipts. Stall recognition span 4566.6ms; main recovered after3493.2ms. Native sample completed after recovery and includes pasteboard/audio teardown, so it does not establish causation. No speculative change to dictation or stability reset.

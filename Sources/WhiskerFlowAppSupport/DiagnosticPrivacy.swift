@@ -2,13 +2,15 @@ import Foundation
 
 public enum DiagnosticPrivacy {
     private static let breadcrumbCategories: Set<String> = [
-        "recording", "audio", "model", "storage", "glossary"
+        "recording", "audio", "model", "storage", "glossary", "onboarding"
     ]
     /// Every key here carries a fixed vocabulary or a count — never transcript
     /// text, a path, or a device name. Anything else is dropped.
     private static let metadataKeys: Set<String> = [
         "phase", "engine", "error_code", "stop_reason", "input_kind", "model",
-        "source", "dropped_rules", "kept_rules", "recovered"
+        "source", "dropped_rules", "kept_rules", "recovered",
+        // Onboarding: a fixed step name and outcome word (`OnboardingTelemetryEvent`).
+        "step", "outcome"
     ]
 
     public static func allowsBreadcrumb(category: String?) -> Bool {

@@ -1,197 +1,192 @@
+import AVFoundation
 import SwiftUI
 import WhiskerFlowCore
 
 struct TranscriptDetailView: View {
     @Bindable var appState: AppState
-
-    @State private var draft: String = ""
-    @State private var editingID: TranscriptRecord.ID?
-
-    private var record: TranscriptRecord? { appState.selectedRecord }
+    let record: TranscriptRecord
+    @Binding var draft: TranscriptDraft
+    var saveDraft: () -> Bool
+    @State private var confirmDelete = false
+    @State private var saveError = false
+    @State private var player = RecordingPlayer()
+    @State private var pendingEngine: TranscriptionEngineKind?
 
     var body: some View {
-        Group {
-            if let record {
-                content(for: record)
-            } else {
-                ContentUnavailableView(
-                    "No Transcripts",
-                    systemImage: "waveform",
-                    description: Text("Hold \(appState.settings.hotkeyDisplayName) to create your first recording.")
-                )
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(record.createdAt, format: .dateTime.month(.wide).day())
+                        .font(.system(size: 23, weight: .semibold, design: .rounded))
+                    Text(record.createdAt, format: .dateTime.weekday(.wide).hour().minute())
+                        .font(.system(size: 12)).foregroundStyle(FlowStyle.muted)
+                }
+                Spacer(minLength: 8)
+                FlowCopyButton(text: record.status == .transcribed ? draft.text : record.text, allowsEmpty: record.status == .transcribed, copy: appState.copyEditorText)
+                    .buttonStyle(FlowPrimaryButtonStyle())
+                Menu {
+                    Button("Delete recording…", role: .destructive) { confirmDelete = true }
+                } label: { Image(systemName: "ellipsis") }
+                    .menuStyle(.borderlessButton).fixedSize().padding(.top, 10)
+                    .help("Transcript actions")
+            }.padding(.bottom, 22)
+
+            if !appState.records.contains(where: { $0.id == record.id }) {
+                Text("The original recording was removed from history. Save to keep your text as a new transcript.")
+                    .font(.caption).foregroundStyle(FlowStyle.muted).padding(.bottom, 12)
             }
-        }
-        .background(.thinMaterial)
-        .onChange(of: record?.id) { _, _ in syncDraft() }
-        .onAppear { syncDraft() }
-    }
-
-    private func content(for record: TranscriptRecord) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Label(statusTitle(record), systemImage: statusIcon(record))
-                    .font(.headline)
-                    .foregroundStyle(statusColor(record))
-                Spacer()
-                actions(for: record)
-            }
-
-            metadata(for: record)
-
             if record.status == .transcribed {
-                TextEditor(text: $draft)
-                    .font(.system(.body, design: .serif))
+                TextEditor(text: $draft.text)
+                    .font(.system(size: 16))
+                    .lineSpacing(7)
                     .scrollContentBackground(.hidden)
-                    .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(.background.opacity(0.5)))
+                    .padding(13)
+                    .background(FlowStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(FlowStyle.line.opacity(0.6), lineWidth: 1))
+                    .accessibilityLabel("Transcript text")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if draft != record.text {
+                if draft.isDirty {
                     HStack {
+                        Text("Unsaved changes").font(.caption).foregroundStyle(FlowStyle.muted)
                         Spacer()
-                        Button("Revert") { draft = record.text }
-                        Button("Save changes") { appState.updateText(record, to: draft) }
-                            .buttonStyle(.borderedProminent)
-                    }
+                        Button("Discard") { draft.discard() }
+                        Button("Save changes", action: save)
+                            .buttonStyle(FlowPrimaryButtonStyle())
+                            .keyboardShortcut("s", modifiers: .command)
+                    }.padding(.top, 14)
                 }
-                if !appState.pendingVocabularySuggestions.isEmpty {
-                    vocabularySuggestions
-                }
+                vocabularySuggestions
             } else {
-                ScrollView {
-                    Text(detailText(record))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 16) {
+                    Label(record.status.isFailed ? "Transcription needs another try" : "Working on your words…",
+                          systemImage: record.status.isFailed ? "exclamationmark.circle" : "waveform")
+                        .font(.headline)
+                    if case .failed(let message) = record.status {
+                        Text(message).font(.callout).foregroundStyle(FlowStyle.muted).textSelection(.enabled)
+                        Button("Retry transcription") { appState.retry(record) }
+                            .buttonStyle(FlowPrimaryButtonStyle())
+                    } else { ProgressView().controlSize(.small) }
+                    if !record.text.isEmpty { Text(record.text).textSelection(.enabled) }
                 }
+                .padding(22).frame(maxWidth: .infinity, alignment: .leading)
+                .background(FlowStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                Spacer()
             }
+
+            if record.status == .transcribed, appState.hasRecording(record) {
+                recordingControls
+            }
+            if let raw = record.rawRecognition, raw != record.text {
+                DisclosureGroup("Original recognition") {
+                    ScrollView { Text(raw).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 150)
+                    Button("Copy original") { appState.copy(raw) }
+                }.font(.caption).padding(.top, 12)
+            }
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 7) {
+                    if let duration = record.durationSeconds {
+                        Text("Recording length: \(Int(duration) / 60):\(String(format: "%02d", Int(duration) % 60))")
+                    }
+                    if let engine = record.engine { Text("Engine: \(TranscriptionEngineKind.displayName(forStored: engine))") }
+                    if let language = record.language { Text("Language: \(language)") }
+                }.font(.caption).foregroundStyle(FlowStyle.muted).padding(.top, 8)
+            } label: {
+                Text("\(record.wordCount) words · Recording details").font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
+            }.padding(.top, 18)
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(26)
+        .alert("Delete this recording?", isPresented: $confirmDelete) {
+            Button("Delete recording", role: .destructive) {
+                appState.delete(record)
+                if !appState.records.contains(where: { $0.id == record.id }) { draft = TranscriptDraft() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(draft.isDirty
+                 ? "The recording, transcript and your unsaved changes will be permanently deleted."
+                 : "The recording and transcript will be permanently deleted.")
+        }
+        .alert("Transcribe again with \(pendingEngine?.displayName ?? "")?",
+               isPresented: Binding(get: { pendingEngine != nil }, set: { if !$0 { pendingEngine = nil } })) {
+            Button("Transcribe again") {
+                if let pendingEngine { appState.retranscribe(record, with: pendingEngine) }
+                pendingEngine = nil
+            }
+            Button("Cancel", role: .cancel) { pendingEngine = nil }
+        } message: {
+            Text("If it succeeds, the new transcript replaces this one. Nothing is pasted.")
+        }
+        .onDisappear { player.stop() }
+        .alert("Changes couldn’t be saved", isPresented: $saveError) {
+            Button("OK", role: .cancel) {}
+        } message: { Text("Your edits are still here. Please try again before leaving this transcript.") }
     }
 
-    private var vocabularySuggestions: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(appState.pendingVocabularySuggestions, id: \.self) { suggestion in
-                HStack(spacing: 8) {
-                    Image(systemName: "text.badge.plus")
-                        .foregroundStyle(.tint)
-                    Text("You corrected “\(suggestion.find)” to “\(suggestion.replaceWith)” — add as a vocabulary rule?")
-                        .font(.callout)
-                    Spacer()
-                    Button("Add") { appState.acceptVocabularySuggestion(suggestion) }
-                        .buttonStyle(.borderedProminent)
-                    Button("Dismiss") { appState.dismissVocabularySuggestions() }
-                        .help("Stop suggesting rules from this edit")
-                }
+    private var recordingControls: some View {
+        HStack(spacing: 10) {
+            Button { player.toggle(URL(fileURLWithPath: record.audioFilePath)) } label: {
+                Label(player.isPlaying ? "Stop" : "Play recording", systemImage: player.isPlaying ? "stop.fill" : "play.fill")
             }
+            Menu {
+                ForEach(TranscriptionEngineKind.allCases.filter { $0.rawValue != record.engine }) { engine in
+                    Button(engine.displayName) { pendingEngine = engine }
+                }
+            } label: {
+                Label("Retry with another engine", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .fixedSize()
+            .disabled(draft.isDirty || appState.isTranscribing || appState.isRecording)
+            .help(draft.isDirty ? "Save or discard your changes first" : "Transcribe this recording again with a different engine")
+            Spacer()
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(.background.opacity(0.5)))
+        .font(.system(size: 12))
+        .padding(.top, 14)
     }
 
     @ViewBuilder
-    private func actions(for record: TranscriptRecord) -> some View {
-        if record.status.isFailed {
-            Button {
-                appState.retry(record)
-            } label: {
-                Label("Retry", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        Button {
-            appState.copy(draft.isEmpty ? record.text : draft)
-        } label: {
-            Label("Copy", systemImage: "doc.on.clipboard")
-        }
-        .disabled(record.text.isEmpty)
-
-        Menu {
-            Button(role: .destructive) {
-                appState.delete(record)
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle")
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-    }
-
-    private func metadata(for record: TranscriptRecord) -> some View {
-        HStack(spacing: 12) {
-            Text(record.createdAt, format: .dateTime.weekday().month().day().hour().minute())
-            if let duration = record.durationSeconds, duration > 0 {
-                Label(durationString(duration), systemImage: "clock")
-            }
-            if record.status == .transcribed {
-                Label("\(record.wordCount) words", systemImage: "text.word.spacing")
-            }
-            if let engine = record.engine, let kind = TranscriptionEngineKind(rawValue: engine) {
-                Label(shortEngineName(kind), systemImage: "cpu")
-            }
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    }
-
-    // MARK: - Helpers
-
-    private func syncDraft() {
-        guard let record else {
-            draft = ""
-            appState.dismissVocabularySuggestions()
-            return
-        }
-        if editingID != record.id {
-            draft = record.text
-            editingID = record.id
-            appState.dismissVocabularySuggestions()
+    private var vocabularySuggestions: some View {
+        if !appState.pendingVocabularySuggestions.isEmpty {
+            VStack(alignment: .leading, spacing: 9) {
+                ForEach(appState.pendingVocabularySuggestions, id: \.self) { suggestion in
+                    HStack {
+                        Text("Always replace “\(suggestion.find)” with “\(suggestion.replaceWith)”? ")
+                            .font(.caption).fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Add to Dictionary") { appState.acceptVocabularySuggestion(suggestion) }
+                    }
+                }
+                Button("Dismiss") { appState.dismissVocabularySuggestions() }.font(.caption)
+            }.padding(12).background(FlowStyle.selection, in: RoundedRectangle(cornerRadius: 8)).padding(.top, 12)
         }
     }
 
-    private func statusTitle(_ record: TranscriptRecord) -> String {
-        switch record.status {
-        case .transcribed: return "Transcribed"
-        case .failed: return "Queued for retry"
-        case .transcribing: return "Transcribing…"
-        case .recording: return "Recording…"
-        }
+    private func save() {
+        if !saveDraft() { saveError = true }
+    }
+}
+
+/// Plays a saved dictation recording.
+@MainActor
+@Observable
+private final class RecordingPlayer: NSObject, AVAudioPlayerDelegate {
+    private(set) var isPlaying = false
+    @ObservationIgnored private var player: AVAudioPlayer?
+
+    func toggle(_ url: URL) {
+        if isPlaying { stop(); return }
+        guard let player = try? AVAudioPlayer(contentsOf: url) else { return }
+        player.delegate = self
+        self.player = player
+        isPlaying = player.play()
     }
 
-    private func statusIcon(_ record: TranscriptRecord) -> String {
-        switch record.status {
-        case .transcribed: return "checkmark.seal.fill"
-        case .failed: return "exclamationmark.triangle"
-        case .transcribing, .recording: return "waveform"
-        }
+    func stop() {
+        player?.stop()
+        player = nil
+        isPlaying = false
     }
 
-    private func statusColor(_ record: TranscriptRecord) -> Color {
-        switch record.status {
-        case .transcribed: return .green
-        case .failed: return .orange
-        case .transcribing, .recording: return .secondary
-        }
-    }
-
-    private func detailText(_ record: TranscriptRecord) -> String {
-        if !record.text.isEmpty { return record.text }
-        if case .failed(let message) = record.status { return message }
-        return "Working…"
-    }
-
-    private func durationString(_ seconds: Double) -> String {
-        let total = Int(seconds.rounded())
-        return String(format: "%01d:%02d", total / 60, total % 60)
-    }
-
-    private func shortEngineName(_ kind: TranscriptionEngineKind) -> String {
-        switch kind {
-        case .parakeetTDTv3: return "Parakeet TDT v3"
-        case .whisperKit: return "WhisperKit"
-        case .appleSpeech: return "Apple Speech"
-        case .whisperCLI: return "Whisper CLI"
-        }
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in self.stop() }
     }
 }

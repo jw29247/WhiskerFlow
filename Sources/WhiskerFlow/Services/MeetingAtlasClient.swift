@@ -2,15 +2,11 @@ import CryptoKit
 import Foundation
 import WhiskerFlowAppSupport
 
-struct AtlasCaptureScheduleIntent: Codable, Sendable {
-    let eventID: String
-    let title: String
-    let startMs: Int64
-    let endMs: Int64
-    let meetingURL: String?
-    let location: String?
-    let existingMeetingID: String?
-    let overlapsPrevious: Bool
+struct MeetingAtlasCreatedMeeting: Sendable {
+    let meetingID: String
+    let created: Bool
+    /// Atlas's opaque `wm1_` reference, if the response carries one.
+    var meetingReference: String?
 }
 
 struct MeetingAtlasRecordingCompletion: Sendable {
@@ -18,19 +14,86 @@ struct MeetingAtlasRecordingCompletion: Sendable {
     let duplicate: Bool
 }
 
+protocol MeetingAtlasClient: Sendable {
+    func schedule(fromMs: Int64, toMs: Int64) async throws -> [AtlasCaptureScheduleIntent]
+    func heartbeat(
+        appVersion: String,
+        permissionState: [String: String],
+        diskState: String,
+        captureState: String,
+        lastFailureReason: String?
+    ) async throws
+    func createMeeting(
+        captureSessionID: UUID,
+        title: String,
+        occurredAtMs: Int64,
+        eventID: String?
+    ) async throws -> MeetingAtlasCreatedMeeting
+    func prepareRecording(
+        meetingID: String,
+        captureSessionID: UUID,
+        trackChunkCounts: [MeetingAudioTrack: Int],
+        sourceManifestHash: String?,
+        playbackChunkCount: Int?
+    ) async throws -> String
+    func uploadChunk(
+        artifactID: String,
+        descriptor: MeetingRecordingChunkDescriptor,
+        body: Data
+    ) async throws
+    func uploadPlaybackChunk(
+        artifactID: String,
+        descriptor: MeetingRecordingChunkDescriptor,
+        body: Data
+    ) async throws
+    func completePlayback(artifactID: String) async throws
+    func completeRecording(
+        artifactID: String,
+        durationMs: Int64,
+        trackChunkCounts: [MeetingAudioTrack: Int],
+        hasSourceGap: Bool,
+        missingTracks: [MeetingAudioTrack],
+        canonicalChecksum: String?,
+        sourceManifestHash: String?,
+        modelVersion: String?
+    ) async throws -> MeetingAtlasRecordingCompletion
+    func appendSegments(meetingID: String, turns: [MeetingSpeakerTurn]) async throws
+    /// Idempotency is scoped to the recording artifact: several capture
+    /// sessions can map onto one Atlas meeting (same calendar event).
+    func appendSegments(meetingID: String, artifactID: String, turns: [MeetingSpeakerTurn]) async throws
+    func finalize(
+        meetingID: String,
+        artifactID: String,
+        transcriptionState: String,
+        status: String
+    ) async throws
+    /// Atlas-generated notes for a delivered meeting (`notetaker.getMeeting`).
+    func meetingInsights(meetingReference: String) async throws -> AtlasMeetingInsights?
+}
+
+extension MeetingAtlasClient {
+    func meetingInsights(meetingReference: String) async throws -> AtlasMeetingInsights? { nil }
+
+    func appendSegments(meetingID: String, artifactID: String, turns: [MeetingSpeakerTurn]) async throws {
+        try await appendSegments(meetingID: meetingID, turns: turns)
+    }
+}
+
 enum MeetingAtlasClientError: LocalizedError {
+    case notPaired
     case invalidResponse
     case server(String)
 
     var errorDescription: String? {
         switch self {
+        case .notPaired: return "Pair WhiskerFlow with Atlas to enable Meeting Mode."
         case .invalidResponse: return "Atlas returned an invalid meeting capture response."
         case .server(let message): return message
         }
     }
 }
 
-final class MeetingAtlasClient: @unchecked Sendable {
+final class URLSessionMeetingAtlasClient: MeetingAtlasClient, @unchecked Sendable {
     private let baseURL: URL
     private let token: String
     private let session: URLSession
@@ -82,7 +145,7 @@ final class MeetingAtlasClient: @unchecked Sendable {
         _ = try await call(tool: "notetaker.heartbeat", args: args)
     }
 
-    func createMeeting(captureSessionID: UUID, title: String, occurredAtMs: Int64, eventID: String?) async throws -> (meetingID: String, created: Bool) {
+    func createMeeting(captureSessionID: UUID, title: String, occurredAtMs: Int64, eventID: String?) async throws -> MeetingAtlasCreatedMeeting {
         var args: [String: Any] = [
             "externalRef": "create-\(captureSessionID.uuidString)",
             "captureSessionId": captureSessionID.uuidString,
@@ -98,7 +161,22 @@ final class MeetingAtlasClient: @unchecked Sendable {
         guard let row = response as? [String: Any], let meetingID = row["meetingId"] as? String else {
             throw MeetingAtlasClientError.invalidResponse
         }
-        return (meetingID, row["created"] as? Bool ?? false)
+        let reference = row["meetingReference"] as? String
+        return MeetingAtlasCreatedMeeting(
+            meetingID: meetingID,
+            created: row["created"] as? Bool ?? false,
+            meetingReference: AtlasDeviceMeetingReference.isValid(reference) ? reference : nil
+        )
+    }
+
+    func meetingInsights(meetingReference: String) async throws -> AtlasMeetingInsights? {
+        guard AtlasDeviceMeetingReference.isValid(meetingReference) else { return nil }
+        // One transcript row keeps the read small; only the notes are used.
+        let value = try await call(
+            tool: "notetaker.getMeeting",
+            args: ["contractVersion": 1, "meetingId": meetingReference, "transcriptLimit": 1]
+        )
+        return AtlasMeetingInsights.parse(getMeetingValue: value, fetchedAt: Date())
     }
 
     func prepareRecording(
@@ -205,27 +283,45 @@ final class MeetingAtlasClient: @unchecked Sendable {
     }
 
     func completePlayback(artifactID: String) async throws {
-        _ = try await call(
+        let response = try await call(
             tool: "notetaker.completePlayback",
             args: [
                 "externalRef": "complete-playback-\(artifactID)",
                 "artifactId": artifactID,
             ]
         )
+        guard let row = response as? [String: Any],
+              row["completed"] as? Bool == true || row["duplicate"] as? Bool == true else {
+            throw MeetingAtlasClientError.server("Atlas has not accepted every playback chunk yet.")
+        }
     }
 
     func appendSegments(meetingID: String, turns: [MeetingSpeakerTurn]) async throws {
+        try await appendSegments(meetingID: meetingID, externalRefPrefix: "segments-\(meetingID)", turns: turns)
+    }
+
+    func appendSegments(meetingID: String, artifactID: String, turns: [MeetingSpeakerTurn]) async throws {
+        try await appendSegments(meetingID: meetingID, externalRefPrefix: "segments-\(artifactID)", turns: turns)
+    }
+
+    private func appendSegments(meetingID: String, externalRefPrefix: String, turns: [MeetingSpeakerTurn]) async throws {
         let segments = turns.map { turn in
             [
                 "speakerLabel": turn.speaker.displayName,
                 "speakerKey": turn.speaker.key,
                 "speakerDisplayName": turn.speaker.displayName,
-                "speakerResolution": turn.speaker.resolution.rawValue,
+                "speakerResolution": turn.speaker.resolution == .googleMeet ? "unknown" : turn.speaker.resolution.rawValue,
                 "speakerProvider": {
                     switch turn.speaker.resolution {
+                    // Atlas's contract value for the self-attributed label;
+                    // it names no recogniser (transcription is Parakeet).
                     case .selfSpeaker: return "whisperkit"
-                    case .diarized, .unknown: return "speakerkit"
-                    case .googleMeet, .manual: return "speakerkit"
+                    case .diarized: return "speakerkit"
+                    // "Them": no recogniser split it out. Atlas keeps only
+                    // the providers it knows and drops this one.
+                    case .unknown: return "whiskerflow"
+                    case .googleMeet: return "google_meet"
+                    case .manual: return "manual"
                     }
                 }(),
                 "startMs": turn.startMs,
@@ -236,19 +332,23 @@ final class MeetingAtlasClient: @unchecked Sendable {
         for (batchIndex, batch) in stride(from: 0, to: segments.count, by: 100)
             .map({ Array(segments[$0..<min($0 + 100, segments.count)]) })
             .enumerated() {
-            _ = try await call(
+            let response = try await call(
                 tool: "notetaker.appendSegments",
                 args: [
-                    "externalRef": "segments-\(meetingID)-\(batchIndex)",
+                    "externalRef": "\(externalRefPrefix)-\(batchIndex)",
                     "meetingId": meetingID,
                     "segments": batch,
                 ]
             )
+            guard let row = response as? [String: Any],
+                  row["duplicate"] as? Bool == true || row["appended"] as? Int == batch.count else {
+                throw MeetingAtlasClientError.server("Atlas has not accepted the complete transcript yet.")
+            }
         }
     }
 
     func finalize(meetingID: String, artifactID: String, transcriptionState: String, status: String) async throws {
-        _ = try await call(
+        let response = try await call(
             tool: "notetaker.finalize",
             args: [
                 "externalRef": "finalize-\(artifactID)",
@@ -258,6 +358,10 @@ final class MeetingAtlasClient: @unchecked Sendable {
                 "transcriptionState": transcriptionState,
             ]
         )
+        // false is the server's idempotent acknowledgement of an earlier finalize.
+        guard let row = response as? [String: Any], row["finalized"] is Bool else {
+            throw MeetingAtlasClientError.invalidResponse
+        }
     }
 
     private func call(tool: String, args: [String: Any]) async throws -> Any {
@@ -279,8 +383,14 @@ final class MeetingAtlasClient: @unchecked Sendable {
     }
 
     private func validate(_ response: URLResponse) throws {
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw MeetingAtlasClientError.server("Atlas capture request failed")
+        guard let http = response as? HTTPURLResponse else { throw MeetingAtlasClientError.invalidResponse }
+        switch http.statusCode {
+        case 200..<300: return
+        case 401: throw MeetingAtlasClientError.server("Atlas access expired. Reconnect Atlas in Meeting setup.")
+        // Signed in, but this account isn't allowed to record meetings.
+        case 403: throw MeetingAtlasClientError.server("Meeting recording isn't enabled for your Atlas account.")
+        case 429: throw MeetingAtlasClientError.server("Atlas is busy. Delivery will resume shortly.")
+        default: throw MeetingAtlasClientError.server("Atlas could not accept this request (HTTP \(http.statusCode)).")
         }
     }
 }

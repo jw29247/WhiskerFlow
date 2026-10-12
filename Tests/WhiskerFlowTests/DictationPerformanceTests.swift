@@ -14,7 +14,7 @@ final class DictationPerformanceTests: XCTestCase {
         let records = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: manifest))) as! [[String: Any]]
         let paths = Array(Set(records.compactMap { $0["audioFilePath"] as? String })).sorted()
         let service = TranscriptionService()
-        let ready = await service.prepare(kind: .parakeetTDTv3, model: .medium, language: "en")
+        let ready = await service.prepare(kind: .parakeetTDTv3, language: "en")
         XCTAssertTrue(ready)
         let converter = AudioConverter()
         var measurements: [[String: Any]] = []
@@ -27,8 +27,7 @@ final class DictationPerformanceTests: XCTestCase {
                     let start = ContinuousClock.now
                     let outcome = try await service.transcribe(
                         audioURL: URL(fileURLWithPath: path), kind: .parakeetTDTv3,
-                        model: .medium, language: "en",
-                        cliConfiguration: WhisperConfiguration(command: "", argumentsTemplate: ""),
+                        language: "en",
                         allowAppleFallback: false,
                         capturedSamples: mode == "capture" ? samples : nil
                     )
@@ -44,5 +43,29 @@ final class DictationPerformanceTests: XCTestCase {
                 }
             }
         }
+    }
+
+    /// Idle decay: Core ML/Neural Engine state goes cold within about a minute,
+    /// which is why dictation warms the model at key press. Takes ~5 minutes.
+    func testDecodeLatencyAfterIdleWithAndWithoutWarmUp() async throws {
+        guard let path = ProcessInfo.processInfo.environment["WHISKERFLOW_BENCHMARK_IDLE_AUDIO"] else {
+            throw XCTSkip("Set WHISKERFLOW_BENCHMARK_IDLE_AUDIO to a local recording for idle-decay timings")
+        }
+        let engine = ParakeetTDTv3Engine()
+        try await engine.prepare()
+        func decode(_ label: String) async throws {
+            let start = ContinuousClock.now
+            _ = try await engine.transcribe(TranscriptionRequest(audioURL: URL(fileURLWithPath: path), language: "en"))
+            print("IDLE \(label) \(start.duration(to: .now))")
+        }
+        try await decode("warm-reference")
+        for gap in [5, 20, 60] {
+            try await Task.sleep(for: .seconds(gap))
+            try await decode("cold-after-\(gap)s")
+        }
+        try await Task.sleep(for: .seconds(60))
+        await engine.warmUpInference()
+        try await Task.sleep(for: .seconds(1.5))
+        try await decode("warmed-at-press-after-60s")
     }
 }
