@@ -1017,7 +1017,8 @@ final class AppState {
         deviceRefreshTask = Task { @MainActor [weak self] in
             await Task.yield()
             guard !Task.isCancelled, let self else { return }
-            let refreshed = CoreAudioDeviceCatalog.availableInputs()
+            guard let refreshed = try? await CoreAudioDeviceCatalog.availableInputsInBackground(),
+                  !Task.isCancelled else { return }
             // Runs on every hotkey press; an unchanged list must not invalidate
             // the settings views observing it.
             if self.devices != refreshed { self.devices = refreshed }
@@ -1692,7 +1693,7 @@ final class AppState {
         }
 
         do {
-            let currentDevices = CoreAudioDeviceCatalog.availableInputs()
+            let currentDevices = try await CoreAudioDeviceCatalog.availableInputsInBackground()
             let preferredInputSelection: AudioInputSelection
             if let legacyID = settings.legacySelectedDeviceID {
                 preferredInputSelection = MicrophoneSelection.migrate(

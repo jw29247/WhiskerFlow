@@ -60,6 +60,10 @@ enum AudioCaptureServiceError: LocalizedError {
 }
 
 enum CoreAudioDeviceCatalog {
+    static func availableInputsInBackground() async throws -> [AudioInputDescriptor] {
+        try await AudioCaptureService.readDeviceCatalog()
+    }
+
     static func availableInputs() -> [AudioInputDescriptor] {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
@@ -399,12 +403,7 @@ private let halInputCallback: AURenderCallback = { refCon, flags, timeStamp, bus
 
 /// Tracks whether the unit really runs, for the interruption watchdog.
 private let halRunningListener: AudioUnitPropertyListenerProc = { refCon, unit, _, _, _ in
-    var running: UInt32 = 0
-    var size = UInt32(MemoryLayout<UInt32>.size)
-    guard AudioUnitGetProperty(
-        unit, kAudioOutputUnitProperty_IsRunning, kAudioUnitScope_Global, 0, &running, &size
-    ) == noErr else { return }
-    Unmanaged<HALInputContext>.fromOpaque(refCon).takeUnretainedValue().setRunning(running != 0)
+    Unmanaged<HALInputContext>.fromOpaque(refCon).takeUnretainedValue().runningState.propertyChanged()
 }
 
 /// What the input callback touches. The unit holds an unretained pointer to
@@ -415,11 +414,18 @@ private final class HALInputContext: @unchecked Sendable {
     private let capacityFrames: Int
     private let bufferList: UnsafeMutableAudioBufferListPointer
     private let channelData: [UnsafeMutablePointer<Float>]
-    private let runningLock = NSLock()
-    private var running = false
+    let runningState: AudioUnitRunningState
 
     init(unit: AudioUnit, plan: HALInputCapturePlan) {
         self.unit = unit
+        runningState = AudioUnitRunningState {
+            var running: UInt32 = 0
+            var size = UInt32(MemoryLayout<UInt32>.size)
+            guard AudioUnitGetProperty(
+                unit, kAudioOutputUnitProperty_IsRunning, kAudioUnitScope_Global, 0, &running, &size
+            ) == noErr else { return nil }
+            return running != 0
+        }
         ring = PlanarAudioRingBuffer(channelCount: plan.channelCount, capacityFrames: plan.ringCapacityFrames)
         capacityFrames = plan.renderCapacityFrames
         bufferList = AudioBufferList.allocate(maximumBuffers: plan.channelCount)
@@ -435,8 +441,8 @@ private final class HALInputContext: @unchecked Sendable {
         free(bufferList.unsafeMutablePointer)
     }
 
-    var isRunning: Bool { runningLock.withLock { running } }
-    func setRunning(_ value: Bool) { runningLock.withLock { running = value } }
+    var isRunning: Bool { runningState.isRunning }
+    func setRunning(_ value: Bool) { runningState.setRunning(value) }
 
     func render(
         flags: UnsafeMutablePointer<AudioUnitRenderActionFlags>,
@@ -618,6 +624,7 @@ private final class CaptureDeviceObserver: @unchecked Sendable {
 private final class PreparedCapture: @unchecked Sendable {
     let selection: AudioInputSelection
     let deviceID: AudioDeviceID
+    let keepsReady: Bool
     let context: HALInputContext
     let processor: CaptureChunkProcessor
     let observer: CaptureDeviceObserver
@@ -638,6 +645,7 @@ private final class PreparedCapture: @unchecked Sendable {
          context: HALInputContext, processor: CaptureChunkProcessor) {
         self.selection = selection
         self.deviceID = deviceID
+        keepsReady = CoreAudioDeviceCatalog.keepsEngineReady(for: deviceID, selection: selection)
         self.context = context
         self.processor = processor
         observer = CaptureDeviceObserver(expectation: expectation)
@@ -710,6 +718,7 @@ private final class PreparedCapture: @unchecked Sendable {
             return !disposed
         }
         guard first else { return }
+        context.runningState.invalidate()
         observer.unregister()
         AudioOutputUnitStop(unit)
         AudioUnitRemovePropertyListenerWithUserData(
@@ -850,9 +859,13 @@ final class AudioCaptureService {
             }
         }
 
-        guard let descriptor = CoreAudioDeviceCatalog.resolve(selection) else {
+        guard let descriptor = try await Self.onEngineQueue(
+            timeout: Self.engineBuildTimeoutSeconds, discardLate: { _ in },
+            { CoreAudioDeviceCatalog.resolve(selection) }
+        ) else {
             throw AudioCaptureServiceError.deviceUnavailable
         }
+        guard generation == startGeneration else { throw CancellationError() }
 
         let startedAt = ProcessInfo.processInfo.systemUptime
         var prepared = takeReadyCapture(selection: selection, deviceID: descriptor.transientID)
@@ -1025,13 +1038,14 @@ final class AudioCaptureService {
         discardReadyCapture()
         let generation = readyGeneration
         let task = Task.detached(priority: .userInitiated) { () -> PreparedCapture? in
-            guard let descriptor = CoreAudioDeviceCatalog.resolve(selection),
-                  CoreAudioDeviceCatalog.keepsEngineReady(for: descriptor.transientID, selection: selection)
-            else { return nil }
             return try? await Self.onEngineQueue(
-                timeout: Self.engineBuildTimeoutSeconds, discardLate: { Self.retire($0) }
-            ) {
-                try Self.buildCapture(selection: selection, descriptor: descriptor)
+                timeout: Self.engineBuildTimeoutSeconds,
+                discardLate: { if let capture = $0 { Self.retire(capture) } }
+            ) { () throws -> PreparedCapture? in
+                guard let descriptor = CoreAudioDeviceCatalog.resolve(selection),
+                      CoreAudioDeviceCatalog.keepsEngineReady(for: descriptor.transientID, selection: selection)
+                else { return nil }
+                return try Self.buildCapture(selection: selection, descriptor: descriptor)
             }
         }
         preparation = Preparation(selection: selection, generation: generation, task: task)
@@ -1323,6 +1337,14 @@ final class AudioCaptureService {
         }
     }
 
+    /// Device enumeration can take the same HAL locks as capture teardown.
+    /// Keep it off the main actor and apply the engine's deadline.
+    nonisolated static func readDeviceCatalog() async throws -> [AudioInputDescriptor] {
+        try await onEngineQueue(timeout: engineBuildTimeoutSeconds, discardLate: { _ in }) {
+            CoreAudioDeviceCatalog.availableInputs()
+        }
+    }
+
     /// Runs `work` on the engine queue. Past `timeout` the queue is abandoned
     /// and this throws `engineTimedOut`; a result that arrives later goes to
     /// `discardLate`.
@@ -1441,8 +1463,7 @@ final class AudioCaptureService {
         active.sink.end()
         // A Bluetooth microphone is released at once, so the headset returns
         // to its high-quality playback profile as soon as dictation ends.
-        if reusable, keepsCaptureReady, ready == nil,
-           CoreAudioDeviceCatalog.keepsEngineReady(for: active.deviceID, selection: active.selection) {
+        if reusable, keepsCaptureReady, ready == nil, active.keepsReady {
             Self.engineQueue.async {
                 AudioOutputUnitStop(active.unit)
                 active.context.setRunning(false)
