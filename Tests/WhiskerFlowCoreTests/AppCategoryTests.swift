@@ -267,6 +267,21 @@ final class AppCategoryTests: XCTestCase {
         XCTAssertEqual(process(raw, .literal, .init(spokenLineCommands: true, removeFillerWords: true)), raw)
     }
 
+    func testLiteralAppliesDictionaryWithoutFormattingOrSpokenRewording() {
+        let raw = "  um ask Whisper, sorry, Sam new line.  "
+        let vocabulary = Vocabulary(rules: [.init(find: "Whisper", replaceWith: "Whisker")])
+        let formatting = FormattingOptions(spokenLineCommands: true, capitalizeSentences: true, removeFillerWords: true)
+        XCTAssertEqual(AssistantTextProcessing.process(raw, tone: .literal, vocabulary: vocabulary,
+                                                       formatting: formatting, recognizeCorrections: true),
+                       "  um ask Whisker, sorry, Sam new line.  ")
+        XCTAssertEqual(AssistantTextProcessing.process(raw, tone: .literal, vocabulary: CompiledVocabulary(vocabulary),
+                                                       formatting: formatting, recognizeCorrections: true),
+                       "  um ask Whisker, sorry, Sam new line.  ")
+        XCTAssertEqual(AssistantTextProcessing.correctionCounts(raw, tone: .literal, vocabulary: vocabulary,
+                                                               recognizeCorrections: true),
+                       TextCorrectionCounts(vocabularyReplacements: 1, selfCorrections: 0))
+    }
+
     func testTonesKeepTheUsersCleanupSettings() {
         let raw = "um thanks new line talk soon."
         XCTAssertEqual(process(raw, .casual, .init()), "Um thanks new line talk soon")

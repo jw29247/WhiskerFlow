@@ -114,7 +114,7 @@ public struct WritingTone: RawRepresentable, Codable, Hashable, Identifiable, Se
         case .formal: return "Capitalised, with full punctuation."
         case .casual: return "Capitalised. Short messages skip the final period."
         case .veryCasual: return "All lowercase, no final period."
-        case .literal: return "Exactly as heard. Best for code and terminals."
+        case .literal: return "No style changes. Dictionary corrections still apply. Best for code and terminals."
         case .legacyStandard: return "Your formatting settings, as before."
         case .legacyConversational: return "Line commands and filler removal, as before."
         case .legacyPolished: return "Line commands, filler removal and capitals, as before."

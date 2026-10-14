@@ -7,12 +7,14 @@
 # The candidate is a DEBUG build signed with the Developer ID and the production
 # bundle ID (TCC grants apply). It runs with its own home and preferences, and
 # starts dictation from a distributed notification instead of fn, so the
-# installed app is left alone. Needs an unlocked screen and a free Chrome window.
+# installed app is left alone. Needs an unlocked screen, an open Chrome profile
+# or Guest window, and audible speaker playback that the microphone can hear.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export WF_E2E_DIR="${WF_E2E_DIR:-/tmp/wf-dict-e2e}"
 SIGN_IDENTITY="${SIGN_IDENTITY:?Set SIGN_IDENTITY to the Developer ID Application identity}"
-SUITE=agency.thatworks.WhiskerFlow.e2e
+export WF_E2E_SUITE="${WF_E2E_SUITE:-agency.thatworks.WhiskerFlow.e2e.dictionary}"
+SUITE="$WF_E2E_SUITE"
 HOME_DIR="$WF_E2E_DIR/home"
 AS="$HOME/Library/Application Support"
 
@@ -49,7 +51,7 @@ defaults write "$SUITE" showMenuBarExtra -bool false
 defaults write "$SUITE" onboardingProgress -data "$(python3 -c 'import json,time;print(json.dumps({"finishedAt":time.time()-978307200,"current":"done","furthest":"done","completed":[],"skipped":[]}).encode().hex())')"
 
 pkill -f "$WF_E2E_DIR/WhiskerFlow-E2E.app" || true
-open -n --env CFFIXED_USER_HOME="$HOME_DIR" "$WF_E2E_DIR/WhiskerFlow-E2E.app" \
+open -n --env CFFIXED_USER_HOME="$HOME_DIR" --env WHISKERFLOW_SKIP_ATLAS_SIGN_IN=1 "$WF_E2E_DIR/WhiskerFlow-E2E.app" \
   --args --debug-dictation-trigger --e2e-defaults-suite="$SUITE"
 sleep 10
 python3 "$ROOT/script/dictionary_e2e/rounds.py"

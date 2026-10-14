@@ -85,8 +85,10 @@ struct DictionaryView: View {
             VStack(alignment: .trailing, spacing: 8) {
                 Toggle("Remember corrections", isOn: $appState.settings.rememberCorrections)
                     .toggleStyle(.switch).fixedSize()
+                    .onChange(of: appState.settings.rememberCorrections) { _, _ in appState.learnHeldDictionaryRewritesOnce() }
                 Toggle("Automatically add learned words", isOn: $appState.settings.autoAddLearnedWords)
                     .toggleStyle(.switch).fixedSize().disabled(!appState.settings.rememberCorrections)
+                    .onChange(of: appState.settings.autoAddLearnedWords) { _, _ in appState.learnHeldDictionaryRewritesOnce() }
             }
             Menu {
                 Button("Import CSV…", action: importCSV)
@@ -109,7 +111,7 @@ struct DictionaryView: View {
                     Button("Allow Accessibility") { appState.requestAccessibilityPermission() }
                 }
             }
-            Text("Fix a word after WhiskerFlow pastes it, or edit a transcript in History. A correction adds the word automatically. When what was heard is itself a real word, it is only rewritten after you fix it a second time. Nothing is added that would change everyday words or clash with another entry. Learned entries left unused for 90 days go back to Suggestions unless starred. Everything stays on this Mac.")
+            Text("Fix a word after WhiskerFlow pastes it, or edit a transcript in History. A correction saves its spelling and replacement automatically, so the same mishearing is fixed next time, in every writing style. Corrections that would change everyday words or clash with another entry stay in Suggestions for you to review. Learned entries left unused for 90 days go back to Suggestions unless starred. Everything stays on this Mac.")
                 .font(.caption).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -231,9 +233,6 @@ struct DictionaryView: View {
         if !suggestion.applications.isEmpty { parts.append(suggestion.applications.joined(separator: ", ")) }
         if suggestion.demotedAt == nil, let last = suggestion.lastSeen {
             parts.append(last.formatted(date: .abbreviated, time: .omitted))
-        }
-        if appState.dictionaryRewriteWaits(for: suggestion) {
-            parts.append("Rewritten automatically if you fix it again")
         }
         return parts.joined(separator: " · ")
     }

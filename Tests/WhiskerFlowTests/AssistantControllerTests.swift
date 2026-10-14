@@ -214,11 +214,11 @@ final class AssistantControllerTests: XCTestCase {
         XCTAssertNotNil(controller.message)
     }
 
-    func testProfilesKeepLiteralVerbatimAndPersonalVocabularyWins() {
+    func testProfilesKeepLiteralStyleAndPersonalVocabularyWins() {
         let raw = "um send it to Mark, sorry, Marc."
         let vocabulary = Vocabulary(rules: [.init(find: "Marc", replaceWith: "Marco")])
         XCTAssertEqual(AssistantTextProcessing.process(raw, tone: .literal, vocabulary: vocabulary,
-                          formatting: .init(removeFillerWords: true), recognizeCorrections: true), raw)
+                          formatting: .init(removeFillerWords: true), recognizeCorrections: true), "um send it to Mark, sorry, Marco.")
         XCTAssertEqual(AssistantTextProcessing.process(raw, tone: .legacyPolished, vocabulary: vocabulary,
                           formatting: .init(), recognizeCorrections: true), "Send it to Marco.")
     }

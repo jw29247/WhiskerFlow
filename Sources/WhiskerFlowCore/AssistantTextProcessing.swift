@@ -3,7 +3,6 @@ import Foundation
 public enum AssistantTextProcessing {
     public static func process(_ raw: String, tone: WritingTone, vocabulary: Vocabulary,
                                formatting: FormattingOptions, recognizeCorrections: Bool) -> String {
-        guard tone != .literal else { return raw }
         return process(raw, tone: tone, vocabulary: CompiledVocabulary(vocabulary),
                        formatting: formatting, recognizeCorrections: recognizeCorrections)
     }
@@ -15,7 +14,7 @@ public enum AssistantTextProcessing {
     /// settings; the tone decides capitalisation and end punctuation.
     public static func process(_ raw: String, tone: WritingTone, vocabulary: CompiledVocabulary,
                                formatting: FormattingOptions, recognizeCorrections: Bool) -> String {
-        guard tone != .literal else { return raw }
+        guard tone != .literal else { return vocabulary.apply(to: raw) }
         let repaired = recognizeCorrections ? SpokenSelfCorrection.resolve(raw) : raw
         let replaced = vocabulary.apply(to: repaired)
         switch tone {
@@ -40,8 +39,7 @@ public enum AssistantTextProcessing {
     /// the delivery path: it repeats the self-correction and vocabulary passes.
     public static func correctionCounts(_ raw: String, tone: WritingTone, vocabulary: Vocabulary,
                                         recognizeCorrections: Bool) -> TextCorrectionCounts {
-        guard tone != .literal else { return TextCorrectionCounts() }
-        let repaired = recognizeCorrections ? SpokenSelfCorrection.resolveCounting(raw) : (text: raw, repairs: 0)
+        let repaired = recognizeCorrections && tone != .literal ? SpokenSelfCorrection.resolveCounting(raw) : (text: raw, repairs: 0)
         return TextCorrectionCounts(
             vocabularyReplacements: CompiledVocabulary(vocabulary).replacementCount(in: repaired.text),
             selfCorrections: repaired.repairs

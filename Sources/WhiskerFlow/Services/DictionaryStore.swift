@@ -105,22 +105,32 @@ final class DictionaryStore {
 struct DictionaryNotice: Identifiable, Equatable {
     let id = UUID()
     let changes: [DictionaryChange]
+    let isSaved: Bool
+
+    init(changes: [DictionaryChange], isSaved: Bool = true) {
+        self.changes = changes
+        self.isSaved = isSaved
+    }
 
     var message: String {
+        guard isSaved else {
+            return "Your correction is active for this session, but could not be saved. Open Dictionary for details."
+        }
         guard changes.count == 1, let change = changes.first else {
             return "Added \(changes.count) corrections to your Dictionary."
         }
-        switch change.after.kind {
-        case .word where change.before != nil:
+        if change.rewritesHeard {
             return "“\(change.pair.heard)” will now be written “\(change.after.written)”."
-        case .word:
-            return "Added “\(change.after.written)” to your Dictionary."
-        case .replacement:
-            return "“\(change.after.heard)” will now be written “\(change.after.written)”."
         }
+        return "Added “\(change.after.written)” to your Dictionary."
     }
 
     var hudMessage: String {
-        changes.count == 1 ? "Added “\(changes[0].after.written)” to Dictionary" : "Added \(changes.count) words to Dictionary"
+        guard isSaved else { return "Dictionary correction could not be saved" }
+        guard changes.count == 1, let change = changes.first else { return "Saved \(changes.count) dictionary corrections" }
+        if change.rewritesHeard {
+            return "“\(change.pair.heard)” → “\(change.after.written)” saved"
+        }
+        return "Added “\(change.after.written)” to Dictionary"
     }
 }

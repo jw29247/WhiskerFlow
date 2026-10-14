@@ -199,7 +199,7 @@ final class InsightsTests: XCTestCase {
         )
         XCTAssertEqual(counts, TextCorrectionCounts(vocabularyReplacements: 2, selfCorrections: 1))
         XCTAssertEqual(AssistantTextProcessing.correctionCounts("whisker flow", tone: .literal, vocabulary: vocabulary,
-                                                               recognizeCorrections: true), TextCorrectionCounts())
+                                                               recognizeCorrections: true), TextCorrectionCounts(vocabularyReplacements: 1))
         XCTAssertEqual(SpokenSelfCorrection.resolveCounting("Plain sentence.").repairs, 0)
     }
 

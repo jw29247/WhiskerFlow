@@ -72,26 +72,32 @@ final class DictionaryLearningTests: XCTestCase {
         XCTAssertEqual(dictionary.entries[0].variants, [], "undo restores the word as it was")
     }
 
-    func testARealWordHeardAddsOnlyTheWrittenWordUntilFixedAgain() {
+    func testARealWordHeardIsRewrittenAfterTheFirstFix() {
         let pair = DictionaryPair(heard: "grain", written: "Grainne")
         let known: (String) -> Bool = { $0.lowercased() == "grain" }
-        var observations = seen("grain", "Grainne", times: 1)
+        let observations = seen("grain", "Grainne", times: 1)
         var dictionary = UserDictionary()
 
         let first = DictionaryLearning.learn(from: [pair], observations: observations, dictionary: &dictionary,
                                              readOnly: [], at: now, isKnownWord: known)
         XCTAssertEqual(first.map(\.after.written), ["Grainne"])
-        XCTAssertEqual(dictionary.entries.map(\.kind), [.word])
-        XCTAssertEqual(dictionary.entries[0].variants, [], "“grain” is not rewritten after one fix")
-        XCTAssertEqual(dictionary.vocabulary.apply(to: "a grain of salt"), "a grain of salt")
+        XCTAssertEqual(dictionary.vocabulary.apply(to: "ask grain"), "ask Grainne")
+        XCTAssertEqual(first.map(\.rewritesHeard), [true])
 
-        observations += seen("grain", "Grainne", times: 1)
         let second = DictionaryLearning.learn(from: [pair], observations: observations, dictionary: &dictionary,
                                               readOnly: [], at: now, isKnownWord: known)
-        XCTAssertEqual(second.count, 1)
-        XCTAssertEqual(dictionary.entries.count, 1, "the rewrite extends the same word")
-        XCTAssertEqual(dictionary.entries[0].variants, ["grain"])
-        XCTAssertEqual(dictionary.vocabulary.apply(to: "ask grain"), "ask Grainne")
+        XCTAssertTrue(second.isEmpty, "an existing rewrite is not added twice")
+        XCTAssertEqual(dictionary.entries.count, 1)
+    }
+
+    func testSavedCorrectionRewritesARealWordAfterOneFix() {
+        var dictionary = UserDictionary()
+        let pair = DictionaryPair(heard: "Whisper", written: "Whisker")
+        let changes = DictionaryLearning.learn(from: [pair], observations: seen("Whisper", "Whisker", times: 1),
+                                               dictionary: &dictionary, readOnly: [], at: now,
+                                               isKnownWord: { _ in true })
+        XCTAssertEqual(dictionary.vocabulary.apply(to: "Ask Whisper about it."), "Ask Whisker about it.")
+        XCTAssertEqual(changes.map(\.rewritesHeard), [true])
     }
 
     func testAMisrecognitionThatIsNotAWordIsRewrittenAtOnce() {
@@ -102,6 +108,72 @@ final class DictionaryLearningTests: XCTestCase {
                                                isKnownWord: { _ in false })
         XCTAssertEqual(changes.count, 1)
         XCTAssertEqual(dictionary.vocabulary.apply(to: "ask shivon"), "ask Siobhan")
+    }
+
+    func testRewordingBetweenOrdinaryWordsIsNotLearned() {
+        var dictionary = UserDictionary()
+        let changes = DictionaryLearning.learn(from: [.init(heard: "fire", written: "via")],
+                                               observations: seen("fire", "via", times: 1),
+                                               dictionary: &dictionary, readOnly: [], at: now,
+                                               isKnownWord: { _ in true })
+        XCTAssertTrue(changes.isEmpty, "rewording one everyday word into another teaches no spelling")
+        XCTAssertTrue(dictionary.entries.isEmpty)
+    }
+
+    func testLoweringTheCaseOfAnOrdinaryWordIsNotLearned() {
+        var dictionary = UserDictionary()
+        let changes = DictionaryLearning.learn(from: [.init(heard: "As", written: "as")],
+                                               observations: seen("As", "as", times: 1),
+                                               dictionary: &dictionary, readOnly: [], at: now,
+                                               isKnownWord: { _ in true })
+        XCTAssertTrue(changes.isEmpty)
+        XCTAssertTrue(dictionary.entries.isEmpty)
+    }
+
+    func testChangeReportsWhetherItRewritesWhatWasHeard() {
+        var dictionary = UserDictionary()
+        let known: (String) -> Bool = { $0.lowercased() == "flow" }
+        let name = DictionaryLearning.learn(from: [.init(heard: "flow", written: "Flo")],
+                                            observations: seen("flow", "Flo", times: 1),
+                                            dictionary: &dictionary, readOnly: [], at: now, isKnownWord: known)
+        XCTAssertEqual(name.map(\.rewritesHeard), [true])
+        let rewrite = DictionaryLearning.learn(from: [.init(heard: "Heber", written: "Heba")],
+                                               observations: seen("Heber", "Heba", times: 1),
+                                               dictionary: &dictionary, readOnly: [], at: now, isKnownWord: known)
+        XCTAssertEqual(rewrite.map(\.rewritesHeard), [true])
+        let spelling = DictionaryLearning.learn(from: [.init(heard: "Reese", written: "Reece")],
+                                                observations: seen("Reese", "Reece", times: 1),
+                                                dictionary: &dictionary, readOnly: [], at: now, isKnownWord: known)
+        XCTAssertEqual(spelling.map(\.rewritesHeard), [true])
+        let casing = DictionaryLearning.learn(from: [.init(heard: "figma", written: "Figma")],
+                                              observations: seen("figma", "Figma", times: 1),
+                                              dictionary: &dictionary, readOnly: [], at: now, isKnownWord: known)
+        XCTAssertEqual(casing.map(\.rewritesHeard), [false])
+    }
+
+    func testHeldRewritesAreRecoveredIncludingRealWords() {
+        // Earlier builds held these back and added only the written Word.
+        var dictionary = UserDictionary(entries: [
+            .word("Heba", origin: .learned, addedAt: now),
+            .word("Jev", origin: .learned, addedAt: now),
+            .word("Flo", origin: .learned, addedAt: now),
+            .word("Figma", origin: .manual, addedAt: now)
+        ])
+        let observations = seen("Heber", "Heba", times: 1) + seen("GEV", "Jev", times: 1)
+            + seen("flow", "Flo", times: 1) + seen("figmah", "Figma", times: 1)
+        let known: (String) -> Bool = { $0.lowercased() == "flow" }
+
+        let changes = DictionaryLearning.learnHeldRewrites(observations: observations, dictionary: &dictionary,
+                                                           readOnly: [], at: now, isKnownWord: known)
+        XCTAssertEqual(Set(changes.map(\.pair.heard)), ["Heber", "GEV", "flow"])
+        XCTAssertEqual(dictionary.entries.count, 4, "the rewrite extends each Word rather than adding a Replacement")
+        XCTAssertEqual(dictionary.vocabulary.apply(to: "ask Heber and GEV"), "ask Heba and Jev")
+        XCTAssertEqual(dictionary.vocabulary.apply(to: "ask flow"), "ask Flo")
+        XCTAssertEqual(dictionary.vocabulary.apply(to: "figmah"), "figmah", "hand-made words are not touched")
+
+        let again = DictionaryLearning.learnHeldRewrites(observations: observations, dictionary: &dictionary,
+                                                         readOnly: [], at: now, isKnownWord: known)
+        XCTAssertTrue(again.isEmpty, "covered pairs are not learned twice")
     }
 
     // MARK: Lint rejections
