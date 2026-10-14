@@ -9,6 +9,14 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>2.0.2</title>
+      <pubDate>Wed, 14 Oct 2026 14:19:28 +0000</pubDate>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <description><![CDATA[<p>Fixes an app freeze when stopping and quickly restarting microphone recording. Microphone checks now time out without blocking the interface.</p>]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v2.0.2/WhiskerFlow-2.0.2.zip" sparkle:version="24" sparkle:shortVersionString="2.0.2" sparkle:edSignature="v5o/kkd+uwesauN/EYpYN0AwylCx9CBdbS0/fGCLMklBqm07tbiqvwybcoPm+zZ+bnILU9otz6g/qEk999ZeCw==" length="18501815" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>2.0.1</title>
       <pubDate>Wed, 14 Oct 2026 13:08:22 +0000</pubDate>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
