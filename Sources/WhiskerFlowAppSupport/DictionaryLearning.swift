@@ -159,6 +159,12 @@ public struct DictionaryChange: Equatable, Sendable {
         self.before = before
         self.after = after
     }
+
+    /// The added entry rewrites the heard spelling, rather than just its casing.
+    public var rewritesHeard: Bool {
+        let rewrites = after.kind == .replacement ? after.rules : after.rules.filter { $0.id != after.id }
+        return CompiledVocabulary(Vocabulary(rules: rewrites)).matchCount(in: pair.heard) > 0
+    }
 }
 
 public enum DictionaryLearning {
@@ -166,25 +172,15 @@ public enum DictionaryLearning {
     /// enough: the lint, conflict and chain checks keep ordinary rewording out,
     /// and every addition can be undone.
     public static let autoAddThreshold = 1
-    /// When the recogniser heard real words ("grain" for "Gráinne"), rewriting
-    /// them waits for a second fix, since a one-off edit may not mean "always".
-    /// The first fix still adds the written term as a Word.
-    public static let realWordRewriteThreshold = 2
-
-    /// Every word of the heard side is a real, correctly spelled word, so a
-    /// rule keyed on it would fire in ordinary speech.
-    public static func heardIsRealWords(_ pair: DictionaryPair, isKnownWord: (String) -> Bool) -> Bool {
-        let words = pair.heard.split(whereSeparator: \.isWhitespace)
+    /// Every word of `text` is an ordinary word rather than a name, acronym or
+    /// term. `isKnownWord` gets each word with its edge punctuation trimmed.
+    public static func isOrdinaryWords(_ text: String, isKnownWord: (String) -> Bool) -> Bool {
+        let words = text.split(whereSeparator: \.isWhitespace)
             .map { $0.trimmingCharacters(in: .punctuationCharacters) }
             .filter { !$0.isEmpty }
         return !words.isEmpty && words.allSatisfy(isKnownWord)
     }
 
-    /// Whether the rewrite for `pair` is held until it is corrected again.
-    public static func waitsForAnotherSighting(_ pair: DictionaryPair, sightings: Int,
-                                               isKnownWord: (String) -> Bool) -> Bool {
-        !pair.isCasingOnly && sightings < realWordRewriteThreshold && heardIsRealWords(pair, isKnownWord: isKnownWord)
-    }
     /// Unstarred auto-added entries unused this long go back to Suggestions.
     public static let staleInterval: TimeInterval = 90 * 24 * 60 * 60
 
@@ -282,17 +278,10 @@ public enum DictionaryLearning {
             let evaluation = evaluate(pair, observations: observations, dictionary: dictionary,
                                       readOnly: readOnly, at: date)
             guard evaluation.canAutoAdd else { continue }
-            if waitsForAnotherSighting(pair, sightings: evaluation.sightings, isKnownWord: isKnownWord) {
-                // Only the written term for now: a hint to the recogniser that
-                // rewrites nothing the user says.
-                guard evaluation.updates == nil else { continue }
-                let word = DictionaryEntry.word(pair.written, origin: .learned, addedAt: date)
-                let others = DictionaryRule.personal(dictionary) + readOnly
-                guard DictionaryLint.issues(for: word, against: others).isEmpty else { continue }
-                dictionary.entries.append(word)
-                changes.append(DictionaryChange(pair: pair, before: nil, after: word))
-                continue
-            }
+            // Sentence lowercasing and rewording into another ordinary lowercase
+            // word are edits to prose, rather than a remembered name or spelling.
+            if pair.written == pair.written.lowercased(), isOrdinaryWords(pair.written, isKnownWord: isKnownWord),
+               pair.isCasingOnly || isOrdinaryWords(pair.heard, isKnownWord: isKnownWord) { continue }
             if let before = evaluation.updates, let index = dictionary.entries.firstIndex(where: { $0.id == before.id }) {
                 dictionary.entries[index] = evaluation.proposed
             } else {
@@ -301,6 +290,23 @@ public enum DictionaryLearning {
             changes.append(DictionaryChange(pair: pair, before: evaluation.updates, after: evaluation.proposed))
         }
         return changes
+    }
+
+    /// Re-runs learning for corrections whose rewrite was held back and only
+    /// added the written term as a Word. Rejected pairs and pairs that fail a
+    /// check are left alone; manually added words are never changed.
+    public static func learnHeldRewrites(
+        observations: [CorrectionObservation],
+        dictionary: inout UserDictionary,
+        readOnly: [DictionaryRule],
+        at date: Date = Date(),
+        isKnownWord: (String) -> Bool
+    ) -> [DictionaryChange] {
+        let heldWords = Set(dictionary.entries.filter { $0.kind == .word && $0.origin == .learned }.map(\.written))
+        let pairs = observations.sorted { $0.date < $1.date }.map(\.pair)
+            .filter { !$0.isCasingOnly && heldWords.contains($0.written) }
+        return learn(from: pairs, observations: observations, dictionary: &dictionary, readOnly: readOnly,
+                     at: date, isKnownWord: isKnownWord)
     }
 
     /// Reverts a learned change and makes sure it is not learned again.

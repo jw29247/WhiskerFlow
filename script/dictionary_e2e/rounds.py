@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
-"""Three dictations into a local chat box in Chrome (Enter sends and clears):
+"""Correct one real dictation, restart the candidate, then dictate without editing.
 
-1. "Tell Grainne …" is heard as a real word; the user fixes it and sends at once.
-   Expect: the written name is added to the Dictionary as a Word.
-2. The same fix in a second message.  Expect: the misheard word becomes a variant.
-3. A third dictation with no edit.  Expect: the name comes out right.
+Uses a dedicated Chrome window and isolated app data. Enter sends only to the
+local test page. A missing replacement or failed restart exits unsuccessfully.
 """
-import json, os, re, subprocess, sys, time
+import json, os, re, subprocess, time
 
 D = os.environ.get("WF_E2E_DIR", "/tmp/wf-dict-e2e")
 DATA = f"{D}/home/Library/Application Support/WhiskerFlow"
 CHROME = "com.google.Chrome"
 FIX = os.environ.get("WF_E2E_FIX", "Grawnya")
+SUITE = os.environ.get("WF_E2E_SUITE", "agency.thatworks.WhiskerFlow.e2e.dictionary")
+APP = os.path.realpath(f"{D}/WhiskerFlow-E2E.app")
+window_id = None
 
 
 def sh(*args):
-    return subprocess.run(args, capture_output=True, text=True).stdout.strip()
+    result = subprocess.run(args, capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(f"{args[0]} failed: {result.stderr.strip()}")
+    return result.stdout.strip()
 
 
 def osa(script):
-    sh("osascript", "-e", script)
+    return sh("osascript", "-e", script)
 
 
 def value():
@@ -35,15 +39,14 @@ def dictionary():
 
 def focus_chat_box():
     for _ in range(10):
-        if sh("osascript", "-e", 'tell application "Google Chrome" to count windows') in ("", "0"):
-            osa('tell application "Google Chrome" to make new window')
-        osa(f'tell application "Google Chrome" to set URL of active tab of front window to "file://{D}/editor.html?focus=chat"')
+        osa(f'tell application "Google Chrome" to set index of window id {window_id} to 1')
+        osa(f'tell application "Google Chrome" to set URL of active tab of window id {window_id} to "file://{D}/editor.html?focus=chat"')
         osa('tell application "Google Chrome" to activate')
         time.sleep(1.5)
         front = sh("osascript", "-e", 'tell application "System Events" to get bundle identifier of first process whose frontmost is true')
         if front == CHROME and "AXTextArea" in sh(f"{D}/axprobe", CHROME):
             return
-    sys.exit("Could not focus the chat box in Chrome (is the screen unlocked?)")
+    raise RuntimeError("Could not focus the local chat box in Chrome")
 
 
 def dictate(sentence):
@@ -61,27 +64,65 @@ def dictate(sentence):
     return value()
 
 
-def show(label):
-    print(f"  {label}:", [(e["kind"], e["heard"] or None, e["written"], e.get("variants")) for e in dictionary()])
+def candidate_pids():
+    return [int(line.strip().split(None, 1)[0]) for line in sh("ps", "-axo", "pid=,command=").splitlines()
+            if line.strip().split(None, 1)[-1].startswith(f"{APP}/Contents/MacOS/WhiskerFlow")]
 
 
-rounds = [("Tell Grainne the build is ready.", r"Tell\s+(.+?)\s+the build"),
-          ("Ask Grainne to review it today.", r"Ask\s+(.+?)\s+to review")]
-for number, (sentence, pattern) in enumerate(rounds, 1):
+def quit_candidate():
+    for pid in candidate_pids():
+        sh("osascript", "-l", "JavaScript", "-e",
+           f"ObjC.import('AppKit'); $.NSRunningApplication.runningApplicationWithProcessIdentifier({pid}).terminate;")
+    for _ in range(40):
+        if not candidate_pids():
+            return
+        time.sleep(0.25)
+    raise RuntimeError("Candidate did not quit gracefully")
+
+
+front = osa('tell application "System Events" to get bundle identifier of first process whose frontmost is true')
+try:
+    if osa('tell application "Google Chrome" to count windows') == "0":
+        raise RuntimeError("Open a Chrome profile or Guest window before running the microphone check")
+    window_id = osa('tell application "Google Chrome" to get id of (make new window)')
+    focus_chat_box()
+    sentence = "Tell Grainne the build is ready."
+    pasted = dictate(sentence)
+    match = re.search(r"Tell\s+(.+?)\s+the build", pasted, re.IGNORECASE)
+    heard = match.group(1) if match else None
+    print(f"round 1: pasted {pasted!r}, heard {heard!r}", flush=True)
+    if not heard or heard == FIX:
+        raise RuntimeError("The first dictation did not provide a mishearing to correct")
+    time.sleep(0.8)
+    sh(f"{D}/axedit", CHROME, "fix", heard, FIX)
+    osa('tell application "System Events" to key code 36')
+    learned = []
+    for _ in range(20):
+        learned = [e for e in dictionary() if e["written"] == FIX and
+                   heard.lower() in [s.lower() for s in [e["heard"]] + e.get("variants", [])]]
+        if learned:
+            break
+        time.sleep(0.25)
+    if not learned:
+        raise RuntimeError("The first correction saved no heard-to-written replacement")
+    print("First correction saved a replacement:", learned, flush=True)
+
+    quit_candidate()
+    sh("open", "-n", "--env", f"CFFIXED_USER_HOME={D}/home", "--env", "WHISKERFLOW_SKIP_ATLAS_SIGN_IN=1", APP,
+       "--args", "--debug-dictation-trigger", f"--e2e-defaults-suite={SUITE}")
+    time.sleep(10)
+    if not candidate_pids():
+        raise RuntimeError("Candidate failed to restart")
     focus_chat_box()
     pasted = dictate(sentence)
-    match = re.search(pattern, pasted)
-    heard = match.group(1) if match else None
-    print(f"round {number}: pasted {pasted!r}, heard {heard!r}")
-    if heard and heard != FIX:
-        time.sleep(0.8)
-        sh(f"{D}/axedit", CHROME, "fix", heard, FIX)
-    osa('tell application "System Events" to key code 36')  # send inside the debounce
-    time.sleep(3)
-    show("dictionary")
-
-focus_chat_box()
-pasted = dictate("Tell Grainne the build is ready.")  # the phrasing heard as "grain" in round 1
-osa('tell application "System Events" to key code 36')
-print(f"round 3: pasted {pasted!r} with no edit")
-print("PASS" if FIX in pasted else "FAIL: the learned name was not applied")
+    print(f"round 2 after restart: pasted {pasted!r} with no edit", flush=True)
+    if FIX not in pasted:
+        raise RuntimeError("The learned name was not applied after restart")
+    osa('tell application "System Events" to key code 36')
+    print("PASS: one correction, persisted replacement, restart, automatic dictation delivery", flush=True)
+finally:
+    quit_candidate()
+    if window_id:
+        osa(f'tell application "Google Chrome" to if exists window id {window_id} then close window id {window_id}')
+    if front:
+        osa(f'tell application id "{front}" to activate')

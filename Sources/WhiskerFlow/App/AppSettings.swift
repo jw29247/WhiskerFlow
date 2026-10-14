@@ -41,6 +41,10 @@ final class AppSettings {
     var rememberCorrections: Bool { didSet { defaults.set(rememberCorrections, forKey: "rememberCorrections") } }
     /// Add a remembered correction to the Dictionary as soon as it is seen.
     var autoAddLearnedWords: Bool { didSet { defaults.set(autoAddLearnedWords, forKey: Keys.autoAddLearnedWords) } }
+    /// The one-time pass that learns rewrites earlier builds held back has run.
+    var dictionaryHeldRewritesLearned: Bool {
+        didSet { defaults.set(dictionaryHeldRewritesLearned, forKey: Keys.dictionaryHeldRewritesLearned) }
+    }
     /// Per-engine recogniser hints from the Dictionary. Each can be turned off
     /// independently; post-recognition replacement applies either way.
     var biasAppleSpeech: Bool { didSet { defaults.set(biasAppleSpeech, forKey: Keys.biasAppleSpeech) } }
@@ -206,6 +210,7 @@ final class AppSettings {
         pauseMediaWhileDictating = defaults.object(forKey: Keys.pauseMediaWhileDictating) as? Bool ?? true
         rememberCorrections = defaults.object(forKey: "rememberCorrections") as? Bool ?? true
         autoAddLearnedWords = defaults.object(forKey: Keys.autoAddLearnedWords) as? Bool ?? true
+        dictionaryHeldRewritesLearned = defaults.bool(forKey: Keys.dictionaryHeldRewritesLearned)
         biasAppleSpeech = defaults.object(forKey: Keys.biasAppleSpeech) as? Bool ?? Self.defaultBiasAppleSpeech
         biasParakeet = defaults.object(forKey: Keys.biasParakeet) as? Bool ?? Self.defaultBiasParakeet
         delivery = defaults.string(forKey: Keys.delivery).flatMap(DeliveryMode.init) ?? .pasteAtCursor
@@ -408,6 +413,7 @@ final class AppSettings {
         static let selectedInputUID = "selectedInputUID"
         static let vocabulary = "vocabulary"
         static let autoAddLearnedWords = "autoAddLearnedWords"
+        static let dictionaryHeldRewritesLearned = "dictionaryHeldRewritesLearned"
         static let biasAppleSpeech = "dictionaryBiasAppleSpeech"
         static let biasParakeet = "dictionaryBiasParakeet"
         static let formatting = "formattingOptions"

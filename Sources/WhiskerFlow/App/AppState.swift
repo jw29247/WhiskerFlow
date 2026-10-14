@@ -647,6 +647,7 @@ final class AppState {
         records = store.records
         selectedRecordID = records.first?.id
         dictionary.update { DictionaryLearning.demoteStale(&$0) }
+        learnHeldDictionaryRewritesOnce()
         loadInsights()
         startRetentionPruning()
         refreshAccessibilityPermission()
@@ -919,30 +920,50 @@ final class AppState {
         learnedThisSession = (sessionID, earlier + learned)
         if let notice = dictionaryNotice, !superseded.isEmpty {
             let kept = notice.changes.filter { change in !superseded.contains { $0.after.id == change.after.id } }
-            dictionaryNotice = kept.isEmpty ? nil : DictionaryNotice(changes: kept)
+            dictionaryNotice = kept.isEmpty ? nil : DictionaryNotice(changes: kept, isSaved: dictionary.errorMessage == nil)
         }
         lifecycleLogger.info("Dictionary learning ran", metadata: ["event": "dictionary_learned", "corrections": "\(pairs.count)",
                                                                    "learned": "\(learned.count)"])
         guard !learned.isEmpty else { return }
-        dictionaryNotice = DictionaryNotice(changes: learned)
+        dictionaryNotice = DictionaryNotice(changes: learned, isSaved: dictionary.errorMessage == nil)
         // A short HUD note for users who fixed the word in another app; Undo lives
         // in the main window and the Dictionary, since the HUD takes no clicks.
         if !isRecording, !isTranscribing, status == .idle || status.hudNotificationMessage != nil, status != .delivering {
-            status = .success(dictionaryNotice?.hudMessage ?? "Added to Dictionary")
+            if let error = dictionary.errorMessage {
+                status = .failure(error)
+            } else {
+                status = .success(dictionaryNotice?.hudMessage ?? "Added to Dictionary")
+            }
         }
     }
 
-    /// A correctly spelled word or common name, per the system spell checker.
+    /// Used only to keep ordinary sentence lowercasing out of the dictionary.
+    /// Lowercase English avoids the checker's name and acronym exemptions.
     static func isKnownWord(_ word: String) -> Bool {
-        NSSpellChecker.shared.checkSpelling(of: word, startingAt: 0, language: nil, wrap: false,
+        NSSpellChecker.shared.checkSpelling(of: word.lowercased(), startingAt: 0, language: "en", wrap: false,
                                             inSpellDocumentWithTag: 0, wordCount: nil).location == NSNotFound
     }
 
-    /// The suggestion's rewrite is added automatically once it is corrected again.
-    func dictionaryRewriteWaits(for suggestion: DictionarySuggestion) -> Bool {
-        suggestion.demotedAt == nil && suggestion.issues.isEmpty && settings.autoAddLearnedWords
-            && DictionaryLearning.waitsForAnotherSighting(suggestion.pair, sightings: suggestion.sightings,
-                                                          isKnownWord: Self.isKnownWord)
+    /// Earlier builds saved a spelling hint on the first correction of a real
+    /// word, leaving the mishearing unchanged. Recover those rewrites once.
+    func learnHeldDictionaryRewritesOnce() {
+        guard !settings.dictionaryHeldRewritesLearned, settings.rememberCorrections,
+              settings.autoAddLearnedWords, !UIPreview.isEnabled,
+              dictionary.errorMessage == nil, corrections.errorMessage == nil else { return }
+        let observations = correctionObservations
+        let readOnly = readOnlyDictionaryRules
+        var learned: [DictionaryChange] = []
+        dictionary.update { dictionary in
+            learned = DictionaryLearning.learnHeldRewrites(observations: observations, dictionary: &dictionary,
+                                                           readOnly: readOnly, isKnownWord: Self.isKnownWord)
+        }
+        if !learned.isEmpty {
+            dictionaryNotice = DictionaryNotice(changes: learned, isSaved: dictionary.errorMessage == nil)
+        }
+        guard dictionary.errorMessage == nil else { return }
+        settings.dictionaryHeldRewritesLearned = true
+        lifecycleLogger.info("Dictionary held rewrites learned", metadata: ["event": "dictionary_held_rewrites",
+                                                                            "learned": "\(learned.count)"])
     }
 
     func undoDictionaryNotice() {
@@ -967,7 +988,7 @@ final class AppState {
     /// Counting compiles a regex per entry, so it runs off the main actor and
     /// never delays the paste that follows the history save.
     private func recordDictionaryUsage(raw: String, final: String, configuration: TranscriptionJobConfiguration) {
-        guard configuration.writing.tone != .literal, !raw.isEmpty else { return }
+        guard !raw.isEmpty else { return }
         let entries = dictionary.entries
         let readOnlyRules = readOnlyDictionaryRules.map(\.rule)
         Task.detached(priority: .utility) { [weak self] in
@@ -1152,15 +1173,9 @@ final class AppState {
     }
 
     func updateText(_ record: TranscriptRecord, to text: String) {
-        let suggestions = VocabularyCorrectionDetector.corrections(
-            original: record.text,
-            edited: text,
-            existingRules: effectiveVocabulary
-        )
         do {
             try store.setText(id: record.id, text: text)
             records = store.records
-            pendingVocabularySuggestions = suggestions
             if settings.rememberCorrections {
                 let baseline = correctionEditBaselines[record.id] ?? record.text
                 correctionEditBaselines[record.id] = baseline
@@ -1169,6 +1184,9 @@ final class AppState {
                 corrections.record(changes, sessionID: record.id, application: "WhiskerFlow")
                 learnFromCorrections(changes, sessionID: record.id)
             }
+            pendingVocabularySuggestions = VocabularyCorrectionDetector.corrections(
+                original: record.text, edited: text, existingRules: effectiveVocabulary
+            )
         } catch {
             handleStorageError(error, message: "Could not save transcript changes")
         }

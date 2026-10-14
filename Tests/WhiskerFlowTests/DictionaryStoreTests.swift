@@ -107,16 +107,142 @@ final class DictionaryStoreTests: XCTestCase {
         state.settings.autoAddLearnedWords = false
         for record in records { state.updateText(record, to: record.text.replacingOccurrences(of: "zorbit", with: "Zorblet")) }
         XCTAssertTrue(state.dictionary.entries.isEmpty)
+        XCTAssertFalse(state.pendingVocabularySuggestions.isEmpty, "manual additions remain available with auto-add off")
         let suggestion = try XCTUnwrap(state.dictionarySuggestions.first)
         XCTAssertEqual(suggestion.sightings, 3)
         state.acceptDictionarySuggestion(suggestion)
         XCTAssertEqual(state.dictionary.entries.first?.origin, .manual)
     }
 
-    private func makeState(store: TranscriptStore) -> AppState {
+    func testNamesAndAcronymsAreNotOrdinaryWords() {
+        for name in ["Heber", "Reese", "Mackay", "CIO", "GEV", "UFI", "Niamh"] {
+            XCTAssertFalse(AppState.isKnownWord(name), name)
+        }
+        for word in ["fire", "Well", "Okay", "flow", "whisper", "grain", "There's"] {
+            XCTAssertTrue(AppState.isKnownWord(word), word)
+        }
+    }
+
+    func testAMisheardNameIsReplacedAfterTheFirstFix() throws {
+        let store = TranscriptStore(fileURL: root.appendingPathComponent("history.json"))
+        let record = TranscriptRecord(text: "Ask Heber about the launch.", audioFilePath: "", status: .transcribed)
+        try store.add(record)
+        let state = makeState(store: store)
+
+        state.updateText(record, to: "Ask Heba about the launch.")
+        XCTAssertEqual(state.effectiveVocabulary.apply(to: "Heber said hi"), "Heba said hi")
+        XCTAssertEqual(state.dictionaryNotice?.message, "“Heber” will now be written “Heba”.")
+    }
+
+    func testHeldRewritesAreLearnedOnceAtLaunch() {
+        let corrections = CorrectionStore()
+        corrections.record([VocabularyCorrection(find: "Heber", replaceWith: "Heba")], sessionID: UUID(),
+                           application: "Slack")
+        let dictionary = DictionaryStore()
+        dictionary.add(.word("Heba", origin: .learned))
+        let name = "WhiskerFlow.dictionary-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let state = AppState(settings: settings, store: TranscriptStore(fileURL: root.appendingPathComponent("history.json")),
+                             correctionStore: corrections, dictionaryStore: dictionary)
+
+        state.learnHeldDictionaryRewritesOnce()
+        XCTAssertEqual(state.effectiveVocabulary.apply(to: "Heber said hi"), "Heba said hi")
+        XCTAssertTrue(settings.dictionaryHeldRewritesLearned)
+
+        state.undoDictionaryNotice()
+        state.learnHeldDictionaryRewritesOnce()
+        XCTAssertEqual(state.effectiveVocabulary.apply(to: "Heber said hi"), "Heber said hi", "the pass runs once")
+    }
+
+    func testHistoryCorrectionPersistsAndRewritesAfterRestart() throws {
+        let store = TranscriptStore(fileURL: root.appendingPathComponent("history.json"))
+        let record = TranscriptRecord(text: "Ask Whisper about it.", audioFilePath: "", status: .transcribed)
+        try store.add(record)
+        let url = root.appendingPathComponent("dictionary.json")
+        let name = "WhiskerFlow.dictionary-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let state = AppState(settings: settings, store: store, correctionStore: CorrectionStore(),
+                             dictionaryStore: DictionaryStore(fileURL: url))
+
+        state.updateText(record, to: "Ask Whisker about it.")
+        XCTAssertTrue(state.pendingVocabularySuggestions.isEmpty, "an automatically saved correction should not ask to be added again")
+        XCTAssertEqual(DictionaryStore(fileURL: url).vocabulary.apply(to: "Whisper said hi."), "Whisker said hi.")
+        XCTAssertNil(state.dictionary.errorMessage)
+        state.undoDictionaryNotice()
+        XCTAssertEqual(DictionaryStore(fileURL: url).vocabulary.apply(to: "Whisper said hi."), "Whisper said hi.")
+    }
+
+    func testHeldRewriteRecoveryWaitsUntilAutoAddIsEnabled() {
+        let corrections = CorrectionStore()
+        corrections.record([VocabularyCorrection(find: "Heber", replaceWith: "Heba")], sessionID: UUID(), application: "Notes")
+        let dictionary = DictionaryStore()
+        dictionary.add(.word("Heba", origin: .learned))
+        let state = makeState(store: TranscriptStore(fileURL: root.appendingPathComponent("history.json")),
+                              corrections: corrections, dictionary: dictionary)
+        state.settings.autoAddLearnedWords = false
+        state.learnHeldDictionaryRewritesOnce()
+        XCTAssertFalse(state.settings.dictionaryHeldRewritesLearned)
+        state.settings.autoAddLearnedWords = true
+        state.learnHeldDictionaryRewritesOnce()
+        XCTAssertEqual(state.effectiveVocabulary.apply(to: "Heber"), "Heba")
+    }
+
+    func testFailedDictionarySaveIsNotReportedAsSaved() throws {
+        let folder = root.appendingPathComponent("dictionary")
+        let dictionary = DictionaryStore(fileURL: folder.appendingPathComponent("dictionary.json"))
+        try FileManager.default.removeItem(at: folder)
+        try Data("blocked".utf8).write(to: folder)
+        let store = TranscriptStore(fileURL: root.appendingPathComponent("history.json"))
+        let record = TranscriptRecord(text: "Ask zorbit about it.", audioFilePath: "", status: .transcribed)
+        try store.add(record)
+        let state = makeState(store: store, dictionary: dictionary)
+
+        state.updateText(record, to: "Ask Zorblet about it.")
+        XCTAssertNotNil(dictionary.errorMessage)
+        if case .failure = state.status {} else { XCTFail("The save failure must be visible") }
+        XCTAssertTrue(try XCTUnwrap(state.dictionaryNotice).message.contains("could not be saved"))
+        XCTAssertEqual(state.effectiveVocabulary.apply(to: "zorbit"), "Zorblet", "the correction still works for this session")
+        state.undoDictionaryNotice()
+        XCTAssertEqual(state.effectiveVocabulary.apply(to: "zorbit"), "zorbit")
+    }
+
+    func testHeldRewriteRecoveryRetriesAfterAFailedSave() throws {
+        let folder = root.appendingPathComponent("dictionary")
+        let url = folder.appendingPathComponent("dictionary.json")
+        let dictionary = DictionaryStore(fileURL: url)
+        dictionary.add(.word("Heba", origin: .learned))
+        let saved = try Data(contentsOf: url)
+        try FileManager.default.removeItem(at: folder)
+        try Data("blocked".utf8).write(to: folder)
+        let corrections = CorrectionStore()
+        corrections.record([VocabularyCorrection(find: "Heber", replaceWith: "Heba")], sessionID: UUID(), application: "Notes")
+        let state = makeState(store: TranscriptStore(fileURL: root.appendingPathComponent("history.json")),
+                              corrections: corrections, dictionary: dictionary)
+        state.learnHeldDictionaryRewritesOnce()
+        XCTAssertFalse(state.settings.dictionaryHeldRewritesLearned)
+        XCTAssertFalse(try XCTUnwrap(state.dictionaryNotice).isSaved, "recovery must keep Undo available when its save fails")
+        state.undoDictionaryNotice()
+        XCTAssertEqual(state.effectiveVocabulary.apply(to: "Heber"), "Heber")
+
+        try FileManager.default.removeItem(at: folder)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try saved.write(to: url)
+        let restarted = AppState(settings: state.settings, store: TranscriptStore(fileURL: root.appendingPathComponent("history.json")),
+                                 correctionStore: corrections, dictionaryStore: DictionaryStore(fileURL: url))
+        restarted.learnHeldDictionaryRewritesOnce()
+        XCTAssertTrue(restarted.settings.dictionaryHeldRewritesLearned)
+        XCTAssertEqual(DictionaryStore(fileURL: url).vocabulary.apply(to: "Heber"), "Heba")
+    }
+
+    private func makeState(store: TranscriptStore, corrections: CorrectionStore? = nil,
+                           dictionary: DictionaryStore? = nil) -> AppState {
         let name = "WhiskerFlow.dictionary-tests.\(UUID().uuidString)"
         let settings = AppSettings(defaults: UserDefaults(suiteName: name)!, meetingTokenStore: MeetingCaptureTokenStore(service: name))
-        return AppState(settings: settings, store: store, correctionStore: CorrectionStore(),
-                        dictionaryStore: DictionaryStore())
+        return AppState(settings: settings, store: store, correctionStore: corrections ?? CorrectionStore(),
+                        dictionaryStore: dictionary ?? DictionaryStore())
     }
 }
