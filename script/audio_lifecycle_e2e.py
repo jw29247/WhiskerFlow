@@ -111,7 +111,7 @@ def main():
                   {"main_thread_stalled", "finish_timeout", "capture_engine_timeout"}]
         if stalls:
             raise RuntimeError(f"Capture logged {len(stalls)} stalls or timeouts")
-        summary = {"rounds": rounds, "stalls": 0, "input_uid": args.input_uid,
+        summary = {"rounds": rounds, "stalls": 0, "preferred_input_uid": args.input_uid,
                    "build": launched["build"]}
         (output / "result.json").write_text(json.dumps(summary, indent=2) + "\n")
         print(f"PASS: {args.rounds} real microphone start/stop cycles, zero stalls/timeouts", flush=True)

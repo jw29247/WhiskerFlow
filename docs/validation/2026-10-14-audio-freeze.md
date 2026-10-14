@@ -2,8 +2,8 @@
 
 ## Observed failure
 
-The installed 2.0.0 (build 22) app froze on a second short C920 microphone
-capture on macOS 26.6.2. A five-second live `sample` captured all three
+The installed 2.0.0 (build 22) app froze on a second short microphone capture
+on macOS 26.6.2. A five-second live `sample` captured all three
 blocked stacks throughout the sample:
 
 ```text
@@ -43,8 +43,11 @@ skipped; another 18 Swift Testing cases passed. SwiftFormat lint passed.
 The signed DEBUG bundle used the production identity, isolated preferences and
 data, and the existing debug dictation trigger. Hardware stress passed:
 
-- 40 C920 start/stop cycles, all rebuilding the unit and exercising disposal.
-- 20 system-default start/stop cycles.
+- 40 captures with the disconnected C920 preference, exercising fallback to
+  the Soundcore Q35 Bluetooth system-default input and repeated unit disposal.
+- 20 explicit system-default Bluetooth start/stop cycles.
+- 20 built-in MacBook Pro microphone cycles, all using the prepared `ready`
+  capture and exercising reuse. Its UID was resolved directly before the test.
 - Each run started another capture after the counted rounds, proving the last
   counted teardown returned on the serial engine queue. Both candidates quit
   gracefully. No main-thread stalls or engine/finish timeouts were logged.
@@ -60,7 +63,9 @@ Add `--input-uid <microphone-uid>` to exercise a specific device. The output
 directory must be new. Microphone permission must already be granted.
 
 An independent read-only concurrency review found no production blocker. Its
-test-boundedness suggestion was applied. Hardware validation covers this Mac's
-available routes; it does not establish behavior on every Bluetooth device.
+test-boundedness suggestion was applied. The C920 preference was initially
+mistaken for the active route; Settings and `system_profiler SPAudioDataType`
+confirmed it was disconnected and the default input was the Soundcore Q35.
+Hardware validation does not establish behavior on every Bluetooth device.
 
 Apple API reference: [AudioUnitAddPropertyListener](https://developer.apple.com/documentation/audiotoolbox/audiounitaddpropertylistener(_:_:_:_:)).
