@@ -8,7 +8,7 @@
 
 ## Delivery checklist
 
-Follow the canonical [delivery policy](https://github.com/jw29247/WhiskerFlow/blob/main/AGENT.md#delivery-policy).
+Follow the canonical [delivery policy](https://github.com/jw29247/WhiskerFlow/blob/main/AGENTS.md#delivery-policy).
 
 - [ ] Required checks and appropriate behavioural verification are complete.
 - [ ] The single initial GitHub Codex PR review is complete (automatic preferred;

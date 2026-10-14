@@ -5,7 +5,7 @@ description: Use when Jacob requests a bedtime, overnight or unattended delivery
 
 # Bedtime
 
-1. Read the canonical [delivery policy](../../../AGENT.md#delivery-policy) before
+1. Read the canonical [delivery policy](../../../AGENTS.md#delivery-policy) before
    starting. Apply its repository overrides throughout the run, including when
    following Poteto/pstack playbooks.
 2. Record the requested outcome, existing merge/deployment authority and next
