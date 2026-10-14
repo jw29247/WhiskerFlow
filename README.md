@@ -124,4 +124,4 @@ permission refresh. Audio taps use the input node's hardware input format.
 
 Local builds use ad-hoc signing. Public releases use `script/notarize.sh` with
 Developer ID signing, Apple notarization, and a signed Sparkle update archive.
-See [AGENT.md](AGENT.md) for the complete release and appcast publishing steps.
+See [AGENTS.md](AGENTS.md) for the complete release and appcast publishing steps.
