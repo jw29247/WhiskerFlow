@@ -9,6 +9,14 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>2.0.1</title>
+      <pubDate>Wed, 14 Oct 2026 13:08:22 +0000</pubDate>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <description><![CDATA[Dictionary autocorrection now saves replacements after one eligible fix, repairs earlier spelling hints, and works in Literal style.]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v2.0.1/WhiskerFlow-2.0.1.zip" sparkle:version="23" sparkle:shortVersionString="2.0.1" sparkle:edSignature="HLZ/f9S40yoaCgjZaOIHb3VLN7D7fnsYGFmGckz1RM5Ovbfk+MoEBL51svpdWjEOBRxN76Y1cOuaHrTGgDPABg==" length="18496696" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>2.0.0</title>
       <pubDate>Mon, 12 Oct 2026 15:43:56 +0000</pubDate>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
