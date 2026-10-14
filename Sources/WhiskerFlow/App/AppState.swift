@@ -957,11 +957,13 @@ final class AppState {
             learned = DictionaryLearning.learnHeldRewrites(observations: observations, dictionary: &dictionary,
                                                            readOnly: readOnly, isKnownWord: Self.isKnownWord)
         }
+        if !learned.isEmpty {
+            dictionaryNotice = DictionaryNotice(changes: learned, isSaved: dictionary.errorMessage == nil)
+        }
         guard dictionary.errorMessage == nil else { return }
         settings.dictionaryHeldRewritesLearned = true
         lifecycleLogger.info("Dictionary held rewrites learned", metadata: ["event": "dictionary_held_rewrites",
                                                                             "learned": "\(learned.count)"])
-        if !learned.isEmpty { dictionaryNotice = DictionaryNotice(changes: learned) }
     }
 
     func undoDictionaryNotice() {

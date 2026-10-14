@@ -224,6 +224,9 @@ final class DictionaryStoreTests: XCTestCase {
                               corrections: corrections, dictionary: dictionary)
         state.learnHeldDictionaryRewritesOnce()
         XCTAssertFalse(state.settings.dictionaryHeldRewritesLearned)
+        XCTAssertFalse(try XCTUnwrap(state.dictionaryNotice).isSaved, "recovery must keep Undo available when its save fails")
+        state.undoDictionaryNotice()
+        XCTAssertEqual(state.effectiveVocabulary.apply(to: "Heber"), "Heber")
 
         try FileManager.default.removeItem(at: folder)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
