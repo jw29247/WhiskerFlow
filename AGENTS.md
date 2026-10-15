@@ -1,5 +1,15 @@
 # Agent Notes
 
+## User rule: concise updates and reports
+
+Keep progress updates and final reports to the point. Default to one short
+paragraph and a few bullets with only the information the user needs: the
+outcome, material blockers or risks, next actions and any decision required.
+Omit implementation details, command logs and process narration unless they
+change a decision or the user asks for them. State uncertainty plainly and
+link supporting evidence instead of repeating it. Give more detail only when
+the user requests it.
+
 ## Delivery policy
 
 This is the canonical workflow policy for this repository. Read it for routine,
