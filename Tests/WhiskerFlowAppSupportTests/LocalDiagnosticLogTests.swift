@@ -12,9 +12,9 @@ final class LocalDiagnosticLogTests: XCTestCase {
         let stallID = UUID().uuidString
         logger.warning("private content", metadata: ["event": "main_thread_stalled", "stall_id": "\(stallID)",
             "app_active": "false", "secure_input": "true", "visible_windows": "0", "context_age_ms": "5000",
-            "audio_capture_active": "true", "window_title": "private content", "key": "private content"])
+            "audio_capture_active": "true", "globe_key_action": "dictation", "window_title": "private content", "key": "private content"])
         logger.info("private content", metadata: ["event": "hotkey_transition", "event_source": "global", "pressed": "true", "elapsed_ms": "300"])
-        logger.info("private content", metadata: ["event": "interaction_state", "app_active": "private content", "visible_windows": "NaN"])
+        logger.info("private content", metadata: ["event": "interaction_state", "app_active": "private content", "visible_windows": "NaN", "globe_key_action": "private content"])
         sink.flush()
         let lines = try String(contentsOf: root.appendingPathComponent("diagnostics.jsonl"), encoding: .utf8)
         let rows = try lines.split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: String]) }
@@ -24,10 +24,22 @@ final class LocalDiagnosticLogTests: XCTestCase {
         XCTAssertEqual(rows[0]["app_active"], "false")
         XCTAssertEqual(rows[0]["secure_input"], "true")
         XCTAssertEqual(rows[0]["visible_windows"], "0")
+        XCTAssertEqual(rows[0]["globe_key_action"], "dictation")
         XCTAssertEqual(rows[1]["event_source"], "global")
         XCTAssertNil(rows[2]["app_active"])
         XCTAssertNil(rows[2]["visible_windows"])
+        XCTAssertNil(rows[2]["globe_key_action"])
         XCTAssertFalse(lines.contains("private content"))
+    }
+
+    func testInteractionContextIdentifiesSystemDictationConflictWithoutRawPreferences() {
+        let context = InteractionDiagnosticContext(appActive: false, visibleWindows: 0,
+            accessibilityTrusted: true, secureInput: false, globeKeyUsage: GlobeKeyUsage(storedValue: 3))
+        XCTAssertEqual(context.fields["globe_key_action"], "dictation")
+        let unknown = InteractionDiagnosticContext(appActive: false, visibleWindows: 0,
+            accessibilityTrusted: true, secureInput: false, globeKeyUsage: GlobeKeyUsage(storedValue: 999))
+        XCTAssertEqual(unknown.fields["globe_key_action"], "unrecognized")
+        XCTAssertFalse(unknown.fields.values.contains("999"))
     }
 
     func testLocalLogDropsContentAndUnknownMetadata() throws {

@@ -19,12 +19,13 @@ class PerformanceDiagnosticsTests(unittest.TestCase):
     def test_permission_and_secure_input_state_are_separate_per_launch(self):
         report = diagnostics.summarize([
             {'timestamp': '90', 'event': 'interaction_state', 'launch': 'a', 'accessibility': 'false', 'app_active': 'false'},
-            {'timestamp': '95', 'event': 'interaction_state', 'launch': 'b', 'accessibility': 'true', 'secure_input': 'true'},
+            {'timestamp': '95', 'event': 'interaction_state', 'launch': 'b', 'accessibility': 'true', 'secure_input': 'true', 'globe_key_action': 'dictation'},
             {'timestamp': '96', 'event': 'hotkey_transition', 'launch': 'b', 'event_source': 'global', 'elapsed_ms': '300'},
         ], now=100, hours=2)
         self.assertIn({'kind': 'global_hotkey_permission_missing', 'launch': 'a'}, report['issues'])
         self.assertIn({'kind': 'secure_keyboard_input_enabled', 'launch': 'b'}, report['issues'])
         self.assertIn({'kind': 'slow_hotkey_dispatch', 'count': 1, 'max_ms': 300}, report['issues'])
+        self.assertEqual(next(c for c in report['interaction_context'] if c['launch'] == 'b')['globe_key_action'], 'dictation')
 
     def test_restored_permission_and_old_launch_do_not_raise_current_issue(self):
         report = diagnostics.summarize([

@@ -95,6 +95,7 @@ struct LocalDiagnosticLogHandler: LogHandler {
             "stage": ["recognition", "translation", "text_processing", "history_save", "ui_update", "completion_sound"],
             "capture_skip_reason": ["audio_capture_active", "memory_pressure"],
             "event_source": ["local", "global"],
+            "globe_key_action": ["do_nothing", "change_input_source", "emoji", "dictation", "system_default", "unrecognized"],
             "memory_pressure": ["unknown", "normal", "warning", "critical"],
             "thermal_state": ["unknown", "nominal", "fair", "serious", "critical"],
             "availability": ["available", "noMeeting", "multipleMeetings", "notJoined", "unavailable"],

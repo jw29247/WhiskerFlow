@@ -7,10 +7,12 @@ struct InteractionDiagnosticContext: Equatable, Sendable {
     let visibleWindows: Int
     let accessibilityTrusted: Bool
     let secureInput: Bool
+    let globeKeyUsage: GlobeKeyUsage
 
     var fields: [String: String] {
         ["app_active": String(appActive), "visible_windows": String(visibleWindows),
-         "accessibility": String(accessibilityTrusted), "secure_input": String(secureInput)]
+         "accessibility": String(accessibilityTrusted), "secure_input": String(secureInput),
+         "globe_key_action": globeKeyUsage.diagnosticValue]
     }
 }
 
@@ -48,7 +50,8 @@ final class InteractionDiagnosticMonitor {
             appActive: NSApp?.isActive ?? false,
             visibleWindows: NSApp?.windows.filter { $0.isVisible && $0.canBecomeMain }.count ?? 0,
             accessibilityTrusted: AXIsProcessTrusted(),
-            secureInput: IsSecureEventInputEnabled()
+            secureInput: IsSecureEventInputEnabled(),
+            globeKeyUsage: .current()
         ))
     }
 }

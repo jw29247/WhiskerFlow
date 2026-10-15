@@ -25,7 +25,7 @@ def summarize(rows, now, hours):
     if slow_hotkeys:
         issues.append({'kind': 'slow_hotkey_dispatch', 'count': len(slow_hotkeys), 'max_ms': max(float(r['elapsed_ms']) for r in slow_hotkeys)})
     interaction = {}
-    interaction_keys = ('app_active', 'visible_windows', 'accessibility', 'secure_input', 'audio_capture_active', 'context_age_ms')
+    interaction_keys = ('app_active', 'visible_windows', 'accessibility', 'secure_input', 'audio_capture_active', 'context_age_ms', 'globe_key_action')
     for row in recent:
         if row.get('event') in ('interaction_state', 'resource_snapshot', 'heartbeat', 'main_thread_stalled'):
             context = {k: row[k] for k in interaction_keys if k in row}

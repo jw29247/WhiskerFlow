@@ -17,7 +17,7 @@ Inspect these log attributes:
 | `main_thread_stalled` | The main queue has not answered for at least two seconds while the watchdog continues to run. Includes resource counters, the last interaction context, its age, and a `stall_id`. |
 | `main_thread_recovered` | The same `stall_id` and the full observed delay. A stall without recovery may still be ongoing or the process may have exited. |
 | `monitoring_gap` | The watchdog itself was unscheduled for at least five seconds. This is an observation gap, not proof of a UI freeze. |
-| `interaction_state` | Foreground state, visible app window count, Accessibility trust, and Secure Keyboard Entry state. No window titles or unrelated keystrokes are recorded. |
+| `interaction_state` | Foreground state, visible app window count, Accessibility trust, Secure Keyboard Entry state, and the macOS Globe-key action. No window titles or unrelated keystrokes are recorded. |
 | `hotkey_transition` | A matched configured shortcut, its local or global source, its pressed state, and dispatch delay. No key values or characters are recorded. |
 | `stage_started`, `stage_finished` | Recognition, text processing, persistence, and UI work correlated by `session`. |
 | `finish_returned`, `paste_returned` | End-to-end finish and delivery latency. |
@@ -41,6 +41,7 @@ Apple documents this requirement in [Monitoring Events](https://developer.apple.
 `secure_input=true` is another input diagnostic clue. These fields do not prove that screen sharing caused a failure.
 No transition means the application did not observe a matched shortcut; it does not prove that the user pressed one.
 Context captured before a freeze can be stale, so inspect `context_age_ms`.
+If the configured shortcut is Fn/Globe, inspect `globe_key_action`. Values such as `dictation`, `emoji`, or `change_input_source` mean macOS also assigns an action to the same key. In Keyboard settings, set **Press 🌐 key to** to **Do Nothing** to remove that conflict. The diagnostics monitor only reads this setting.
 
 ## Inspect local evidence
 

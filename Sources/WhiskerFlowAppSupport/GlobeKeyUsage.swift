@@ -35,6 +35,17 @@ public enum GlobeKeyUsage: Equatable, Sendable {
 
     public var conflictsWithShortcut: Bool { self != .doNothing }
 
+    var diagnosticValue: String {
+        switch self {
+        case .doNothing: "do_nothing"
+        case .changeInputSource: "change_input_source"
+        case .showEmojiAndSymbols: "emoji"
+        case .startDictation: "dictation"
+        case .systemDefault: "system_default"
+        case .unrecognized: "unrecognized"
+        }
+    }
+
     public var displayName: String {
         switch self {
         case .doNothing: return "Do Nothing"
