@@ -28,6 +28,8 @@ public enum Observability {
     }
 
     public static var assistantOperations: LongCounterSdk { state.assistantOperations }
+    static var mainThreadStalls: LongCounterSdk { state.mainThreadStalls }
+    static var mainThreadStallDuration: DoubleHistogramMeterSdk { state.mainThreadStallDuration }
 
     public static var dictationSessions: LongCounterSdk {
         state.dictationSessions
@@ -58,6 +60,7 @@ public enum Observability {
     public static func start() {
         guard state.markStarted() else { return }
         MainThreadHealthMonitor.shared.start()
+        DispatchQueue.main.async { InteractionDiagnosticMonitor.shared.start() }
         let lifecycle = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
         lifecycle.info("Application diagnostics started", metadata: ["event": "app_started"])
 
@@ -143,6 +146,8 @@ public enum Observability {
         let tracer: any Tracer
         let appLifecycle: LongCounterSdk
         let assistantOperations: LongCounterSdk
+        let mainThreadStalls: LongCounterSdk
+        let mainThreadStallDuration: DoubleHistogramMeterSdk
         let dictationSessions: LongCounterSdk
         let transcriptionOperations: LongCounterSdk
         let transcriptionDuration: DoubleHistogramMeterSdk
@@ -241,6 +246,13 @@ public enum Observability {
                 .setUnit("1")
                 .build()
             assistantOperations = meter.counterBuilder(name: "assistant.operations").setDescription("Assistant request outcomes without content").setUnit("1").build()
+            mainThreadStalls = meter.counterBuilder(name: "app.main_thread.stalls")
+                .setDescription("Main queue delays of at least two seconds while the watchdog is scheduled")
+                .setUnit("1").build()
+            mainThreadStallDuration = meter.histogramBuilder(name: "app.main_thread.stall.duration")
+                .setDescription("Recovered main queue stall duration")
+                .setExplicitBucketBoundariesAdvice([2, 3, 5, 10, 30, 60, 120])
+                .setUnit("s").build()
             dictationSessions = meter.counterBuilder(name: "dictation.sessions")
                 .setDescription("Dictation session state transitions")
                 .setUnit("1")
@@ -270,6 +282,14 @@ public enum Observability {
                 .setUnit("1")
                 .build()
 
+            let operationDuration = meter.histogramBuilder(name: "app.operation.duration")
+                .setDescription("Dictation stage, microphone startup and hotkey dispatch duration")
+                .setExplicitBucketBoundariesAdvice([0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60])
+                .setUnit("s").build()
+            let slowOperations = meter.counterBuilder(name: "app.operation.slow")
+                .setDescription("Operations exceeding their diagnostic latency threshold")
+                .setUnit("1").build()
+
             LoggingSystem.bootstrap { label in
                 var otelHandler = OTelLogHandler(
                     loggerProvider: loggerProvider,
@@ -280,7 +300,11 @@ public enum Observability {
 
                 var systemHandler = UnifiedLogHandler(label: label)
                 systemHandler.logLevel = .info
-                return MultiplexLogHandler([systemHandler, otelHandler, LocalDiagnosticLogHandler(label: label)])
+                var handlers: [any LogHandler] = [systemHandler, otelHandler, LocalDiagnosticLogHandler(label: label)]
+                if label == "agency.thatworks.WhiskerFlow.DictationLifecycle" {
+                    handlers.append(PerformanceLogHandler(duration: operationDuration, slowOperations: slowOperations))
+                }
+                return MultiplexLogHandler(handlers)
             }
         }
 
@@ -297,7 +321,11 @@ public enum Observability {
                 "service.name": .string("whiskerflow.macos"),
                 "service.version": .string(serviceVersion()),
                 "deployment.environment.name": .string(environmentName),
-                "vcs.repository.url.full": .string("https://github.com/jw29247/WhiskerFlow")
+                "vcs.repository.url.full": .string("https://github.com/jw29247/WhiskerFlow"),
+                "installation.id": .string(DiagnosticIdentity.current.installationID),
+                "service.instance.id": .string(DiagnosticIdentity.current.launchID),
+                "app.build": .string(DiagnosticIdentity.current.build),
+                "os.version": .string(ProcessInfo.processInfo.operatingSystemVersionString)
             ]
             if let revision = vcsRevision() {
                 attributes["vcs.ref.head.revision"] = .string(revision)
@@ -336,6 +364,9 @@ public enum Observability {
                 if let value = environment[key], !value.isEmpty {
                     return value
                 }
+            }
+            if let stamp = Bundle.main.object(forInfoDictionaryKey: "WhiskerFlowBuildRevision") as? String {
+                return stamp.split(separator: "-").first.map(String.init)
             }
             return nil
         }

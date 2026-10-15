@@ -4,6 +4,32 @@ import XCTest
 @testable import WhiskerFlowAppSupport
 
 final class LocalDiagnosticLogTests: XCTestCase {
+    func testPerformanceContextUsesSharedIdentityAndDropsInvalidFields() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sink = LocalDiagnosticLog(directory: root)
+        let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle", factory: { LocalDiagnosticLogHandler(label: $0, sink: sink) })
+        let stallID = UUID().uuidString
+        logger.warning("private content", metadata: ["event": "main_thread_stalled", "stall_id": "\(stallID)",
+            "app_active": "false", "secure_input": "true", "visible_windows": "0", "context_age_ms": "5000",
+            "audio_capture_active": "true", "window_title": "private content", "key": "private content"])
+        logger.info("private content", metadata: ["event": "hotkey_transition", "event_source": "global", "pressed": "true", "elapsed_ms": "300"])
+        logger.info("private content", metadata: ["event": "interaction_state", "app_active": "private content", "visible_windows": "NaN"])
+        sink.flush()
+        let lines = try String(contentsOf: root.appendingPathComponent("diagnostics.jsonl"), encoding: .utf8)
+        let rows = try lines.split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: String]) }
+        XCTAssertEqual(rows[0]["installation_id"], DiagnosticIdentity.current.installationID)
+        XCTAssertEqual(rows[0]["launch"], DiagnosticIdentity.current.launchID)
+        XCTAssertEqual(rows[0]["stall_id"], stallID)
+        XCTAssertEqual(rows[0]["app_active"], "false")
+        XCTAssertEqual(rows[0]["secure_input"], "true")
+        XCTAssertEqual(rows[0]["visible_windows"], "0")
+        XCTAssertEqual(rows[1]["event_source"], "global")
+        XCTAssertNil(rows[2]["app_active"])
+        XCTAssertNil(rows[2]["visible_windows"])
+        XCTAssertFalse(lines.contains("private content"))
+    }
+
     func testLocalLogDropsContentAndUnknownMetadata() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

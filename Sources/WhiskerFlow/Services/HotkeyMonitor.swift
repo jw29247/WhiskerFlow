@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Logging
 import WhiskerFlowCore
 
 /// Watches for the configured push-to-talk key globally and locally, reporting
@@ -18,6 +19,7 @@ final class HotkeyMonitor {
     private var keyGlobalMonitor: Any?
     private var trustObserver: NSObjectProtocol?
     private var trustPoll: Timer?
+    private let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
 
     init(combo: KeyCombo, onChange: @escaping (Bool) -> Void) {
         self.matcher = HotkeyMatcher(combo: combo)
@@ -39,11 +41,11 @@ final class HotkeyMonitor {
     func start() {
         stop()
         flagsLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            self?.handleFlags(event)
+            self?.handleFlags(event, source: "local")
             return event
         }
         keyLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
-            self?.handleKey(event)
+            self?.handleKey(event, source: "local")
             return event
         }
         installGlobalMonitors()
@@ -69,10 +71,10 @@ final class HotkeyMonitor {
             if let monitor { NSEvent.removeMonitor(monitor) }
         }
         flagsGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            Task { @MainActor in self?.handleFlags(event) }
+            Task { @MainActor in self?.handleFlags(event, source: "global") }
         }
         keyGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] event in
-            Task { @MainActor in self?.handleKey(event) }
+            Task { @MainActor in self?.handleKey(event, source: "global") }
         }
     }
 
@@ -107,13 +109,13 @@ final class HotkeyMonitor {
         trustObserver = nil
     }
 
-    private func handleFlags(_ event: NSEvent) {
+    private func handleFlags(_ event: NSEvent, source: String) {
         guard !isSuspended else { return }
         let modifiers = KeyModifiers(rawValue: UInt(event.modifierFlags.rawValue))
-        emitIfChanged(matcher.handleFlags(keyCode: event.keyCode, modifiers: modifiers))
+        emitIfChanged(matcher.handleFlags(keyCode: event.keyCode, modifiers: modifiers), event: event, source: source)
     }
 
-    private func handleKey(_ event: NSEvent) {
+    private func handleKey(_ event: NSEvent, source: String) {
         guard !isSuspended else { return }
         let modifiers = KeyModifiers(rawValue: UInt(event.modifierFlags.rawValue))
         emitIfChanged(matcher.handleKey(
@@ -121,10 +123,18 @@ final class HotkeyMonitor {
             modifiers: modifiers,
             isKeyDown: event.type == .keyDown,
             isRepeat: event.isARepeat
-        ))
+        ), event: event, source: source)
     }
 
-    private func emitIfChanged(_ pressed: Bool?) {
-        if let pressed { onChange(pressed) }
+    private func emitIfChanged(_ pressed: Bool?, event: NSEvent? = nil, source: String = "local") {
+        guard let pressed else { return }
+        if let event {
+            logger.info("Configured hotkey transition received", metadata: [
+                "event": "hotkey_transition", "event_source": "\(source)", "pressed": "\(pressed)",
+                "app_active": "\(NSApp.isActive)",
+                "elapsed_ms": "\(max(0, ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000)"
+            ])
+        }
+        onChange(pressed)
     }
 }

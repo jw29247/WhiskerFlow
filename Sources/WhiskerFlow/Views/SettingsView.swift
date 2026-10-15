@@ -1,4 +1,5 @@
 import AVFoundation
+import AppKit
 import SwiftUI
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
@@ -121,6 +122,18 @@ struct SettingsView: View {
                 LabeledContent("First-run setup") { RunSetupAgainButton(appState: appState) }
                 Text("Walks through permissions, your microphone, shortcut and a practice dictation again.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Performance diagnostics") {
+                Text("WhiskerFlow reports delays and resource usage without audio or transcript text. Share this ID and the time of a problem so support can find this installation's reports.")
+                    .font(.caption).foregroundStyle(.secondary)
+                LabeledContent("Diagnostic ID") {
+                    Text(DiagnosticIdentity.current.installationID).font(.caption.monospaced()).textSelection(.enabled)
+                }
+                Button("Copy diagnostic ID") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(DiagnosticIdentity.current.installationID, forType: .string)
+                }
             }
 
             Section("Updates") {
