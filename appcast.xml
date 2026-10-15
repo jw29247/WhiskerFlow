@@ -9,6 +9,14 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>2.0.3</title>
+      <pubDate>Thu, 15 Oct 2026 12:57:53 +0000</pubDate>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <description><![CDATA[<p>Fn dictation now takes priority over the macOS Globe-key action while WhiskerFlow uses Fn. Your previous setting returns when you choose another shortcut or quit. Settings and onboarding explain the change. Improved diagnostics help investigate shortcut failures and slowdowns without recording audio or transcripts.</p>]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v2.0.3/WhiskerFlow-2.0.3.zip" sparkle:version="25" sparkle:shortVersionString="2.0.3" sparkle:edSignature="eFdLkm85be7KurfK1Ma/hxo/61TK3DfJRQQUJUPjV+Sk4OMrBv8xUhIYSQR61Owz1WEn+D01O+/Y/luUpHlSBw==" length="18542723" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>2.0.2</title>
       <pubDate>Wed, 14 Oct 2026 14:19:28 +0000</pubDate>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
