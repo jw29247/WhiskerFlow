@@ -59,6 +59,16 @@ struct SettingsView: View {
                 }
                 .onChange(of: appState.settings.hotkey) { _, _ in appState.reloadHotkey() }
 
+                if appState.settings.activeHotkeyCombo == HotkeyTrigger.fn.presetCombo {
+                    Text(GlobeKeyUsage.shortcutOverrideExplanation)
+                        .font(.caption).foregroundStyle(.secondary)
+                    if appState.hasGlobeKeyConflict {
+                        Label("macOS still has a competing Fn action. Set “Press 🌐 key to” to Do Nothing.", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption).foregroundStyle(.orange)
+                        Button("Open Keyboard Settings") { SystemSettingsLink.open(SystemSettingsLink.keyboard) }
+                    }
+                }
+
                 if appState.settings.hotkey == .custom {
                     LabeledContent("Shortcut") {
                         KeyRecorderView(

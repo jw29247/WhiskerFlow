@@ -19,6 +19,7 @@ Inspect these log attributes:
 | `monitoring_gap` | The watchdog itself was unscheduled for at least five seconds. This is an observation gap, not proof of a UI freeze. |
 | `interaction_state` | Foreground state, visible app window count, Accessibility trust, Secure Keyboard Entry state, and the macOS Globe-key action. No window titles or unrelated keystrokes are recorded. |
 | `hotkey_transition` | A matched configured shortcut, its local or global source, its pressed state, and dispatch delay. No key values or characters are recorded. |
+| `globe_key_override_applied`, `globe_key_override_restored` | WhiskerFlow reserved Fn for dictation or restored the previous macOS Globe-key action. |
 | `stage_started`, `stage_finished` | Recognition, text processing, persistence, and UI work correlated by `session`. |
 | `finish_returned`, `paste_returned` | End-to-end finish and delivery latency. |
 | `resource_snapshot` | App and system CPU, resident memory, swap activity, thermal state, and observed memory pressure. |
@@ -41,7 +42,11 @@ Apple documents this requirement in [Monitoring Events](https://developer.apple.
 `secure_input=true` is another input diagnostic clue. These fields do not prove that screen sharing caused a failure.
 No transition means the application did not observe a matched shortcut; it does not prove that the user pressed one.
 Context captured before a freeze can be stale, so inspect `context_age_ms`.
-If the configured shortcut is Fn/Globe, inspect `globe_key_action`. Values such as `dictation`, `emoji`, or `change_input_source` mean macOS also assigns an action to the same key. In Keyboard settings, set **Press 🌐 key to** to **Do Nothing** to remove that conflict. The diagnostics monitor only reads this setting.
+When Fn/Globe is the configured shortcut, WhiskerFlow sets the competing macOS Globe-key action to **Do Nothing** before starting the hotkey monitor. This reservation stays active with the app window closed. Choosing another shortcut or quitting normally restores the previous action. Settings and onboarding explain the reservation.
+
+The original value is saved before macOS is changed. After a crash or force quit, the reservation can remain until the next launch. The next launch retains the original backup while Fn remains selected, or restores it if another shortcut is selected. An external action that differs from **Do Nothing** is preserved on quit.
+
+Inspect `globe_key_action`. A value such as `dictation`, `emoji`, or `change_input_source` while Fn is selected means macOS still assigns a competing action. If the automatic change fails, use **Keyboard settings → Press 🌐 key to → Do Nothing**, or select another WhiskerFlow shortcut. The diagnostics monitor itself only reads this setting.
 
 ## Inspect local evidence
 
