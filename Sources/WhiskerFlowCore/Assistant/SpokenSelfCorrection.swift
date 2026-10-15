@@ -76,7 +76,7 @@ public enum SpokenSelfCorrection {
               !nonSubstitutes.contains(replacement.lowercased())
                 || substitutableClasses.contains(where: { $0.contains(discarded) && $0.contains(replacement.lowercased()) })
         else { return text }
-        return prefix + replacement + text[punctuationRange]
+        return prefix + replacement + String(text[punctuationRange])
     }
 
     /// Swaps within one class ("him, sorry, her", "here, I mean there") are real repairs.
