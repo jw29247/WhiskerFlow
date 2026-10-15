@@ -320,7 +320,13 @@ struct OnboardingShortcutStep: View {
             }
             .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 320)
 
-            if settings.hotkey == .fn, let explanation = globeUsage.conflictExplanation {
+            if settings.activeHotkeyCombo == HotkeyTrigger.fn.presetCombo {
+                Text(GlobeKeyUsage.shortcutOverrideExplanation)
+                    .font(.caption).foregroundStyle(FlowStyle.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if settings.activeHotkeyCombo == HotkeyTrigger.fn.presetCombo, let explanation = globeUsage.conflictExplanation {
                 OnboardingCard {
                     Label("Your 🌐 key already does something", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange).font(.system(size: 13, weight: .medium))

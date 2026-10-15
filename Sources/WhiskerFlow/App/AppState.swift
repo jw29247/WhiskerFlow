@@ -121,6 +121,7 @@ final class AppState {
     var recordingStartedAt: Date?
     var modelState: ModelState = .unloaded
     var hasAccessibilityPermission = false
+    private(set) var hasGlobeKeyConflict = false
     var devices: [AudioInputDescriptor] = []
     var lastError: String?
     var searchText = ""
@@ -180,6 +181,7 @@ final class AppState {
     let microphonePermission: MicrophonePermissionController
     let sharedVocabulary = SharedVocabularyService()
     private var hotkeyMonitor: HotkeyMonitor?
+    private let globeKeyShortcutOverride = GlobeKeyShortcutOverride()
     private var assistantHotkeyMonitors: [HotkeyMonitor] = []
     private var assistantShortcutActive = false
     static let selectionShortcut = KeyCombo(keyCode: 14, modifiers: [.command, .option, .shift])
@@ -711,6 +713,9 @@ final class AppState {
         assistantHotkeyMonitors.forEach { $0.stop() }
         assistantHotkeyMonitors = []
         hotkeyMonitor = nil
+        if !globeKeyShortcutOverride.restore() {
+            logger.error("Could not restore the macOS Globe-key action")
+        }
         audioDeviceMonitor?.stop()
         audioDeviceMonitor = nil
         meetingStoragePollTask?.cancel()
@@ -819,8 +824,9 @@ final class AppState {
     }
 
     func reloadHotkey() {
-        guard !UIPreview.isEnabled else { return }
-        hotkeyMonitor?.update(combo: settings.activeHotkeyCombo)
+        guard !UIPreview.isEnabled, let hotkeyMonitor else { return }
+        configureGlobeKeyShortcut()
+        hotkeyMonitor.update(combo: settings.activeHotkeyCombo)
     }
 
     func warmUpMeetingEngine() {
@@ -1086,6 +1092,7 @@ final class AppState {
 
     func refreshPermissionsAfterActivation() {
         guard !UIPreview.isEnabled else { return }
+        if hotkeyMonitor != nil { configureGlobeKeyShortcut() }
         refreshAccessibilityPermission()
         refreshMicrophonePermission()
         refreshScreenRecordingPermission()
@@ -1545,6 +1552,7 @@ final class AppState {
             return
         }
         #endif
+        configureGlobeKeyShortcut()
         let monitor = HotkeyMonitor(combo: settings.activeHotkeyCombo) { [weak self] pressed in
             self?.handleDictationKey(pressed)
         }
@@ -1577,6 +1585,12 @@ final class AppState {
             self.bookmarkMeeting()
         }
         bookmark.start(); assistantHotkeyMonitors.append(bookmark)
+    }
+
+    private func configureGlobeKeyShortcut() {
+        let ready = globeKeyShortcutOverride.update(shortcut: settings.activeHotkeyCombo)
+        hasGlobeKeyConflict = !ready && settings.activeHotkeyCombo == HotkeyTrigger.fn.presetCombo
+        if !ready { logger.error("Could not update the macOS Globe-key action for the dictation shortcut") }
     }
 
     func bookmarkMeeting() {

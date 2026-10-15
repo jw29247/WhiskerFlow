@@ -16,6 +16,8 @@ public enum GlobeKeyUsage: Equatable, Sendable {
     public static let defaultsDomain = "com.apple.HIToolbox"
     public static let defaultsKey = "AppleFnUsageType"
 
+    public static let shortcutOverrideExplanation = "While WhiskerFlow is running, Fn is reserved for dictation. Your macOS Globe-key action returns when you choose another shortcut or quit."
+
     public init(storedValue: Int?) {
         switch storedValue {
         case nil: self = .systemDefault
@@ -34,6 +36,17 @@ public enum GlobeKeyUsage: Equatable, Sendable {
     }
 
     public var conflictsWithShortcut: Bool { self != .doNothing }
+
+    var diagnosticValue: String {
+        switch self {
+        case .doNothing: "do_nothing"
+        case .changeInputSource: "change_input_source"
+        case .showEmojiAndSymbols: "emoji"
+        case .startDictation: "dictation"
+        case .systemDefault: "system_default"
+        case .unrecognized: "unrecognized"
+        }
+    }
 
     public var displayName: String {
         switch self {

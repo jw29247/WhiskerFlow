@@ -21,6 +21,26 @@ def summarize(rows, now, hours):
         issues.append({'kind': 'slow_delivery', 'count': len(slow), 'max_ms': max(float(r['elapsed_ms']) for r in slow)})
     if counts['main_thread_stalled']:
         issues.append({'kind': 'main_thread_stalled', 'count': counts['main_thread_stalled'], 'recoveries': counts['main_thread_recovered']})
+    slow_hotkeys = [r for r in recent if r.get('event') == 'hotkey_transition' and float(r.get('elapsed_ms', 0)) >= 250]
+    if slow_hotkeys:
+        issues.append({'kind': 'slow_hotkey_dispatch', 'count': len(slow_hotkeys), 'max_ms': max(float(r['elapsed_ms']) for r in slow_hotkeys)})
+    interaction = {}
+    interaction_keys = ('app_active', 'visible_windows', 'accessibility', 'secure_input', 'audio_capture_active', 'context_age_ms', 'globe_key_action')
+    for row in recent:
+        if row.get('event') in ('interaction_state', 'resource_snapshot', 'heartbeat', 'main_thread_stalled'):
+            context = {k: row[k] for k in interaction_keys if k in row}
+            if context:
+                interaction[row.get('launch')] = {
+                    **interaction.get(row.get('launch'), {}), **context,
+                    **{k: row[k] for k in ('timestamp', 'launch', 'installation_id', 'build', 'pid') if k in row},
+                }
+    for context in interaction.values():
+        if now - float(context['timestamp']) > 120:
+            continue
+        if context.get('accessibility') == 'false':
+            issues.append({'kind': 'global_hotkey_permission_missing', 'launch': context.get('launch')})
+        if context.get('secure_input') == 'true':
+            issues.append({'kind': 'secure_keyboard_input_enabled', 'launch': context.get('launch')})
     failures = [r for r in recent if (r.get('event') == 'state_changed' and r.get('state') == 'failure') or (r.get('event') == 'paste_returned' and r.get('outcome') == 'failed')]
     if failures:
         issues.append({'kind': 'failure_events', 'count': len(failures)})
@@ -85,6 +105,8 @@ def summarize(rows, now, hours):
             finishes[build] = {'count': len(values), 'max_ms': round(values[-1], 1),
                 'p95_ms': round(values[math.ceil(len(values) * .95) - 1], 1)}
     return {
+        'interaction_context': list(interaction.values()),
+        'monitoring_gaps': counts['monitoring_gap'],
         'text_processing_timing': [{k: r[k] for k in ('timestamp', 'build', 'launch', 'session', 'elapsed_ms', 'worker_elapsed_ms', 'resume_delay_ms') if k in r} for r in recent if r.get('event') == 'stage_finished' and r.get('stage') == 'text_processing' and float(r.get('elapsed_ms', 0)) > 1000],
         'capture_context': captures,
         'finish_ms_by_build': finishes,
