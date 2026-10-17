@@ -9,3 +9,7 @@ dist/
 .claude/.DS_Store
 .claude/settings.local.json
 .claude/worktrees/
+
+# Python test/import caches; preserve diagnostic evidence and shared config.
+__pycache__/
+*.pyc
