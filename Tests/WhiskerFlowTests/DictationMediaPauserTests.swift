@@ -124,6 +124,56 @@ final class DictationMediaPauserTests: XCTestCase {
         XCTAssertEqual(log.sent, [])
     }
 
+    /// Codex review of #20: a dictation that starts while the resume is still
+    /// asking macOS what's playing must keep the media paused.
+    func testDictationDuringTheResumeCheckStaysPaused() async {
+        let box = NowPlayingBox(NowPlayingStatus(isPlaying: true, pid: 42))
+        let log = log
+        let pauser = DictationMediaPauser(
+            ownPID: 1, ownBundleID: "agency.thatworks.WhiskerFlow",
+            readStatus: { Thread.sleep(forTimeInterval: 0.3); return box.status }, readProcesses: { [] },
+            bundleIDForPID: { _ in nil }, send: { log.append($0); return true }
+        )
+        pauser.dictationStarted(inCall: false)
+        await settle(0.5)
+        XCTAssertEqual(log.sent, [.pause])
+        box.status = NowPlayingStatus(isPlaying: false, pid: 42)
+        pauser.dictationEnded()
+        await settle(0.55) // past the 400 ms delay, inside the 300 ms status read
+        pauser.dictationStarted(inCall: false)
+        await settle(1)
+        XCTAssertEqual(log.sent, [.pause], "no play while the second dictation records")
+        pauser.dictationEnded()
+        await settle(1.2)
+        XCTAssertEqual(log.sent, [.pause, .play])
+    }
+
+    /// A dictation that starts while the play is still landing would read the
+    /// media as paused and leave it playing into the recording.
+    func testDictationWhilePlayIsLandingPausesAgain() async {
+        let box = NowPlayingBox(NowPlayingStatus(isPlaying: true, pid: 42))
+        let log = log
+        let pauser = DictationMediaPauser(
+            ownPID: 1, ownBundleID: "agency.thatworks.WhiskerFlow",
+            readStatus: { box.status }, readProcesses: { [] }, bundleIDForPID: { _ in nil },
+            send: { command in
+                log.append(command)
+                if command == .play { Thread.sleep(forTimeInterval: 0.3) }
+                box.status = NowPlayingStatus(isPlaying: command == .play, pid: 42)
+                return true
+            }
+        )
+        pauser.dictationStarted(inCall: false)
+        await settle()
+        pauser.dictationEnded()
+        await settle(0.5) // the play is sent and has not landed yet
+        XCTAssertEqual(log.sent, [.pause, .play])
+        pauser.dictationStarted(inCall: false)
+        await settle(0.5)
+        XCTAssertEqual(log.sent, [.pause, .play, .pause])
+        withExtendedLifetime(pauser) {}
+    }
+
     /// The user played something else, or resumed it themselves, while
     /// dictating: playing again would be a second, unwanted press.
     func testDoesNotResumeWhenTheUserAlreadyChangedPlayback() async {

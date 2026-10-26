@@ -20,6 +20,8 @@ final class DictationMediaPauser {
     private var session = MediaPauseSession()
     private var check: Task<Void, Never>?
     private var resume: Task<Void, Never>?
+    /// The play command, until the app confirms or the helper gives up.
+    private var playing: Task<Void, Never>?
     private var generation = 0
     private let ownPID: Int32
     private let ownBundleID: String?
@@ -70,7 +72,10 @@ final class DictationMediaPauser {
         let id = generation
         let (ownPID, ownBundleID) = (ownPID, ownBundleID)
         let (readStatus, readProcesses, bundleIDForPID) = (readStatus, readProcesses, bundleIDForPID)
+        let resuming = playing
         check = Task { @MainActor [weak self] in
+            // Media still resuming from the last dictation would read as paused.
+            await resuming?.value
             let started = Date()
             let (decision, pid) = await Task.detached(priority: .userInitiated) { () -> (MediaPausePolicy.Decision, Int32) in
                 let status = readStatus()
@@ -117,16 +122,21 @@ final class DictationMediaPauser {
         let (send, readStatus) = (send, readStatus)
         resume = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: Self.resumeDelayNanoseconds)
-            guard let self, !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled, let pausedPID = self.session.pausedPID else { return }
+            // Only the app dictation paused, and only if it is still paused.
+            let decision = await Task.detached(priority: .userInitiated) {
+                MediaPausePolicy.resumeDecision(readStatus(), pausedPID: pausedPID)
+            }.value
+            // A dictation that started during the check cancelled this resume
+            // and keeps the media paused.
+            guard !Task.isCancelled else { return }
             self.resume = nil
-            guard let pausedPID = self.session.takeResume() else { return }
-            Task.detached(priority: .userInitiated) {
-                // Only the app dictation paused, and only if it is still paused.
-                let decision = MediaPausePolicy.resumeDecision(readStatus(), pausedPID: pausedPID)
-                guard decision == .play else {
-                    Self.log("media_resumed", decision: decision.rawValue)
-                    return
-                }
+            _ = self.session.takeResume()
+            guard decision == .play else {
+                Self.log("media_resumed", decision: decision.rawValue)
+                return
+            }
+            self.playing = Task.detached(priority: .userInitiated) {
                 let confirmed = send(.play)
                 Self.log("media_resumed", decision: decision.rawValue, confirmed: confirmed)
             }
