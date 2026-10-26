@@ -19,8 +19,10 @@ enum NowPlayingBridge {
         run("wf_now_playing_status").flatMap(NowPlayingStatus.parse)
     }
 
-    static func pause() { _ = run("wf_now_playing_pause") }
-    static func play() { _ = run("wf_now_playing_play") }
+    /// True once the app reports it has paused or is playing again. The
+    /// helper waits up to a second for that, since it must outlive delivery.
+    static func pause() -> Bool { run("wf_now_playing_pause", timeout: 3).map(NowPlayingStatus.parseConfirmation) ?? false }
+    static func play() -> Bool { run("wf_now_playing_play", timeout: 3).map(NowPlayingStatus.parseConfirmation) ?? false }
 
     private static let script = """
         use DynaLoader;

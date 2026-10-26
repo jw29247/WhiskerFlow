@@ -32,6 +32,26 @@ final class LocalDiagnosticLogTests: XCTestCase {
         XCTAssertFalse(lines.contains("private content"))
     }
 
+    /// Why media was or wasn't paused is recorded, never what was playing.
+    func testMediaPauseDecisionsAreKeptWithoutAppNames() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sink = LocalDiagnosticLog(directory: root)
+        let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle", factory: { LocalDiagnosticLogHandler(label: $0, sink: sink) })
+        logger.info("Media pause", metadata: ["event": "media_pause_checked", "media_decision": "playing_app_on_microphone",
+                                              "elapsed_ms": "130", "bundle_id": "com.spotify.client"])
+        logger.info("Media pause", metadata: ["event": "media_resumed", "media_decision": "com.spotify.client", "confirmed": "true"])
+        sink.flush()
+        let lines = try String(contentsOf: root.appendingPathComponent("diagnostics.jsonl"), encoding: .utf8)
+        let rows = try lines.split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: String]) }
+        XCTAssertEqual(rows[0]["media_decision"], "playing_app_on_microphone")
+        XCTAssertEqual(rows[0]["elapsed_ms"], "130")
+        XCTAssertEqual(rows[1]["event"], "media_resumed")
+        XCTAssertEqual(rows[1]["confirmed"], "true")
+        XCTAssertNil(rows[1]["media_decision"])
+        XCTAssertFalse(lines.contains("spotify"))
+    }
+
     func testInteractionContextIdentifiesSystemDictationConflictWithoutRawPreferences() {
         let context = InteractionDiagnosticContext(appActive: false, visibleWindows: 0,
             accessibilityTrusted: true, secureInput: false, globeKeyUsage: GlobeKeyUsage(storedValue: 3))

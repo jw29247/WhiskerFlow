@@ -10,14 +10,39 @@ final class MediaCommandLog: @unchecked Sendable {
     func append(_ command: DictationMediaPauser.Command) { lock.withLock { commands.append(command) } }
 }
 
+/// A Now Playing state the test can change mid-dictation.
+final class NowPlayingBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: NowPlayingStatus?
+    init(_ value: NowPlayingStatus?) { self.value = value }
+    var status: NowPlayingStatus? {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
+    }
+}
+
 @MainActor
 final class DictationMediaPauserTests: XCTestCase {
     private let log = MediaCommandLog()
 
-    private func pauser(_ status: NowPlayingStatus?, processes: [CoreAudioProcesses.Process] = []) -> DictationMediaPauser {
+    private func pauser(
+        _ status: NowPlayingStatus?,
+        processes: [CoreAudioProcesses.Process] = [],
+        bundleIDs: [Int32: String] = [:]
+    ) -> DictationMediaPauser {
+        pauser(NowPlayingBox(status), processes: processes, bundleIDs: bundleIDs)
+    }
+
+    private func pauser(
+        _ box: NowPlayingBox,
+        processes: [CoreAudioProcesses.Process] = [],
+        bundleIDs: [Int32: String] = [:]
+    ) -> DictationMediaPauser {
         let log = log
         return DictationMediaPauser(ownPID: 1, ownBundleID: "agency.thatworks.WhiskerFlow",
-                                    readStatus: { status }, readProcesses: { processes }, send: { log.append($0) })
+                                    readStatus: { box.status }, readProcesses: { processes },
+                                    bundleIDForPID: { bundleIDs[$0] },
+                                    send: { log.append($0); return true })
     }
 
     private func settle(_ seconds: Double = 0.1) async {
@@ -25,10 +50,12 @@ final class DictationMediaPauserTests: XCTestCase {
     }
 
     func testPausesWhatIsPlayingAndPlaysItAgainAfterDictation() async {
-        let pauser = pauser(NowPlayingStatus(isPlaying: true, pid: 42))
+        let box = NowPlayingBox(NowPlayingStatus(isPlaying: true, pid: 42))
+        let pauser = pauser(box)
         pauser.dictationStarted(inCall: false)
         await settle()
         XCTAssertEqual(log.sent, [.pause])
+        box.status = NowPlayingStatus(isPlaying: false, pid: 42)
         pauser.dictationEnded()
         await settle(0.6)
         XCTAssertEqual(log.sent, [.pause, .play])
@@ -46,20 +73,40 @@ final class DictationMediaPauserTests: XCTestCase {
         XCTAssertEqual(log.sent, [])
     }
 
-    func testCallsAndOtherMicrophoneUsersAreLeftAlone() async {
-        pauser(NowPlayingStatus(isPlaying: true, pid: 42)).dictationStarted(inCall: true)
-        await settle()
-        pauser(NowPlayingStatus(isPlaying: true, pid: 42),
-               processes: [.init(pid: 2, bundleID: "us.zoom.xos", isRunningInput: true, isRunningOutput: true)])
-            .dictationStarted(inCall: false)
+    func testCallsAreLeftAlone() async {
+        let detected = pauser(NowPlayingStatus(isPlaying: true, pid: 42))
+        detected.dictationStarted(inCall: true)
+        // The playing browser is itself on the microphone: a call.
+        let undetected = pauser(NowPlayingStatus(isPlaying: true, pid: 42),
+                                processes: [.init(pid: 43, bundleID: "com.google.Chrome.helper",
+                                                  isRunningInput: true, isRunningOutput: true)],
+                                bundleIDs: [42: "com.google.Chrome"])
+        undetected.dictationStarted(inCall: false)
         await settle()
         XCTAssertEqual(log.sent, [])
+        withExtendedLifetime((detected, undetected)) {}
+    }
+
+    /// A webcam app, or WhiskerFlow's own capture, on the microphone used to
+    /// stop every pause.
+    func testOtherMicrophoneUsersDontStopThePause() async {
+        let processes: [CoreAudioProcesses.Process] = [
+            .init(pid: 1, bundleID: "agency.thatworks.WhiskerFlow", isRunningInput: true, isRunningOutput: false),
+            .init(pid: 7, bundleID: "com.logitech.logitune", isRunningInput: true, isRunningOutput: false),
+        ]
+        let pauser = pauser(NowPlayingStatus(isPlaying: true, pid: 42), processes: processes,
+                            bundleIDs: [42: "com.spotify.client"])
+        pauser.dictationStarted(inCall: false)
+        await settle()
+        XCTAssertEqual(log.sent, [.pause])
     }
 
     func testBackToBackDictationsStayPaused() async {
-        let pauser = pauser(NowPlayingStatus(isPlaying: true, pid: 42))
+        let box = NowPlayingBox(NowPlayingStatus(isPlaying: true, pid: 42))
+        let pauser = pauser(box)
         pauser.dictationStarted(inCall: false)
         await settle()
+        box.status = NowPlayingStatus(isPlaying: false, pid: 42)
         pauser.dictationEnded()
         pauser.dictationStarted(inCall: false)
         await settle(0.6)
@@ -75,5 +122,21 @@ final class DictationMediaPauserTests: XCTestCase {
         pauser.dictationEnded()
         await settle(0.6)
         XCTAssertEqual(log.sent, [])
+    }
+
+    /// The user played something else, or resumed it themselves, while
+    /// dictating: playing again would be a second, unwanted press.
+    func testDoesNotResumeWhenTheUserAlreadyChangedPlayback() async {
+        for after in [NowPlayingStatus(isPlaying: true, pid: 42), NowPlayingStatus(isPlaying: false, pid: 99),
+                      NowPlayingStatus(isPlaying: false, pid: 0)] {
+            let box = NowPlayingBox(NowPlayingStatus(isPlaying: true, pid: 42))
+            let pauser = pauser(box)
+            pauser.dictationStarted(inCall: false)
+            await settle()
+            box.status = after
+            pauser.dictationEnded()
+            await settle(0.6)
+        }
+        XCTAssertEqual(log.sent, [.pause, .pause, .pause])
     }
 }
