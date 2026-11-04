@@ -14,6 +14,8 @@ done
 cmp "$ROOT_DIR/Sources/WhiskerFlow/Resources/shared-vocabulary.json" \
   "$APP_BUNDLE/Contents/Resources/WhiskerFlow_WhiskerFlow.bundle/shared-vocabulary.json"
 codesign --verify --deep --strict "$APP_BUNDLE"
+[[ -f "$APP_BUNDLE/Contents/Frameworks/libCLiteRTLM_mac.dylib" ]]
+otool -L "$APP_BUNDLE/Contents/MacOS/WhiskerFlow" | grep -q '@rpath/libCLiteRTLM_mac.dylib'
 
 DEV_BUNDLE="$ROOT_DIR/.build/$CONFIGURATION/WhiskerFlow Test Dev.app"
 BUNDLE_IDENTIFIER_OVERRIDE=agency.thatworks.WhiskerFlow.dev \
@@ -23,4 +25,5 @@ BUNDLE_IDENTIFIER_OVERRIDE=agency.thatworks.WhiskerFlow.dev \
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$DEV_BUNDLE/Contents/Info.plist")" == 'WhiskerFlow Dev' ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST")" == agency.thatworks.WhiskerFlow ]]
 codesign --verify --deep --strict "$DEV_BUNDLE"
+[[ -f "$DEV_BUNDLE/Contents/Frameworks/libCLiteRTLM_mac.dylib" ]]
 echo "PASS: packaged resources, release version, signatures, and separate development identity"

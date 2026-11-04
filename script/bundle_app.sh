@@ -90,6 +90,22 @@ if [[ -d "$SPARKLE_FRAMEWORK" ]]; then
   fi
 fi
 
+# LiteRT-LM ships a dynamic library, not a framework. SwiftPM can run against
+# its artifact directory, but a copied app must carry and sign its own copy.
+LITERT_LIBRARY="$BUILD_DIR/libCLiteRTLM_mac.dylib"
+if [[ ! -f "$LITERT_LIBRARY" ]]; then
+  LITERT_LIBRARY="$(find "$BUILD_ROOT/artifacts" -type f -name 'libCLiteRTLM_mac.dylib' -print -quit)"
+fi
+if [[ ! -f "$LITERT_LIBRARY" ]]; then
+  echo "LiteRT-LM library is missing; refusing to package an app that cannot launch" >&2
+  exit 1
+fi
+mkdir -p "$APP_BUNDLE/Contents/Frameworks"
+cp "$LITERT_LIBRARY" "$APP_BUNDLE/Contents/Frameworks/libCLiteRTLM_mac.dylib"
+if ! otool -l "$APP_BINARY" | grep -q "@executable_path/../Frameworks"; then
+  install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BINARY"
+fi
+
 # The Now Playing helper: MediaRemote answers only Apple-signed processes, so
 # WhiskerFlow loads this into /usr/bin/perl (see NowPlayingBridge.swift).
 mkdir -p "$APP_BUNDLE/Contents/Frameworks"
@@ -147,6 +163,7 @@ if [[ -d "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework" ]]; then
   sign_sparkle_framework "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
 fi
 codesign_one "$APP_BUNDLE/Contents/Frameworks/libWhiskerFlowNowPlaying.dylib"
+codesign_one "$APP_BUNDLE/Contents/Frameworks/libCLiteRTLM_mac.dylib"
 
 
 if [[ -n "$SIGN_IDENTITY" ]]; then
