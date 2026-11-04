@@ -14,6 +14,7 @@ struct WhiskerFlowApp: App {
 
     init() {
         #if DEBUG
+        if CommandLine.arguments.contains("--probe-local-cleanup") { LocalCleanupProbe.runAndExit() }
         if CommandLine.arguments.contains("--probe-native-meet") { MeetingSpeakerProbe.runAndExit() }
         if CommandLine.arguments.contains("--debug-window-snapshots") {
             DispatchQueue.main.async { DebugWindowSnapshot.install() }

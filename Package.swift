@@ -15,6 +15,8 @@ let package = Package(
     dependencies: [
         // Parakeet TDT v3 provides the fast, high-quality on-device default.
         .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.6"),
+        // Small on-device Gemma model for opt-in dictation cleanup.
+        .package(url: "https://github.com/google-ai-edge/LiteRT-LM.git", exact: "0.19.0"),
         // In-app auto-updates (appcast + EdDSA-signed updates). Sparkle ships as a
         // binary XCFramework; `script/bundle_app.sh` embeds & re-signs it.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
@@ -56,6 +58,7 @@ let package = Package(
                 "WhiskerFlowAppSupport",
                 "WhiskerFlowObjCSupport",
                 .product(name: "FluidAudio", package: "FluidAudio"),
+                .product(name: "LiteRTLM", package: "LiteRT-LM"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "Sentry", package: "sentry-cocoa"),
                 .product(name: "Logging", package: "swift-log"),

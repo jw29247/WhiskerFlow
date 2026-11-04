@@ -28,6 +28,10 @@ public enum Observability {
     }
 
     public static var assistantOperations: LongCounterSdk { state.assistantOperations }
+    public static var cleanupOperations: LongCounterSdk { state.cleanupOperations }
+    public static var cleanupDuration: DoubleHistogramMeterSdk { state.cleanupDuration }
+    public static var cleanupInputTokens: LongCounterSdk { state.cleanupInputTokens }
+    public static var cleanupOutputTokens: LongCounterSdk { state.cleanupOutputTokens }
     static var mainThreadStalls: LongCounterSdk { state.mainThreadStalls }
     static var mainThreadStallDuration: DoubleHistogramMeterSdk { state.mainThreadStallDuration }
 
@@ -146,6 +150,10 @@ public enum Observability {
         let tracer: any Tracer
         let appLifecycle: LongCounterSdk
         let assistantOperations: LongCounterSdk
+        let cleanupOperations: LongCounterSdk
+        let cleanupDuration: DoubleHistogramMeterSdk
+        let cleanupInputTokens: LongCounterSdk
+        let cleanupOutputTokens: LongCounterSdk
         let mainThreadStalls: LongCounterSdk
         let mainThreadStallDuration: DoubleHistogramMeterSdk
         let dictationSessions: LongCounterSdk
@@ -246,6 +254,14 @@ public enum Observability {
                 .setUnit("1")
                 .build()
             assistantOperations = meter.counterBuilder(name: "assistant.operations").setDescription("Assistant request outcomes without content").setUnit("1").build()
+            cleanupOperations = meter.counterBuilder(name: "dictation.cleanup.operations")
+                .setDescription("Local cleanup outcomes without content").setUnit("1").build()
+            cleanupDuration = meter.histogramBuilder(name: "dictation.cleanup.duration")
+                .setDescription("Local dictation cleanup duration").setUnit("s").build()
+            cleanupInputTokens = meter.counterBuilder(name: "llm.tokens.input")
+                .setDescription("Local cleanup input tokens").setUnit("tokens").build()
+            cleanupOutputTokens = meter.counterBuilder(name: "llm.tokens.output")
+                .setDescription("Local cleanup output tokens").setUnit("tokens").build()
             mainThreadStalls = meter.counterBuilder(name: "app.main_thread.stalls")
                 .setDescription("Main queue delays of at least two seconds while the watchdog is scheduled")
                 .setUnit("1").build()

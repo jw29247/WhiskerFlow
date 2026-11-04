@@ -248,6 +248,8 @@ struct SettingsView: View {
 
     private var vocabularyTab: some View {
         Form {
+            LocalCleanupSettingsSection(appState: appState)
+
             Section("Formatting") {
                 Toggle("Spoken line commands", isOn: $appState.settings.formatting.spokenLineCommands)
                 Text("Say \"new line\" or \"new paragraph\" to insert a line break.")
