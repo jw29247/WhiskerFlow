@@ -2672,7 +2672,7 @@ final class AppState {
                 spokenLineCommands: configuration.formatting.spokenLineCommands,
                 language: configuration.formatting.language))
         }.value
-        let request = DictationCleanupRequest(text: input)
+        let request = DictationCleanupRequest(text: input, recognizeCorrections: configuration.recognizeCorrections)
         let result = await localCleanup.clean(request, fallback: baseline)
         guard result.applied else { return baseline }
         return await Task.detached(priority: .userInitiated) {

@@ -16,8 +16,10 @@ private struct StubDictationCleaner: DictationCleaning {
 
 private actor InspectingDictationCleaner: DictationCleaning {
     private(set) var inputs: [String] = []
+    private(set) var correctionChoices: [Bool] = []
     func clean(_ request: DictationCleanupRequest) async throws -> String {
         inputs.append(request.text)
+        correctionChoices.append(request.recognizeCorrections)
         return "send WhiskerFlow on Thursday"
     }
 }
@@ -79,7 +81,10 @@ final class LocalCleanupTests: XCTestCase {
 
     @MainActor
     func testRetranscriptionUsesOptInAndLiteralBypassAndPreservesRawRecognition() async throws {
-        for (enabled, tone, expectedCalls) in [(false, WritingTone.formal, 0), (true, .formal, 1), (true, .literal, 0)] {
+        for (enabled, tone, corrections, expectedCalls) in [
+            (false, WritingTone.formal, true, 0), (true, .formal, true, 1),
+            (true, .literal, true, 0), (true, .formal, false, 1)
+        ] {
             let suite = "cleanup-integration-\(UUID().uuidString)"
             let defaults = UserDefaults(suiteName: suite)!
             defer { defaults.removePersistentDomain(forName: suite) }
@@ -100,6 +105,7 @@ final class LocalCleanupTests: XCTestCase {
             let state = AppState(settings: settings, store: store, transcription: transcription,
                                  localCleanup: LocalCleanupController(cleaner: cleaner))
             state.assistant.editWritingStyles { $0.setTone(tone, for: .other) }
+            state.assistant.setRecognizeCorrections(corrections)
             state.retranscribe(record, with: .parakeetTDTv3)
             for _ in 0..<200 {
                 if !state.isTranscribing { break }
@@ -108,6 +114,8 @@ final class LocalCleanupTests: XCTestCase {
             XCTAssertFalse(state.isTranscribing)
             let inputs = await cleaner.inputs
             XCTAssertEqual(inputs.count, expectedCalls)
+            let choices = await cleaner.correctionChoices
+            XCTAssertEqual(choices, Array(repeating: corrections, count: expectedCalls))
             XCTAssertEqual(store.records.first?.rawRecognition, raw)
             if expectedCalls == 1 { XCTAssertEqual(store.records.first?.text, "Send WhiskerFlow on Thursday.") }
             if tone == .literal { XCTAssertEqual(store.records.first?.text, raw) }
