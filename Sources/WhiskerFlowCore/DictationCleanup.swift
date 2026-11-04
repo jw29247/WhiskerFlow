@@ -37,10 +37,20 @@ public struct DictationCleanupRequest: Sendable {
             ? "Remove hesitation sounds and filler phrases only when they add no meaning."
             : "Keep filler words and hesitation sounds."
         let corrections = recognizeCorrections
-            ? "Resolve explicit spoken self-corrections: keep the final intended wording."
+            ? Self.correctionInstructions
             : "Keep spoken corrections as spoken; do not discard either version."
         return "\(fillers)\n\(corrections)\n\nTranscript:\n\(text)"
     }
+
+    public static let correctionInstructions = """
+    Resolve explicit spoken self-corrections. When the speaker replaces earlier \
+    wording using 'sorry', 'I mean', or 'scratch that', remove the discarded \
+    wording and correction marker. Keep only the final intended wording.
+    Example transcript: send it Tuesday sorry Thursday
+    Example cleaned text: Send it Thursday.
+    Example transcript: book five seats I mean three seats for tomorrow
+    Example cleaned text: Book three seats for tomorrow.
+    """
 
     /// Reject obvious generation failures rather than paste them. This is not a
     /// guarantee of semantic fidelity; the raw recognition remains in History.

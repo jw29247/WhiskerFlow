@@ -134,5 +134,8 @@ final class LocalCleanupTests: XCTestCase {
         XCTAssertTrue(result.contains("Sarah"))
         XCTAssertTrue(result.lowercased().contains("thursday"))
         XCTAssertFalse(result.lowercased().contains("tuesday"))
+        let preserved = try await engine.clean(.init(text: "um please send Sarah the proposal on Tuesday sorry Thursday", recognizeCorrections: false))
+        XCTAssertTrue(preserved.lowercased().contains("tuesday"))
+        XCTAssertTrue(preserved.lowercased().contains("thursday"))
     }
 }
