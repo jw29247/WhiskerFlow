@@ -90,7 +90,7 @@ For a synthetic cleanup and telemetry smoke test from a debug app bundle:
 "WhiskerFlow Preview.app/Contents/MacOS/WhiskerFlow" --probe-local-cleanup --download-cleanup-model
 ```
 
-This downloads the pinned model if needed, runs three synthetic transcripts, prints
+This downloads the pinned model if needed, runs four synthetic cases, prints
 the before/after text and timing, and flushes traces, logs and metrics. It does not
 start audio, paste text, create AppState or read transcript history. After downloading,
 `WHISKERFLOW_CLEANUP_PROBE=1 swift test --filter LocalCleanupTests/testRealSmallModelCleanup`
