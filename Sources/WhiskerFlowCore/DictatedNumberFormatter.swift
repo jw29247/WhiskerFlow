@@ -235,8 +235,19 @@ public enum DictatedNumberFormatter {
     }
 
     private static func isWeight(_ tokens: [Token], start: Int, unit: Int, in text: String) -> Bool {
-        let context = tokens[max(0, start - 4)..<start].map(\.word)
+        var contextStart = max(0, start - 4)
+        for index in contextStart..<start {
+            let gap = text[tokens[index].range.upperBound..<tokens[index + 1].range.lowerBound]
+            if gap.contains(where: { $0.isNewline || ".!?;".contains($0) }) { contextStart = index + 1 }
+        }
+        let context = tokens[contextStart..<start].map(\.word)
         if context.contains(where: { ["weigh", "weighs", "weighed", "weighing", "weight", "heavy", "lb", "lbs", "ounces"].contains($0) }) { return true }
+        var minorStart = unit + 1
+        if minorStart < tokens.count, tokens[minorStart].word == "and" { minorStart += 1 }
+        if minorStart < tokens.count, joined(tokens, unit, minorStart, in: text),
+           let minor = parse(tokens, at: minorStart, in: text), minor.end < tokens.count,
+           ["ounce", "ounces", "oz"].contains(tokens[minor.end].word),
+           joined(tokens, minor.end - 1, minor.end, in: text, compact: true) { return true }
         if unit + 1 < tokens.count, ["of", "weight"].contains(tokens[unit + 1].word) { return true }
         if unit + 2 < tokens.count, tokens[unit + 1].word == "per", ["square", "cubic"].contains(tokens[unit + 2].word) { return true }
         let gap = text[tokens[unit - 1].range.upperBound..<tokens[unit].range.lowerBound]

@@ -2,6 +2,20 @@ import XCTest
 @testable import WhiskerFlowCore
 
 final class DictatedNumberFormatterTests: XCTestCase {
+    func testKeepsPoundsAndOuncesAsWeightWithoutAffectingLaterMoney() {
+        for (spoken, expected) in [
+            ("The baby is seven pounds and two ounces.", "The baby is 7 pounds and 2 ounces."),
+            ("The baby is seven pounds two ounces.", "The baby is 7 pounds 2 ounces."),
+            ("The parcel is seven pounds and one ounce.", "The parcel is 7 pounds and 1 ounce."),
+            ("The parcel is 7 pounds 2oz.", "The parcel is 7 pounds 2oz."),
+            ("The baby is seven pounds and two ounces. Pay seven pounds and two pence.",
+             "The baby is 7 pounds and 2 ounces. Pay £7.02.")
+        ] {
+            XCTAssertEqual(DictatedNumberFormatter.format(spoken), expected, spoken)
+            XCTAssertEqual(TranscriptCleanup.accepted(expected, original: spoken), expected, spoken)
+        }
+    }
+
     func testFormatsSterlingWithExactPence() {
         let cases = [
             ("451 pounds and fifty one pence", "£451.51"),

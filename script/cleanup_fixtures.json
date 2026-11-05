@@ -226,5 +226,15 @@
     "id": "sterling-weight",
     "input": "The parcel weighs five pounds.",
     "expected": "The parcel weighs 5 pounds."
+  },
+  {
+    "id": "weight-pounds-and-ounces",
+    "input": "The baby is seven pounds and two ounces.",
+    "expected": "The baby is 7 pounds and 2 ounces."
+  },
+  {
+    "id": "weight-then-money",
+    "input": "The baby is seven pounds and two ounces. Pay seven pounds and two pence.",
+    "expected": "The baby is 7 pounds and 2 ounces. Pay £7.02."
   }
 ]
