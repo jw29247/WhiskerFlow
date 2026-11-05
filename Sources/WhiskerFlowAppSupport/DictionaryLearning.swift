@@ -292,6 +292,32 @@ public enum DictionaryLearning {
         return changes
     }
 
+    /// The local model has already ruled out prose rewrites. Keep these as
+    /// contextual hints; no everyday-word replacement or suggestion gate follows.
+    public static func learnAssessed(_ pairs: [DictionaryPair], in dictionary: inout UserDictionary) -> [DictionaryChange] {
+        var changes: [DictionaryChange] = []
+        for pair in pairs {
+            guard !dictionary.isRejected(pair), CorrectionAssessment.isEligible(.init(find: pair.heard, replaceWith: pair.written)) else { continue }
+            let entry = DictionaryEntry.replacement(pair.heard, pair.written, origin: .learned)
+            guard entry.validationProblem == nil else { continue }
+            if dictionary.entries.contains(where: { $0.rules.contains { $0.find.lowercased() == pair.heard.lowercased() && $0.replaceWith == pair.written } }) { continue }
+            // A user's explicit existing entry wins over a conflicting learned hint.
+            if dictionary.entries.contains(where: { $0.origin != .learned && $0.rules.contains { $0.find.lowercased() == pair.heard.lowercased() } }) { continue }
+            if let index = dictionary.entries.firstIndex(where: { $0.origin == .learned && $0.heard.lowercased() == pair.heard.lowercased() }) {
+                let before = dictionary.entries[index]
+                var after = entry
+                after.id = before.id
+                dictionary.entries[index] = after
+                changes.append(DictionaryChange(pair: pair, before: before, after: after))
+            } else {
+                guard dictionary.entries.count < 500 else { continue }
+                dictionary.entries.append(entry)
+                changes.append(DictionaryChange(pair: pair, before: nil, after: entry))
+            }
+        }
+        return changes
+    }
+
     /// Re-runs learning for corrections whose rewrite was held back and only
     /// added the written term as a Word. Rejected pairs and pairs that fail a
     /// check are left alone; manually added words are never changed.

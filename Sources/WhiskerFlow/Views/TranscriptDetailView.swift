@@ -55,7 +55,6 @@ struct TranscriptDetailView: View {
                             .keyboardShortcut("s", modifiers: .command)
                     }.padding(.top, 14)
                 }
-                vocabularySuggestions
             } else {
                 VStack(alignment: .leading, spacing: 16) {
                     Label(record.status.isFailed ? "Transcription needs another try" : "Working on your words…",
@@ -141,23 +140,6 @@ struct TranscriptDetailView: View {
         }
         .font(.system(size: 12))
         .padding(.top, 14)
-    }
-
-    @ViewBuilder
-    private var vocabularySuggestions: some View {
-        if !appState.pendingVocabularySuggestions.isEmpty {
-            VStack(alignment: .leading, spacing: 9) {
-                ForEach(appState.pendingVocabularySuggestions, id: \.self) { suggestion in
-                    HStack {
-                        Text("Always replace “\(suggestion.find)” with “\(suggestion.replaceWith)”? ")
-                            .font(.caption).fixedSize(horizontal: false, vertical: true)
-                        Spacer()
-                        Button("Add to Dictionary") { appState.acceptVocabularySuggestion(suggestion) }
-                    }
-                }
-                Button("Dismiss") { appState.dismissVocabularySuggestions() }.font(.caption)
-            }.padding(12).background(FlowStyle.selection, in: RoundedRectangle(cornerRadius: 8)).padding(.top, 12)
-        }
     }
 
     private func save() {

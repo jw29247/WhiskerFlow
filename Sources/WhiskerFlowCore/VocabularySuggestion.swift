@@ -2,7 +2,7 @@ import Foundation
 
 /// A find/replace pair inferred from a manual transcript edit, offered to the
 /// user as a candidate `VocabularyRule`.
-public struct VocabularyCorrection: Equatable, Hashable, Sendable {
+public struct VocabularyCorrection: Codable, Equatable, Hashable, Sendable {
     public let find: String
     public let replaceWith: String
 
@@ -45,8 +45,9 @@ public enum VocabularyCorrectionDetector {
             runs.reduce(0) { $0 + $1.replaceWith.count }
         )
         let totalTokens = max(originalTokens.count, editedTokens.count)
-        let shortWordCorrection = allowShortCorrections && totalTokens <= 3 && runs.count == 1
-            && runs[0].find.count == 1 && runs[0].replaceWith.count == 1
+        let shortWordCorrection = allowShortCorrections && totalTokens <= 8 && runs.count == 1
+            && (1...3).contains(runs[0].find.count) && (1...3).contains(runs[0].replaceWith.count)
+            && (changedTokens < totalTokens || min(runs[0].find.count, runs[0].replaceWith.count) == 1)
         guard shortWordCorrection || Double(changedTokens) / Double(totalTokens) <= rewriteRatio else { return [] }
 
         // One regex set for every run: `Vocabulary.apply` recompiles each rule per

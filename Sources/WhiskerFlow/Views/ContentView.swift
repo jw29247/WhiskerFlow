@@ -47,7 +47,7 @@ struct ContentView: View {
                         Spacer()
                         Button("Undo") { appState.undoDictionaryNotice() }
                         if destination != .dictionary {
-                            Button("Review") { navigate { destination = .dictionary } }
+                            Button("View corrections") { navigate { destination = .dictionary } }
                         }
                         Button { appState.dictionaryNotice = nil } label: { Image(systemName: "xmark") }
                             .buttonStyle(.plain).help("Dismiss").accessibilityLabel("Dismiss")
@@ -76,7 +76,7 @@ struct ContentView: View {
                 case .meetings:
                     MeetingsView(appState: appState)
                 case .dictionary:
-                    DictionaryView(appState: appState, initialTab: UIPreview.dictionaryTab)
+                    DictionaryView(appState: appState)
                 case .history:
                     HistoryView(appState: appState, draft: $draft, record: currentRecord, save: saveDraft,
                                 select: { record in navigate { select(record) } },
@@ -209,7 +209,6 @@ struct ContentView: View {
         if draft.select(id: record.id, text: record.text) {
             selectedSnapshot = record
             appState.selectedRecordID = record.id
-            appState.dismissVocabularySuggestions()
         }
     }
 
@@ -235,7 +234,7 @@ struct ContentView: View {
 }
 
 private enum FlowDestination: String, CaseIterable, Identifiable {
-    case dictate = "Dictate", meetings = "Meetings", history = "History", dictionary = "Dictionary", assistant = "Assistant",
+    case dictate = "Dictate", meetings = "Meetings", history = "History", dictionary = "Corrections", assistant = "Assistant",
          insights = "Insights", leaderboard = "Leaderboard"
     var id: String { rawValue }
     var symbol: String {

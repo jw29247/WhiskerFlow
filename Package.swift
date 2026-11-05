@@ -33,6 +33,12 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.3")
     ],
     targets: [
+        .binaryTarget(
+            name: "llama",
+            url: "https://github.com/ggml-org/llama.cpp/releases/download/b12125/llama-b12125-xcframework.zip",
+            checksum: "85be84b68e79c91b2f85fb2dad28c93183d52dd450309102df8da98ba70154c3"
+        ),
+        .target(name: "WhiskerFlowCleanupSupport", dependencies: ["llama"]),
         .target(name: "WhiskerFlowCore"),
         .target(name: "WhiskerFlowObjCSupport"),
         .target(
@@ -55,6 +61,7 @@ let package = Package(
                 "WhiskerFlowCore",
                 "WhiskerFlowAppSupport",
                 "WhiskerFlowObjCSupport",
+                "WhiskerFlowCleanupSupport",
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "Sentry", package: "sentry-cocoa"),
@@ -62,7 +69,7 @@ let package = Package(
                 .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
                 .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core")
             ],
-            resources: [.copy("Resources/shared-vocabulary.json")],
+            resources: [.copy("Resources/shared-vocabulary.json"), .copy("Resources/CleanupNotices.txt")],
             // The on-device coach model ships with macOS 26. Weak-link it so the
             // app still launches on macOS 14 and 15, where the feature is hidden.
             // Translation is weak-linked for the same reason (macOS 15 and later).

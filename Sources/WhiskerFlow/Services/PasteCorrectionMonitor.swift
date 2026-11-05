@@ -15,7 +15,7 @@ final class PasteCorrectionMonitor {
     private var task: Task<Void, Never>?
     private var generation = UUID()
     var isEnabled: () -> Bool = { false }
-    var onCorrections: ([VocabularyCorrection], UUID, String) -> Void = { _, _, _ in }
+    var onEdit: (String, String, UUID, String) -> Void = { _, _, _, _ in }
 
     func stop() {
         generation = UUID()
@@ -38,10 +38,10 @@ final class PasteCorrectionMonitor {
 
     private let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
 
-    private func report(_ changes: [VocabularyCorrection], sessionID: UUID, application: String, token: UUID) {
+    private func report(_ changes: [VocabularyCorrection], original: String, edited: String, sessionID: UUID, application: String, token: UUID) {
         guard generation == token else { return }
         logReport(changes)
-        onCorrections(changes, sessionID, application)
+        onEdit(original, edited, sessionID, application)
     }
 
     /// Counts only; the words themselves never reach the diagnostic log.
@@ -55,10 +55,10 @@ final class PasteCorrectionMonitor {
 
     /// The session is ending (field sent or cleared, focus moved, next paste or
     /// deadline), so the last observed edit is final even inside the debounce.
-    private func flush(_ changes: [VocabularyCorrection], sessionID: UUID, application: String) {
-        guard isEnabled(), !changes.isEmpty else { return }
+    private func flush(_ changes: [VocabularyCorrection], original: String, edited: String, sessionID: UUID, application: String) {
+        guard isEnabled() else { return }
         logReport(changes)
-        onCorrections(changes, sessionID, application)
+        onEdit(original, edited, sessionID, application)
     }
 
     func observe(_ target: Target?) {
@@ -101,7 +101,7 @@ final class PasteCorrectionMonitor {
             defer {
                 if latest != lastSaved, latestIsStable {
                     let changes = corrections(latest)
-                    Task { @MainActor in self?.flush(changes, sessionID: sessionID, application: applicationName) }
+                    Task { @MainActor in self?.flush(changes, original: target.scope.original, edited: latest, sessionID: sessionID, application: applicationName) }
                 }
             }
             while !Task.isCancelled, Date() < deadline {
@@ -123,7 +123,7 @@ final class PasteCorrectionMonitor {
                     latestIsStable = true
                 }
                 if latest != lastSaved, Date().timeIntervalSince(changedAt) >= 1.5 {
-                    await self?.report(corrections(latest), sessionID: sessionID, application: applicationName, token: token)
+                    await self?.report(corrections(latest), original: target.scope.original, edited: latest, sessionID: sessionID, application: applicationName, token: token)
                     lastSaved = latest
                 }
             }

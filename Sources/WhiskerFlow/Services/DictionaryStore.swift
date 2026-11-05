@@ -29,7 +29,7 @@ final class DictionaryStore {
             } catch {
                 loadFailed = true
                 dictionary = .migrating(from: legacyVocabulary, at: now)
-                errorMessage = "Your dictionary file could not be opened, so changes won’t be saved. The original file has been kept."
+                errorMessage = "Your corrections file could not be opened, so changes won’t be saved. The original file has been kept."
             }
         } else {
             dictionary = .migrating(from: legacyVocabulary, at: now)
@@ -45,6 +45,9 @@ final class DictionaryStore {
 
     var entries: [DictionaryEntry] { dictionary.entries }
     var vocabulary: Vocabulary { dictionary.vocabulary }
+    /// AI-approved hints need sentence context and must not become blind
+    /// replacements when Cleanup is switched off.
+    var explicitVocabulary: Vocabulary { UserDictionary(entries: entries.filter { $0.origin != .learned }).vocabulary }
 
     func update(_ change: (inout UserDictionary) -> Void) {
         var next = dictionary
@@ -96,7 +99,7 @@ final class DictionaryStore {
             errorMessage = nil
         } catch {
             dictionary = next
-            errorMessage = "Could not save your dictionary. Check that local storage is available."
+            errorMessage = "Could not save your corrections. Check that local storage is available."
         }
     }
 }
@@ -114,23 +117,23 @@ struct DictionaryNotice: Identifiable, Equatable {
 
     var message: String {
         guard isSaved else {
-            return "Your correction is active for this session, but could not be saved. Open Dictionary for details."
+            return "Your correction is active for this session, but could not be saved. Open Corrections for details."
         }
         guard changes.count == 1, let change = changes.first else {
-            return "Added \(changes.count) corrections to your Dictionary."
+            return "Added \(changes.count) corrections to Corrections."
         }
         if change.rewritesHeard {
-            return "“\(change.pair.heard)” will now be written “\(change.after.written)”."
+            return "Remembered “\(change.pair.heard)” as “\(change.after.written)” for Cleanup."
         }
-        return "Added “\(change.after.written)” to your Dictionary."
+        return "Added “\(change.after.written)” to Corrections."
     }
 
     var hudMessage: String {
-        guard isSaved else { return "Dictionary correction could not be saved" }
-        guard changes.count == 1, let change = changes.first else { return "Saved \(changes.count) dictionary corrections" }
+        guard isSaved else { return "Correction could not be saved" }
+        guard changes.count == 1, let change = changes.first else { return "Saved \(changes.count) corrections" }
         if change.rewritesHeard {
             return "“\(change.pair.heard)” → “\(change.after.written)” saved"
         }
-        return "Added “\(change.after.written)” to Dictionary"
+        return "Added “\(change.after.written)” to Corrections"
     }
 }

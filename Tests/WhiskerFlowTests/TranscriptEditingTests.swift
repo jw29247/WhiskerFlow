@@ -36,7 +36,7 @@ final class TranscriptEditingTests: XCTestCase {
     }
 
     @MainActor
-    func testHistoryCorrectionsPersistOnceAndRespectUndoAndDisable() throws {
+    func testHistoryEditsSaveImmediatelyWhenCleanupIsUnavailable() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = TranscriptStore(fileURL: root.appendingPathComponent("history.json"))
@@ -44,15 +44,10 @@ final class TranscriptEditingTests: XCTestCase {
         try store.add(record)
         let state = makeState(store: store)
         state.updateText(record, to: "Please send the report to Marc before Friday.")
-        XCTAssertEqual(state.corrections.records.map(\.replacement), ["Marc"])
-        let edited = try XCTUnwrap(state.records.first)
-        state.updateText(edited, to: edited.text)
-        XCTAssertEqual(state.corrections.records.count, 1)
-        state.updateText(edited, to: record.text)
-        XCTAssertTrue(state.corrections.records.isEmpty)
-        state.settings.rememberCorrections = false
-        state.updateText(record, to: "Please send the report to Marc before Friday.")
-        XCTAssertTrue(state.corrections.records.isEmpty)
+        XCTAssertEqual(state.records.first?.text, "Please send the report to Marc before Friday.")
+        XCTAssertTrue(state.dictionary.entries.isEmpty, "an edit alone is not an approved correction")
+        state.updateText(try XCTUnwrap(state.records.first), to: record.text)
+        XCTAssertEqual(state.records.first?.text, record.text)
     }
 
     @MainActor

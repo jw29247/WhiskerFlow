@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard WindowCloseGuard.confirmTermination() else { return .terminateCancel }
-        guard let appState, appState.hasPendingWork else {
+        guard let appState, appState.hasPendingWork || appState.cleanup.needsShutdown else {
             appState?.stopMonitors()
             Observability.shutdown(timeout: 2)
             return .terminateNow
