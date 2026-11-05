@@ -31,7 +31,7 @@ if [[ "$CONFIGURATION" == "release" ]]; then
     -Xcc "-fdebug-prefix-map=$ROOT_DIR=." \
     -Xswiftc -Xfrontend -Xswiftc -no-clang-module-breadcrumbs
 elif [[ "$OPTIMIZE" == "1" ]]; then
-  BUILD_ROOT="$ROOT_DIR/.build/optimized"
+  BUILD_ROOT="${OPTIMIZED_BUILD_ROOT:-$ROOT_DIR/.build/optimized}"
   swift build --configuration "$CONFIGURATION" --scratch-path "$BUILD_ROOT" -Xswiftc -O
 else
   swift build --configuration "$CONFIGURATION"
@@ -88,6 +88,22 @@ if [[ -d "$SPARKLE_FRAMEWORK" ]]; then
   if ! otool -l "$APP_BINARY" | grep -q "@executable_path/../Frameworks"; then
     install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BINARY"
   fi
+fi
+
+# Cleanup's pinned llama.cpp runtime is a dynamic XCFramework. Embed and sign
+# the macOS slice just like Sparkle so the installed app needs no local tools.
+LLAMA_FRAMEWORK="$BUILD_DIR/llama.framework"
+if [[ ! -d "$LLAMA_FRAMEWORK" ]]; then
+  LLAMA_FRAMEWORK="$(find "$BUILD_ROOT/artifacts" "$ROOT_DIR/.build/artifacts" -path '*/macos-arm64_x86_64/llama.framework' -type d -print -quit 2>/dev/null || true)"
+fi
+if [[ -z "$LLAMA_FRAMEWORK" || ! -d "$LLAMA_FRAMEWORK" ]]; then
+  echo "Cleanup runtime framework not found" >&2
+  exit 1
+fi
+mkdir -p "$APP_BUNDLE/Contents/Frameworks"
+ditto "$LLAMA_FRAMEWORK" "$APP_BUNDLE/Contents/Frameworks/llama.framework"
+if ! otool -l "$APP_BINARY" | grep -q "@executable_path/../Frameworks"; then
+  install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BINARY"
 fi
 
 # The Now Playing helper: MediaRemote answers only Apple-signed processes, so
@@ -147,6 +163,7 @@ if [[ -d "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework" ]]; then
   sign_sparkle_framework "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
 fi
 codesign_one "$APP_BUNDLE/Contents/Frameworks/libWhiskerFlowNowPlaying.dylib"
+codesign_one "$APP_BUNDLE/Contents/Frameworks/llama.framework"
 
 
 if [[ -n "$SIGN_IDENTITY" ]]; then

@@ -5,6 +5,15 @@ import WhiskerFlowCore
 
 @MainActor
 final class AppSettingsMigrationTests: XCTestCase {
+    func testCleanupIsOptInAndKeepsTheUsersChoice() {
+        withDefaults { defaults, name in
+            let initial = settings(defaults, name)
+            XCTAssertFalse(initial.cleanupEnabled)
+            initial.cleanupEnabled = true
+            XCTAssertTrue(settings(defaults, name).cleanupEnabled)
+        }
+    }
+
     private func withDefaults(_ body: (UserDefaults, String) throws -> Void) rethrows {
         let name = "AppSettingsMigration.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!

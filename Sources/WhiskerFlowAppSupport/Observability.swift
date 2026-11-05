@@ -42,6 +42,8 @@ public enum Observability {
     public static var transcriptionDuration: DoubleHistogramMeterSdk {
         state.transcriptionDuration
     }
+    public static var cleanupOperations: LongCounterSdk { state.cleanupOperations }
+    public static var cleanupDuration: DoubleHistogramMeterSdk { state.cleanupDuration }
 
     public static var recordingDuration: DoubleHistogramMeterSdk {
         state.recordingDuration
@@ -151,6 +153,8 @@ public enum Observability {
         let dictationSessions: LongCounterSdk
         let transcriptionOperations: LongCounterSdk
         let transcriptionDuration: DoubleHistogramMeterSdk
+        let cleanupOperations: LongCounterSdk
+        let cleanupDuration: DoubleHistogramMeterSdk
         let recordingDuration: DoubleHistogramMeterSdk
         let transcriptPersistence: LongCounterSdk
         let onboardingSteps: LongCounterSdk
@@ -265,6 +269,10 @@ public enum Observability {
                 .setDescription("End-to-end transcription duration")
                 .setUnit("s")
                 .build()
+            cleanupOperations = meter.counterBuilder(name: "cleanup.operations")
+                .setDescription("Local transcript cleanup outcomes without content").setUnit("1").build()
+            cleanupDuration = meter.histogramBuilder(name: "cleanup.duration")
+                .setDescription("Local transcript cleanup duration").setUnit("s").build()
             recordingDuration = meter.histogramBuilder(name: "dictation.recording.duration")
                 .setDescription("Captured dictation audio duration")
                 .setUnit("s")

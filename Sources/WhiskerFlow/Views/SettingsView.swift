@@ -35,6 +35,7 @@ struct SettingsView: View {
                     switch category {
                     case .dictation: dictationTab
                     case .text: vocabularyTab
+                    case .cleanup: CleanupSettingsView(appState: appState)
                     case .history: historyTab
                     case .meetings: Form { MeetingSetupView(appState: appState) }.formStyle(.grouped)
                     case .app: appTab
@@ -49,6 +50,7 @@ struct SettingsView: View {
         }
         .frame(width: 760, height: 650)
         .foregroundStyle(FlowStyle.ink).tint(FlowStyle.accent)
+        .onChange(of: appState.settings.cleanupEnabled) { _, _ in appState.configureCleanup() }
     }
 
     private var dictationTab: some View {
@@ -343,12 +345,13 @@ struct SettingsView: View {
 }
 
 private enum SettingsCategory: String, CaseIterable, Identifiable {
-    case dictation = "Dictation", text = "Text", history = "History", meetings = "Meetings", app = "App", advanced = "Advanced"
+    case dictation = "Dictation", cleanup = "Cleanup", text = "Text", history = "History", meetings = "Meetings", app = "App", advanced = "Advanced"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .dictation: return "mic"
         case .text: return "textformat"
+        case .cleanup: return "sparkles"
         case .history: return "clock.arrow.circlepath"
         case .meetings: return "calendar"
         case .app: return "macwindow"

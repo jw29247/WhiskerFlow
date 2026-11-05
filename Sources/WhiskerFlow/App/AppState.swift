@@ -68,6 +68,7 @@ final class AppState {
         /// Resolved from the app at key press; a browser's tab can refine it at release.
         var writing = WritingStyleResolution(category: .other, tone: .formal, source: .fallback)
         var recognizeCorrections = false
+        var cleanupModel: CleanupModel?
         var hints: RecognizerHints = .none
         var purpose: AssistantController.CapturePurpose = .dictation
         var quickKind: AssistantRecordKind = .note
@@ -193,6 +194,7 @@ final class AppState {
     private var audioDeviceMonitor: AudioDeviceChangeMonitor?
     private var deviceRefreshTask: Task<Void, Never>?
     private var warmUpTask: Task<Void, Never>?
+    let cleanup = CleanupService()
     private var meetingWarmUpTask: Task<Void, Never>?
     private let pendingPersistWork = PendingWorkTracker()
     private var hasStarted = false
@@ -673,6 +675,7 @@ final class AppState {
         startMeetingStoragePolling()
         hudController = RecordingHUDController(appState: self)
         warmUpEngine()
+        configureCleanup()
         warmUpMeetingEngine()
         startLeaderboardReporting()
         // Whisper was removed; free the space its downloaded models took.
@@ -728,6 +731,7 @@ final class AppState {
     /// a wedged decode must not keep the process alive past it.
     func shutdown() async {
         stopMonitors()
+        await cleanup.shutdown()
         warmUpTask?.cancel()
         warmUpTask = nil
         meetingWarmUpTask?.cancel()
@@ -1319,8 +1323,9 @@ final class AppState {
                                                        allowAppleFallback: false)
                 }
                 let english = await self.englishText(for: outcome.result.text, configuration: configuration)
+                let cleaned = await self.cleanupText(english.text, configuration: configuration)
                 let text = await Task.detached(priority: .userInitiated) {
-                    AssistantTextProcessing.process(english.text, tone: configuration.writing.tone,
+                    AssistantTextProcessing.process(cleaned, tone: configuration.writing.tone,
                                                     vocabulary: configuration.vocabulary, formatting: configuration.formatting,
                                                     recognizeCorrections: configuration.recognizeCorrections)
                 }.value
@@ -1733,6 +1738,7 @@ final class AppState {
                 "writing.category": .string(configuration.writing.category.rawValue)
             ])
             activeRecordingConfiguration = configuration
+            if let model = configuration.cleanupModel { cleanup.prewarm(model) }
             assistant.capturePurpose = .dictation
             if let code = translationWarmUpLanguage {
                 let translator = translator
@@ -2345,11 +2351,12 @@ final class AppState {
             if english.translated || english.notice != nil {
                 lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "translation", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - translationStarted) * 1000)", "outcome": english.translated ? "translated" : "kept"])
             }
+            let cleaned = await cleanupText(english.text, configuration: configuration)
             let text_processingStarted = ProcessInfo.processInfo.systemUptime
             lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "text_processing", "session": "\(sessionID ?? record.id)"])
             let processed = await Task.detached(priority: .userInitiated) {
                 let started = ProcessInfo.processInfo.systemUptime
-                let text = AssistantTextProcessing.process(english.text, tone: configuration.writing.tone,
+                let text = AssistantTextProcessing.process(cleaned, tone: configuration.writing.tone,
                     vocabulary: configuration.vocabulary, formatting: configuration.formatting,
                     recognizeCorrections: configuration.recognizeCorrections)
                 let completed = ProcessInfo.processInfo.systemUptime
@@ -2644,6 +2651,7 @@ final class AppState {
         }
         var formatting = settings.formatting
         formatting.language = plan.outputLanguage
+        let writing = assistant.resolveWritingStyle(AppContext(bundleIdentifier: pasteTargetApplication?.bundleIdentifier))
         return TranscriptionJobConfiguration(
             engine: engine,
             language: language,
@@ -2653,14 +2661,27 @@ final class AppState {
             allowAppleFallback: allowAppleFallback,
             delivery: settings.delivery,
             playSounds: settings.playSounds,
-            writing: assistant.resolveWritingStyle(AppContext(bundleIdentifier: pasteTargetApplication?.bundleIdentifier)),
+            writing: writing,
             recognizeCorrections: assistant.saved.recognizeCorrections,
+            cleanupModel: settings.cleanupEnabled && assistant.capturePurpose != .selectionInstruction
+                && writing.tone != .literal
+                ? .gemma2 : nil,
             hints: recognizerHints,
             purpose: assistant.capturePurpose,
             quickKind: assistant.quickCaptureKind,
             clientReference: accountReady ? assistant.saved.selectedClient : nil,
             accountIdentity: accountReady ? assistant.saved.accountIdentity : nil
         )
+    }
+
+    func configureCleanup() {
+        cleanup.configure(model: .gemma2, enabled: settings.cleanupEnabled)
+    }
+
+    private func cleanupText(_ text: String, configuration: TranscriptionJobConfiguration) async -> String {
+        guard let model = configuration.cleanupModel, configuration.writing.tone != .literal,
+              configuration.purpose != .selectionInstruction else { return text }
+        return await cleanup.clean(text, model: model).text
     }
 
     /// Apple's speech model for the chosen language, if it isn't Parakeet's.

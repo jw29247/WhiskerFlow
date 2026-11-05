@@ -28,6 +28,7 @@ final class AppSettings {
     }
     /// Write dictation in another language in English (on-device translation).
     var translateToEnglish: Bool { didSet { defaults.set(translateToEnglish, forKey: Keys.translateToEnglish) } }
+    var cleanupEnabled: Bool { didSet { defaults.set(cleanupEnabled, forKey: "cleanupEnabled") } }
     var hotkey: HotkeyTrigger { didSet { defaults.set(hotkey.rawValue, forKey: Keys.hotkey) } }
     /// The key combination used when `hotkey == .custom`.
     var customHotkey: KeyCombo { didSet { persist(customHotkey, key: Keys.customHotkey) } }
@@ -203,6 +204,7 @@ final class AppSettings {
         let initialLanguage = Self.migratedLanguage(from: defaults)
         language = initialLanguage
         translateToEnglish = defaults.object(forKey: Keys.translateToEnglish) as? Bool ?? true
+        cleanupEnabled = defaults.bool(forKey: "cleanupEnabled")
         hotkey = defaults.string(forKey: Keys.hotkey).flatMap(HotkeyTrigger.init) ?? .fn
         customHotkey = Self.loadCustomHotkey(from: defaults) ?? .default
         recordingMode = defaults.string(forKey: Keys.recordingMode).flatMap(RecordingMode.init) ?? .holdToTalk

@@ -13,6 +13,9 @@ for key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion; do
 done
 cmp "$ROOT_DIR/Sources/WhiskerFlow/Resources/shared-vocabulary.json" \
   "$APP_BUNDLE/Contents/Resources/WhiskerFlow_WhiskerFlow.bundle/shared-vocabulary.json"
+test -f "$APP_BUNDLE/Contents/Frameworks/llama.framework/llama"
+cmp "$ROOT_DIR/Sources/WhiskerFlow/Resources/CleanupNotices.txt" \
+  "$APP_BUNDLE/Contents/Resources/WhiskerFlow_WhiskerFlow.bundle/CleanupNotices.txt"
 codesign --verify --deep --strict "$APP_BUNDLE"
 
 DEV_BUNDLE="$ROOT_DIR/.build/$CONFIGURATION/WhiskerFlow Test Dev.app"
