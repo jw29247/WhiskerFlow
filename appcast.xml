@@ -9,6 +9,14 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>2.1.0</title>
+      <pubDate>Thu, 05 Nov 2026 18:47:47 +0000</pubDate>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <description><![CDATA[<p>New opt-in Cleanup corrects recognition mistakes and British English, removes hesitations, and resolves spoken self-corrections using a local Gemma model. It preserves your meaning and swearing.</p><p>Spoken numbers use digits, and British pound amounts use the £ symbol. Recognition fixes are checked locally and saved automatically in Corrections.</p><p>Enable Cleanup in Settings → Cleanup. Apple silicon and at least 8 GB of RAM are required, with a separate 2.84 GB model download. Also improves media pause and resume while dictating.</p>]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v2.1.0/WhiskerFlow-2.1.0.zip" sparkle:version="27" sparkle:shortVersionString="2.1.0" sparkle:edSignature="IxbkLW68p0CCVM7dDEDkIN7IeTzSCKEFpfmbWSrY7bgSyD4iCyOgWO/PYF6dwBu/ow/NipkCcENYLFvDTavYCg==" length="26579935" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>2.0.3</title>
       <pubDate>Thu, 15 Oct 2026 12:57:53 +0000</pubDate>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
