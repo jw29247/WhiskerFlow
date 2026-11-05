@@ -1,9 +1,22 @@
 import XCTest
 import WhiskerFlowCore
+import WhiskerFlowCleanupSupport
 @testable import WhiskerFlow
 
 @MainActor
 final class CleanupServiceTests: XCTestCase {
+    func testWarningAllowsBoundedForegroundWorkButNeverIdleWarmingOrCriticalPressure() {
+        let gib: UInt64 = 1_073_741_824
+        let reserve: UInt64 = gib
+        XCTAssertEqual(wf_cleanup_can_load(2 * gib, 3 * gib, 1, 0), 1)
+        XCTAssertEqual(wf_cleanup_can_load(2 * gib, 3 * gib, 2, 0), 0)
+        XCTAssertEqual(wf_cleanup_can_load(2 * gib, 3 * gib, 2, 1), 1)
+        XCTAssertEqual(wf_cleanup_can_load(2 * gib, 2 * gib + reserve, 2, 1), 1)
+        XCTAssertEqual(wf_cleanup_can_load(2 * gib, 2 * gib + reserve - 1, 2, 1), 0)
+        XCTAssertEqual(wf_cleanup_can_load(2 * gib, 8 * gib, 4, 1), 0)
+        XCTAssertEqual(wf_cleanup_can_load(UInt64.max, 3 * gib, 1, 1), 0)
+    }
+
     func testDisabledCleanupReturnsOriginalWithoutLoadingAModel() async {
         let service = CleanupService()
         let input = "Um, don't change this yet."

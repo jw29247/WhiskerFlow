@@ -1670,7 +1670,7 @@ final class AppState {
                 "writing.category": .string(configuration.writing.category.rawValue)
             ])
             activeRecordingConfiguration = configuration
-            if let model = configuration.cleanupModel { cleanup.prewarm(model) }
+            if let model = configuration.cleanupModel { cleanup.prewarm(model, foreground: true) }
             assistant.capturePurpose = .dictation
             if let code = translationWarmUpLanguage {
                 let translator = translator

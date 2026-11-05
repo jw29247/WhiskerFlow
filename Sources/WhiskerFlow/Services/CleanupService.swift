@@ -52,9 +52,9 @@ final class CleanupService {
     }
 
     init() {
-        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
         source.setEventHandler { [weak self] in
-            MainActor.assumeIsolated { self?.releaseForPressure() }
+            MainActor.assumeIsolated { self?.memoryPressureChanged() }
         }
         source.resume()
         pressure = source
@@ -73,7 +73,7 @@ final class CleanupService {
 
     func installed(_ model: CleanupModel) -> Bool { CleanupWorker.isInstalled(model) }
 
-    func prewarm(_ model: CleanupModel) {
+    func prewarm(_ model: CleanupModel, foreground: Bool = false) {
         guard configuredModel == model, warmTask == nil, !running, canRun(model), installed(model) else { return }
         let identifier = configurationID
         needsShutdown = true
@@ -82,13 +82,16 @@ final class CleanupService {
             guard let self else { return }
             defer { self.warmTask = nil }
             do {
-                try await self.worker.prepare(model)
+                try await self.worker.prepare(model, foreground: foreground)
                 guard !Task.isCancelled, self.configurationID == identifier else { return }
-                if !self.running { self.status = "Warm and ready" }
-                self.scheduleSleep(model)
+                if !self.running {
+                    self.status = "Warm and ready"
+                    self.scheduleSleep(model, prewarming: true)
+                }
             } catch {
                 guard self.configurationID == identifier else { return }
-                self.status = "Model couldn't load. Dictation still works."
+                self.status = CleanupWorker.memoryPressure == 2 ? "Ready on next dictation. Background warming is paused."
+                    : "Model couldn't load. Dictation still works."
             }
         }
     }
@@ -168,7 +171,7 @@ final class CleanupService {
     /// Background learning shares the warmed model and is cancelled by the
     /// caller as soon as foreground dictation starts.
     func assess(_ edit: CorrectionEdit) async throws -> [VocabularyCorrection] {
-        guard let model = configuredModel, !running, !downloading, canRun(model), installed(model) else {
+        guard let model = configuredModel, !running, !downloading, canRun(model), CleanupWorker.memoryPressure == 1, installed(model) else {
             throw CleanupFailure.unavailable
         }
         let identifier = configurationID
@@ -195,7 +198,7 @@ final class CleanupService {
                 for candidate in edit.candidates {
                     try Task.checkCancellation()
                     let response = try await self.worker.generatePrompt(CorrectionAssessment.prompt(for: candidate, edit: edit, model: model),
-                                                                        model: model, tokenLimit: 12, seconds: 2)
+                                                                        model: model, tokenLimit: 12, seconds: 2, foreground: false)
                     guard self.configurationID == identifier else { throw CancellationError() }
                     if CorrectionAssessment.approved(response) { approved.append(candidate) }
                 }
@@ -266,21 +269,33 @@ final class CleanupService {
     private func canRun(_ model: CleanupModel) -> Bool {
         let process = ProcessInfo.processInfo
         return Self.supported && process.physicalMemory >= model.minimumMemory
-            && Date() >= pressureUntil && process.thermalState != .serious && process.thermalState != .critical
+            && Date() >= pressureUntil && CleanupWorker.memoryPressure != 4
+            && process.thermalState != .serious && process.thermalState != .critical
     }
 
-    private func releaseForPressure() {
-        pressureUntil = Date().addingTimeInterval(60)
+    private func memoryPressureChanged() {
+        guard let event = pressure?.data else { return }
+        if !event.contains(.warning), !event.contains(.critical) {
+            if configuredModel != nil && !running { status = "Ready on next dictation" }
+            return
+        }
+        let critical = event.contains(.critical) || !CleanupWorker.hasEmergencyReserve
+        // Warning sheds idle warming and learning. A finite foreground request
+        // may finish when the measured headroom remains sufficient.
+        guard critical || !running else { return }
+        if critical { pressureUntil = Date().addingTimeInterval(60) }
         configurationID = UUID()
         warmTask?.cancel()
         sleepNow()
         if configuredModel != nil { status = "Paused while your Mac needs memory" }
     }
 
-    private func scheduleSleep(_ model: CleanupModel) {
+    private func scheduleSleep(_ model: CleanupModel, prewarming: Bool = false) {
         idleTask?.cancel()
+        if CleanupWorker.memoryPressure != 1 && !prewarming { sleepNow(); return }
+        let seconds = CleanupWorker.memoryPressure == 1 ? model.idleSeconds : 5
         idleTask = Task { [weak self] in
-            do { try await Task.sleep(nanoseconds: UInt64(model.idleSeconds * 1_000_000_000)) }
+            do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
             catch { return }
             self?.sleepNow()
         }

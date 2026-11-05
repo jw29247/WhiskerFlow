@@ -146,5 +146,40 @@
         "replaceWith": "wait"
       }
     ]
+  },
+  {
+    "id": "misheard-opening-request",
+    "input": "And you set a reminder for tomorrow.",
+    "expected": "Can you set a reminder for tomorrow?"
+  },
+  {
+    "id": "past-statement",
+    "input": "And you put the file away before you left.",
+    "expected": "And you put the file away before you left."
+  },
+  {
+    "id": "habitual-statement",
+    "input": "And you put too much pressure on yourself.",
+    "expected": "And you put too much pressure on yourself."
+  },
+  {
+    "id": "preserve-swearing",
+    "input": "If I fucking swear, it should fucking show it.",
+    "expected": "If I fucking swear, it should fucking show it."
+  },
+  {
+    "id": "preserve-shit",
+    "input": "This is fucking shit, and I'm not going to pretend it isn't.",
+    "expected": "This is fucking shit, and I'm not going to pretend it isn't."
+  },
+  {
+    "id": "repeated-swearing",
+    "input": "That was fucking, fucking stupid.",
+    "expected": "That was fucking, fucking stupid."
+  },
+  {
+    "id": "swearing-with-fillers",
+    "input": "Um I I think this fucking thing is broken.",
+    "expected": "I think this fucking thing is broken."
   }
 ]

@@ -11,23 +11,35 @@
 #include <malloc/malloc.h>
 
 using clock_type = std::chrono::steady_clock;
-int wf_cleanup_has_headroom(uint64_t required_bytes) {
+wf_cleanup_memory wf_cleanup_memory_state(void) {
     int pressure = 1;
     size_t size = sizeof(pressure);
-    if (sysctlbyname("kern.memorystatus_vm_pressure_level", &pressure, &size, nullptr, 0) == 0 && pressure != 1) return 0;
+    if (sysctlbyname("kern.memorystatus_vm_pressure_level", &pressure, &size, nullptr, 0) != 0) return {0, 4};
     vm_statistics64_data_t vm{};
     mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
     auto host = mach_host_self();
     auto result = host_statistics64(host, HOST_VM_INFO64, reinterpret_cast<host_info64_t>(&vm), &count);
     mach_port_deallocate(mach_task_self(), host);
-    if (result != KERN_SUCCESS) return 0;
-    // Free and reclaimable file-backed pages. Keep an extra 1 GiB for context,
-    // runtime allocations and other applications rather than consume it all.
-    uint64_t available = (uint64_t(vm.free_count) + vm.inactive_count) * vm_kernel_page_size;
-    return available >= required_bytes + 1024ULL * 1024ULL * 1024ULL;
+    if (result != KERN_SUCCESS) return {0, 4};
+    // Estimate headroom from free, inactive and speculative pages. Admission
+    // also reserves space for context allocations and other applications.
+    uint64_t available = (uint64_t(vm.free_count) + vm.inactive_count + vm.speculative_count) * vm_kernel_page_size;
+    return {available, pressure};
+}
+int wf_cleanup_can_load(uint64_t required_bytes, uint64_t available_bytes, int pressure, int foreground) {
+    // Warning is an instruction to release idle resources, not a blanket ban
+    // on bounded foreground work. Critical pressure always stops inference.
+    if (pressure != 1 && !(pressure == 2 && foreground)) return 0;
+    const uint64_t reserve = 1024ULL * 1024ULL * 1024ULL;
+    return available_bytes >= reserve && required_bytes <= available_bytes - reserve;
+}
+int wf_cleanup_has_headroom(uint64_t required_bytes, int foreground) {
+    auto memory = wf_cleanup_memory_state();
+    return wf_cleanup_can_load(required_bytes, memory.available_bytes, memory.pressure, foreground);
 }
 struct wf_cleanup_control {
     std::atomic<bool> cancelled{false};
+    std::atomic<int64_t> next_memory_check{0};
     clock_type::time_point deadline;
 };
 struct wf_cleanup_model {
@@ -36,7 +48,18 @@ struct wf_cleanup_model {
 };
 static bool abort_cleanup(void *data) {
     auto *control = static_cast<wf_cleanup_control *>(data);
-    return control->cancelled.load() || clock_type::now() >= control->deadline;
+    auto now = clock_type::now();
+    if (control->cancelled.load() || now >= control->deadline) return true;
+    const auto ticks = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+    auto next = control->next_memory_check.load();
+    if (ticks >= next && control->next_memory_check.compare_exchange_strong(next, ticks + 100000000)) {
+        auto memory = wf_cleanup_memory_state();
+        if (memory.pressure == 4 || memory.available_bytes < 512ULL * 1024ULL * 1024ULL) {
+            control->cancelled.store(true);
+            return true;
+        }
+    }
+    return false;
 }
 wf_cleanup_control *wf_cleanup_control_create(void) { return new wf_cleanup_control; }
 void wf_cleanup_control_cancel(wf_cleanup_control *control) { control->cancelled.store(true); }

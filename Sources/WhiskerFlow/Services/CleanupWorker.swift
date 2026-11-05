@@ -33,27 +33,38 @@ final class CleanupWorker: @unchecked Sendable {
         (try? file(for: model).resourceValues(forKeys: [.fileSizeKey]).fileSize) == Int(model.byteCount)
     }
 
-    static func validate(_ url: URL, model: CleanupModel) throws {
+    static func validate(_ url: URL, model: CleanupModel, cancelled: () -> Bool = { false }) throws {
         let file = try FileHandle(forReadingFrom: url)
         defer { try? file.close() }
         var hash = SHA256()
-        while let data = try file.read(upToCount: 4 * 1024 * 1024), !data.isEmpty {
+        while true {
             try Task.checkCancellation()
-            hash.update(data: data)
+            if cancelled() { throw CancellationError() }
+            // FileHandle can autorelease its NSData backing. Drain each chunk
+            // instead of retaining the entire model until this queue item ends.
+            let hasData = try autoreleasepool {
+                guard let data = try file.read(upToCount: 4 * 1024 * 1024), !data.isEmpty else { return false }
+                hash.update(data: data)
+                return true
+            }
+            if !hasData { break }
         }
         guard hash.finalize().map({ String(format: "%02x", $0) }).joined() == model.sha256 else {
             throw CleanupFailure.invalidModel
         }
     }
 
-    func prepare(_ model: CleanupModel) async throws {
+    static var memoryPressure: Int32 { wf_cleanup_memory_state().pressure }
+    static var hasEmergencyReserve: Bool { wf_cleanup_memory_state().available_bytes >= 512 * 1024 * 1024 }
+
+    func prepare(_ model: CleanupModel, foreground: Bool = true) async throws {
         let control = CleanupControl()
         register(control)
         defer { unregister(control) }
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 queue.async {
-                    do { try self.load(model, control: control); continuation.resume() }
+                    do { try self.load(model, control: control, foreground: foreground); continuation.resume() }
                     catch { continuation.resume(throwing: error) }
                 }
             }
@@ -88,13 +99,14 @@ final class CleanupWorker: @unchecked Sendable {
             }
             let accepted = TranscriptCleanup.accepted(candidate, original: segment.text, vocabulary: vocabulary)
             candidates += candidate + segment.suffix
-            delivered += (accepted ?? segment.text) + segment.suffix
+            delivered += (accepted ?? TranscriptCleanup.acceptedSentenceEdits(candidate, original: segment.text, vocabulary: vocabulary)
+                ?? segment.text) + segment.suffix
             if accepted == nil { rejected += 1 }
         }
         return CleanupAttempt(candidate: candidates, text: delivered, rejectedSegments: rejected, incomplete: false)
     }
 
-    func generatePrompt(_ prompt: String, model: CleanupModel, tokenLimit: Int, seconds: TimeInterval) async throws -> String {
+    func generatePrompt(_ prompt: String, model: CleanupModel, tokenLimit: Int, seconds: TimeInterval, foreground: Bool = true) async throws -> String {
         let control = CleanupControl()
         register(control)
         defer { unregister(control) }
@@ -104,7 +116,7 @@ final class CleanupWorker: @unchecked Sendable {
                 queue.async {
                     do {
                         guard !control.isCancelled else { throw CancellationError() }
-                        try self.load(model, control: control)
+                        try self.load(model, control: control, foreground: foreground)
                         guard !control.isCancelled else { throw CancellationError() }
                         var buffer = [CChar](repeating: 0, count: 24_000)
                         let result = wf_cleanup_generate(self.handle, prompt,
@@ -137,18 +149,23 @@ final class CleanupWorker: @unchecked Sendable {
         }
     }
 
-    private func load(_ model: CleanupModel, control: CleanupControl) throws {
+    private func load(_ model: CleanupModel, control: CleanupControl, foreground: Bool) throws {
         guard !control.isCancelled else { throw CancellationError() }
-        if loaded == model, handle != nil { return }
+        let pressure = Self.memoryPressure
+        guard pressure == 1 || pressure == 2 else { throw CleanupFailure.unavailable }
+        if loaded == model, handle != nil {
+            guard (foreground || pressure == 1), Self.hasEmergencyReserve else { throw CleanupFailure.unavailable }
+            return
+        }
         wf_cleanup_free(handle)
         handle = nil
         loaded = nil
         guard Self.isInstalled(model) else { throw CleanupFailure.invalidModel }
-        guard wf_cleanup_has_headroom(UInt64(model.byteCount)) != 0 else { throw CleanupFailure.unavailable }
         if !verified.contains(model) {
-            try Self.validate(Self.file(for: model), model: model)
+            try Self.validate(Self.file(for: model), model: model, cancelled: { control.isCancelled })
             verified.insert(model)
         }
+        guard wf_cleanup_has_headroom(model.workingSetBytes, foreground ? 1 : 0) != 0 else { throw CleanupFailure.unavailable }
         guard !control.isCancelled else { throw CancellationError() }
         handle = wf_cleanup_load(Self.file(for: model).path, 2, control.pointer)
         guard handle != nil else { throw CleanupFailure.unavailable }

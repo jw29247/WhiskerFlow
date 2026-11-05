@@ -32,7 +32,7 @@ struct CleanupSettingsView: View {
             }
 
             Section("Local model") {
-                Text("Gemma 4 E2B uses 4-bit weights and needs at least 8 GB of memory. Cleanup checks free memory before loading and pauses under memory pressure. Macs with less than 16 GB release it sooner between dictations.")
+                Text("Gemma 4 E2B uses 4-bit weights and needs at least 8 GB of memory. Cleanup checks available memory and pauses if your Mac is short of resources. Macs with less than 16 GB release it sooner between dictations.")
                     .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Selected", value: model.name)
                 LabeledContent("Download", value: ByteCountFormatter.string(fromByteCount: model.byteCount, countStyle: .file))
@@ -58,7 +58,7 @@ struct CleanupSettingsView: View {
                     Button("Download model again") { appState.cleanup.download(model) {} }
                         .disabled(appState.cleanup.running)
                 }
-                Text("Warms up when Cleanup is enabled and when you start dictating, then sleeps after \(Int(model.idleSeconds)) seconds without use. Memory pressure releases the model immediately. If Cleanup is unavailable or takes too long, dictation uses the original transcript.")
+                Text("Warms up when Cleanup is enabled and when you start dictating, then sleeps after \(Int(model.idleSeconds)) seconds without use. Releases idle model memory sooner when your Mac is busy. If Cleanup is unavailable or takes too long, dictation uses the original transcript.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Release model memory now") { appState.cleanup.sleepNow() }
                     .disabled(appState.cleanup.running)

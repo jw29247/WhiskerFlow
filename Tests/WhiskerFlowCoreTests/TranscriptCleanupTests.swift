@@ -2,6 +2,52 @@ import XCTest
 @testable import WhiskerFlowCore
 
 final class TranscriptCleanupTests: XCTestCase {
+    func testAmbiguousOpeningIsEditedSeparatelyFromLaterNarrative() {
+        let raw = "And you set a reminder for tomorrow.\n\nThen we can review the project."
+        let segments = TranscriptCleanup.segments(for: raw)
+        XCTAssertEqual(segments.map { $0.text + $0.suffix }.joined(), raw)
+        XCTAssertEqual(segments.first?.text, "And you set a reminder for tomorrow.")
+        XCTAssertEqual(segments.count, 2)
+        let repair = "And you set a reminder for Wednesday. No, Thursday please."
+        XCTAssertEqual(TranscriptCleanup.segments(for: repair).count, 1)
+    }
+
+    func testRetainsSafeSentenceRepairsWhenAnotherSentenceChangesMeaning() {
+        let raw = "And you set a reminder for tomorrow. Ask Marc about it. This is fucking shit."
+        let candidate = "Can you set a reminder for tomorrow? Ask Mark about it. This is very bad."
+        XCTAssertNil(TranscriptCleanup.accepted(candidate, original: raw))
+        XCTAssertEqual(TranscriptCleanup.acceptedSentenceEdits(candidate, original: raw),
+                       "Can you set a reminder for tomorrow? Ask Marc about it. This is fucking shit.")
+        XCTAssertNil(TranscriptCleanup.acceptedSentenceEdits("Can you set a reminder for tomorrow?", original: raw))
+        XCTAssertNil(TranscriptCleanup.acceptedSentenceEdits("Keep it booked. Yes, send it.", original: "No, keep it booked. Don't send it."))
+    }
+
+    func testPreservesSwearingIncludingRepeatedEmphasis() {
+        for text in ["If I fucking swear, it should fucking show it.", "This is shit.", "That was fucking, fucking stupid.",
+                     "What a bloody mess.", "That's bullshit, you wanker."] {
+            XCTAssertEqual(TranscriptCleanup.accepted(text, original: text), text)
+        }
+        XCTAssertEqual(TranscriptCleanup.accepted("I think this fucking thing is broken.",
+                                                 original: "Um I I think this fucking thing is broken."),
+                       "I think this fucking thing is broken.")
+        for (original, softened) in [("This is shit.", "This is stuff."),
+                                     ("I'm fucking annoyed.", "I'm very annoyed."),
+                                     ("That was fucking, fucking stupid.", "That was fucking stupid."),
+                                     ("What a bloody mess.", "What a mess."),
+                                     ("This is bad.", "This is fucking bad.")] {
+            XCTAssertNil(TranscriptCleanup.accepted(softened, original: original))
+        }
+    }
+
+    func testRecoversMisheardOpeningRequestWithoutReversingItsIntent() {
+        let raw = "And you set aside Mondays for project work every week."
+        let corrected = "Can you set aside Mondays for project work every week?"
+        XCTAssertEqual(TranscriptCleanup.accepted(corrected, original: raw), corrected)
+        XCTAssertNil(TranscriptCleanup.accepted("And you send the file.", original: "Can you send the file?"))
+        XCTAssertNil(TranscriptCleanup.accepted("I will send the file.", original: "I can send the file."))
+        XCTAssertNil(TranscriptCleanup.accepted("And you send the file.", original: "can you send the file."))
+    }
+
     func testLongTranscriptSegmentsPreserveTextWhitespaceAndRepairContext() {
         let original = "Send it on Wednesday. No, Thursday please.\n\nThen send the report.  Keep the other sentence."
         let segments = TranscriptCleanup.segments(for: original, targetCharacters: 15)
