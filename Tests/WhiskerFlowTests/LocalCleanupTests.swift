@@ -26,12 +26,14 @@ private actor InspectingDictationCleaner: DictationCleaning {
 
 final class LocalCleanupTests: XCTestCase {
     @MainActor
-    func testCleanupIsOffByDefaultAndChoicePersists() {
+    func testCleanupIsOnByDefaultAndExplicitChoicesPersist() {
         let suite = "cleanup-tests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: suite))
-        XCTAssertFalse(settings.localCleanupEnabled)
+        XCTAssertTrue(settings.localCleanupEnabled)
+        settings.localCleanupEnabled = false
+        XCTAssertFalse(AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: suite)).localCleanupEnabled)
         settings.localCleanupEnabled = true
         XCTAssertTrue(AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: suite)).localCleanupEnabled)
     }
@@ -61,11 +63,12 @@ final class LocalCleanupTests: XCTestCase {
     }
 
     @MainActor
-    func testPreviewUsesDictionaryAndToneWithoutChangingOptIn() async {
+    func testPreviewUsesDictionaryAndToneWithoutChangingDisabledPreference() async {
         let suite = "cleanup-preview-tests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: suite))
+        settings.localCleanupEnabled = false
         let cleaner = InspectingDictationCleaner()
         let cleanup = LocalCleanupController(cleaner: cleaner)
         let dictionary = DictionaryStore(legacyVocabulary: .init(rules: [.init(find: "whisker flow", replaceWith: "WhiskerFlow")]))

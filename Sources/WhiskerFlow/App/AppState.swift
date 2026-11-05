@@ -678,7 +678,7 @@ final class AppState {
         hudController = RecordingHUDController(appState: self)
         warmUpEngine()
         warmUpMeetingEngine()
-        if settings.localCleanupEnabled { localCleanup.prepare() }
+        if settings.localCleanupEnabled { localCleanup.prepare(download: true) }
         startLeaderboardReporting()
         // Whisper was removed; free the space its downloaded models took.
         Task.detached(priority: .background) { ModelStoragePaths.removeWhisperModels() }

@@ -132,7 +132,7 @@ final class LocalCleanupController {
     func clean(_ request: DictationCleanupRequest, fallback: String,
                deadline: TimeInterval = DictationCleanupRequest.deadlineSeconds) async -> LocalCleanupResult {
         let started = Date()
-        guard request.isEligible else { return finish(fallback, applied: false, "Kept original: text is empty or too long for this preview.", started: started) }
+        guard request.isEligible else { return finish(fallback, applied: false, "Kept original: text is empty or too long for cleanup.", started: started) }
         guard !isCleaning else { return finish(fallback, applied: false, "Kept original: cleanup is busy.", started: started) }
         guard state == .ready else {
             return finish(fallback, applied: false, "Kept original: cleanup model isn’t ready. Open Settings → Text to prepare it.", started: started)

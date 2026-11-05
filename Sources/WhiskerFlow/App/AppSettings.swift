@@ -35,7 +35,7 @@ final class AppSettings {
     /// Show what is being heard in the HUD while speaking. Display only: the
     /// pasted text always comes from the full decode on release.
     var liveTranscription: Bool { didSet { defaults.set(liveTranscription, forKey: Keys.liveTranscription) } }
-    /// Evaluation only: stays off until explicitly enabled in Text settings.
+    /// Enabled by default; an explicit choice in Text settings persists.
     var localCleanupEnabled: Bool { didSet { defaults.set(localCleanupEnabled, forKey: Keys.localCleanupEnabled) } }
     /// Press play/pause when dictation starts and again when it stops, only
     /// when something is playing.
@@ -209,7 +209,7 @@ final class AppSettings {
         customHotkey = Self.loadCustomHotkey(from: defaults) ?? .default
         recordingMode = defaults.string(forKey: Keys.recordingMode).flatMap(RecordingMode.init) ?? .holdToTalk
         liveTranscription = defaults.object(forKey: Keys.liveTranscription) as? Bool ?? true
-        localCleanupEnabled = defaults.bool(forKey: Keys.localCleanupEnabled)
+        localCleanupEnabled = defaults.object(forKey: Keys.localCleanupEnabled) as? Bool ?? true
         pauseMediaWhileDictating = defaults.object(forKey: Keys.pauseMediaWhileDictating) as? Bool ?? true
         rememberCorrections = defaults.object(forKey: "rememberCorrections") as? Bool ?? true
         autoAddLearnedWords = defaults.object(forKey: Keys.autoAddLearnedWords) as? Bool ?? true

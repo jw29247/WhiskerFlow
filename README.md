@@ -68,16 +68,17 @@ icon gives quick access to recent transcripts.
 Pick the engine and language in **Settings → Engine**. Whisper (WhisperKit and the
 Whisper CLI) was removed; a build that finds its downloaded models deletes them.
 
-Try on-device AI cleanup in **Settings → Text → AI cleanup · Preview**. Download
-the Gemma 4 E2B model once (2.59 GB), then enable **Clean up dictation on this Mac**.
-It removes fillers, resolves spoken corrections and fixes grammar after recognition
-and translation. Literal styles bypass AI. The switch defaults to off during this
-evaluation; downloading the model does not turn it on. Expand **Try cleanup without
-recording** for a before/after text test, or compare **Original recognition** in
-History after dictating. The latest result and elapsed time appear in Text settings.
+On-device AI cleanup is enabled by default. It removes fillers, resolves spoken
+corrections and fixes grammar after recognition and translation. The Gemma 4 E2B
+model downloads once (2.59 GB) in the background and warms up before becoming ready.
+Dictation remains available during setup. Turn cleanup off in **Settings → Text →
+AI cleanup**; your choice persists across updates. Literal styles bypass AI.
+Expand **Try cleanup without recording** for a before/after text test, or compare
+**Original recognition** in History after dictating. The latest result and elapsed
+time appear in Text settings.
 There is no cloud cleanup. When the model is busy, unavailable, rejects its output,
 or exceeds its 15-second deadline, dictation uses the usual formatted transcript.
-The preview accepts up to 6,000 UTF-8 bytes; longer dictations use the usual path.
+Cleanup accepts up to 6,000 UTF-8 bytes; longer dictations use the usual path.
 
 Pull-request CI also produces a **WhiskerFlow-Preview** artifact with a separate
 app identity and automatic updates disabled. Quit regular WhiskerFlow before using

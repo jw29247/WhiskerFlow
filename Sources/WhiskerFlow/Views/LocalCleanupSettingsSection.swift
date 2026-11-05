@@ -11,16 +11,16 @@ struct LocalCleanupSettingsSection: View {
     private var captureBusy: Bool { appState.isRecording || appState.isTranscribing || appState.isMeetingCapturing }
 
     var body: some View {
-        Section("AI cleanup · Preview") {
+        Section("AI cleanup") {
             Toggle("Clean up dictation on this Mac", isOn: $appState.settings.localCleanupEnabled)
                 .onChange(of: appState.settings.localCleanupEnabled) { _, enabled in
-                    if enabled { cleanup.prepare() } else { cleanup.disable() }
+                    if enabled { cleanup.prepare(download: true) } else { cleanup.disable() }
                 }
-            Text("Removes filler phrases, resolves spoken corrections and fixes grammar before pasting. Uses a small Gemma model entirely on this Mac. Literal styles keep the original wording. Off by default while you try it.")
+            Text("Removes filler phrases, resolves spoken corrections and fixes grammar before pasting. Uses a small Gemma model entirely on this Mac. Literal styles keep the original wording. Enabled by default; you can turn it off here.")
                 .font(.caption).foregroundStyle(.secondary)
 
             modelControls
-            Text("Gemma 4 E2B · one-time 2.59 GB download. Audio and text stay on this Mac. If cleanup is unavailable or takes over 15 seconds, dictation uses the usual text.")
+            Text("Gemma 4 E2B · downloads 2.59 GB once in the background when cleanup is enabled. Audio and text stay on this Mac. While preparing, or if cleanup takes over 15 seconds, dictation uses the usual text.")
                 .font(.caption).foregroundStyle(.secondary)
             Link("Model details and Apache 2.0 license", destination: URL(string: "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm")!)
                 .font(.caption)

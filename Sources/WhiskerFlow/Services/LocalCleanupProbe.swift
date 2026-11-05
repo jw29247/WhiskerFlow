@@ -11,6 +11,7 @@ enum LocalCleanupProbe {
         Observability.start()
         Task { @MainActor in
             let cleanup = LocalCleanupController()
+            let preparationStarted = Date()
             cleanup.prepare(download: CommandLine.arguments.contains("--download-cleanup-model"))
             while cleanup.isPreparing {
                 try? await Task.sleep(nanoseconds: 200_000_000)
@@ -19,6 +20,7 @@ enum LocalCleanupProbe {
                 print("cleanup_probe model_not_ready: download it in Settings → Text, or pass --download-cleanup-model")
                 exit(2)
             }
+            print("cleanup_probe preparation_elapsed=\(String(format: "%.2f", Date().timeIntervalSince(preparationStarted)))s")
             let samples: [(text: String, corrections: Bool, required: [String], forbidden: [String])] = [
                 ("um please send Sarah the proposal on Tuesday sorry Thursday", true, ["sarah", "thursday"], ["tuesday"]),
                 ("I don't want to cancel the meeting I just want to move it to three thirty", true, ["don't", "cancel", "move"], []),

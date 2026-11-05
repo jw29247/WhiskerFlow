@@ -32,6 +32,15 @@ actor LocalCleanupEngine: DictationCleaning {
         let candidate = Engine(engineConfig: config)
         try await candidate.initialize()
         try Task.checkCancellation()
+        // Pay first-use Metal/prefill/decode costs before reporting ready. This
+        // synthetic conversation is discarded; dictations still start fresh.
+        let warmup = try await candidate.createConversation(with: conversationConfig())
+        try await withTaskCancellationHandler {
+            _ = try await warmup.sendMessage(Message(DictationCleanupRequest(text: "Hello.").prompt), maxOutputTokens: 32)
+            try Task.checkCancellation()
+        } onCancel: {
+            try? warmup.cancel()
+        }
         engine = candidate
     }
 
@@ -44,12 +53,7 @@ actor LocalCleanupEngine: DictationCleaning {
         guard request.isEligible else { throw LocalCleanupError.invalidOutput }
         busy = true
         defer { busy = false }
-        let config = ConversationConfig(
-            systemMessage: Message(DictationCleanupRequest.instructions),
-            samplerConfig: try SamplerConfig(topK: 1, topP: 1, temperature: 0),
-            thinkingConfig: ThinkingConfig(enableThinking: false, thinkingTokenBudget: 0)
-        )
-        let conversation = try await engine.createConversation(with: config)
+        let conversation = try await engine.createConversation(with: conversationConfig())
         // The synchronous native generation stays inside this actor until it
         // finishes, even if the deadline abandons the caller. This prevents a
         // timed-out generation overlapping the next request on the same engine.
@@ -72,5 +76,13 @@ actor LocalCleanupEngine: DictationCleaning {
         } onCancel: {
             try? conversation.cancel()
         }
+    }
+
+    private func conversationConfig() throws -> ConversationConfig {
+        ConversationConfig(
+            systemMessage: Message(DictationCleanupRequest.instructions),
+            samplerConfig: try SamplerConfig(topK: 1, topP: 1, temperature: 0),
+            thinkingConfig: ThinkingConfig(enableThinking: false, thinkingTokenBudget: 0)
+        )
     }
 }
