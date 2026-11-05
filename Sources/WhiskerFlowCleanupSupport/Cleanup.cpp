@@ -63,7 +63,7 @@ wf_cleanup_model *wf_cleanup_load(const char *path, int threads, wf_cleanup_cont
     auto *model = llama_model_load_from_file(path, parameters);
     if (!model) return nullptr;
     auto context_parameters = llama_context_default_params();
-    context_parameters.n_ctx = 2048;
+    context_parameters.n_ctx = 4096;
     context_parameters.n_batch = 256;
     context_parameters.n_ubatch = 256;
     context_parameters.n_threads = threads;
@@ -102,7 +102,7 @@ int wf_cleanup_generate(wf_cleanup_model *model, const char *prompt, char *outpu
     int result = 2;
     int used = 0;
     const int needed = -llama_tokenize(vocab, prompt, static_cast<int>(strlen(prompt)), nullptr, 0, true, true);
-    if (needed <= 0 || needed + max_tokens > 2048) {
+    if (needed <= 0 || needed + max_tokens > static_cast<int>(llama_n_ctx(ctx))) {
         llama_set_abort_callback(ctx, nullptr, nullptr); return 2;
     }
     std::vector<llama_token> tokens(needed);

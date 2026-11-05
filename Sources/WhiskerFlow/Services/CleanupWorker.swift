@@ -5,6 +5,13 @@ import WhiskerFlowCore
 
 enum CleanupFailure: Error { case invalidModel, unavailable, interrupted, incomplete }
 
+struct CleanupAttempt: Sendable {
+    let candidate: String
+    let text: String
+    let rejectedSegments: Int
+    let incomplete: Bool
+}
+
 /// All model ownership and inference live on one utility queue. The cancellation
 /// handle is separate so a deadline or pressure event can interrupt a decode.
 final class CleanupWorker: @unchecked Sendable {
@@ -53,7 +60,41 @@ final class CleanupWorker: @unchecked Sendable {
         } onCancel: { control.cancel() }
     }
 
-    func generate(_ text: String, model: CleanupModel, seconds: TimeInterval) async throws -> String {
+    func generate(_ text: String, model: CleanupModel, seconds: TimeInterval, vocabulary: Vocabulary = Vocabulary()) async throws -> String {
+        try await generatePrompt(TranscriptCleanup.prompt(for: text, vocabulary: vocabulary, model: model), model: model,
+                                 tokenLimit: min(1800, max(80, text.utf8.count / 2 + 40)), seconds: seconds)
+    }
+
+    func cleanTranscript(_ text: String, model: CleanupModel, seconds: TimeInterval, vocabulary: Vocabulary) async throws -> CleanupAttempt {
+        let started = ProcessInfo.processInfo.systemUptime
+        var candidates = "", delivered = "", rejected = 0
+        let segments = TranscriptCleanup.segments(for: text)
+        for (index, segment) in segments.enumerated() {
+            try Task.checkCancellation()
+            let remaining = seconds - (ProcessInfo.processInfo.systemUptime - started)
+            let candidate: String
+            do {
+                guard remaining > 0.15 else { throw CleanupFailure.interrupted }
+                candidate = try await generate(segment.text, model: model, seconds: remaining - 0.1, vocabulary: vocabulary)
+            } catch CleanupFailure.interrupted {
+                try Task.checkCancellation()
+                let untouched = segments[index...].map { $0.text + $0.suffix }.joined()
+                return CleanupAttempt(candidate: candidates, text: delivered + untouched,
+                                      rejectedSegments: rejected + segments.count - index, incomplete: true)
+            } catch CleanupFailure.incomplete {
+                let untouched = segments[index...].map { $0.text + $0.suffix }.joined()
+                return CleanupAttempt(candidate: candidates, text: delivered + untouched,
+                                      rejectedSegments: rejected + segments.count - index, incomplete: true)
+            }
+            let accepted = TranscriptCleanup.accepted(candidate, original: segment.text, vocabulary: vocabulary)
+            candidates += candidate + segment.suffix
+            delivered += (accepted ?? segment.text) + segment.suffix
+            if accepted == nil { rejected += 1 }
+        }
+        return CleanupAttempt(candidate: candidates, text: delivered, rejectedSegments: rejected, incomplete: false)
+    }
+
+    func generatePrompt(_ prompt: String, model: CleanupModel, tokenLimit: Int, seconds: TimeInterval) async throws -> String {
         let control = CleanupControl()
         register(control)
         defer { unregister(control) }
@@ -66,8 +107,7 @@ final class CleanupWorker: @unchecked Sendable {
                         try self.load(model, control: control)
                         guard !control.isCancelled else { throw CancellationError() }
                         var buffer = [CChar](repeating: 0, count: 24_000)
-                        let tokenLimit = min(900, max(80, text.utf8.count / 2 + 40))
-                        let result = wf_cleanup_generate(self.handle, TranscriptCleanup.prompt(for: text),
+                        let result = wf_cleanup_generate(self.handle, prompt,
                                                          &buffer, Int32(buffer.count), Int32(tokenLimit), seconds, control.pointer)
                         guard result == 0 else {
                             throw result == 1 ? CleanupFailure.interrupted : CleanupFailure.incomplete

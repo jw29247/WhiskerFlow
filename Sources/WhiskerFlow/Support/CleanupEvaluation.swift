@@ -7,7 +7,7 @@ import WhiskerFlowCore
 /// preferences or network resources. Not compiled into release builds.
 @MainActor
 enum CleanupEvaluation {
-    struct Fixture: Codable { let id: String; let input: String; let expected: String; let audioFile: String? }
+    struct Fixture: Codable { let id: String; let input: String; let expected: String; let audioFile: String?; let rules: [VocabularyRule]?; let prompt: String? }
     struct Row: Codable {
         let id: String
         let input: String
@@ -16,6 +16,7 @@ enum CleanupEvaluation {
         let expected: String
         let seconds: Double
         let passed: Bool
+        let failure: String?
     }
     struct Report: Codable {
         let model: String
@@ -29,17 +30,18 @@ enum CleanupEvaluation {
         let deadlineSeconds: Double
         let deadlineStopped: Bool
         let cancellationStopped: Bool
+        let reloadSeconds: Double?
         let rows: [Row]
     }
 
     static func runIfRequested() -> Bool {
+        if runLearningIfRequested() { return true }
         guard let index = CommandLine.arguments.firstIndex(of: "--evaluate-cleanup"),
               CommandLine.arguments.count > index + 3 else { return false }
         let choice = CommandLine.arguments[index + 1]
         let input = URL(fileURLWithPath: CommandLine.arguments[index + 2])
         let output = URL(fileURLWithPath: CommandLine.arguments[index + 3])
-        guard choice == "gemma2" else { exit(2) }
-        let model = CleanupModel.gemma2
+        guard let model = CleanupModel(rawValue: choice) else { exit(2) }
         Task {
             do {
                 let fixtures = try JSONDecoder().decode([Fixture].self, from: Data(contentsOf: input))
@@ -60,11 +62,29 @@ enum CleanupEvaluation {
                         input = fixture.input
                     }
                     let start = ProcessInfo.processInfo.systemUptime
-                    let candidate = try await worker.generate(input, model: model, seconds: 8)
-                    let delivered = TranscriptCleanup.accepted(candidate, original: input) ?? input
+                    let vocabulary = Vocabulary(rules: fixture.rules ?? [])
+                    let candidate: String
+                    let delivered: String
+                    let failure: String?
+                    do {
+                        if let prompt = fixture.prompt {
+                            candidate = try await worker.generatePrompt(prompt, model: model, tokenLimit: 500, seconds: 3)
+                            delivered = TranscriptCleanup.accepted(candidate, original: input, vocabulary: vocabulary) ?? input
+                            failure = nil
+                        } else {
+                            let attempt = try await worker.cleanTranscript(input, model: model, seconds: input.count > 800 ? 8 : 3, vocabulary: vocabulary)
+                            candidate = attempt.candidate
+                            delivered = attempt.text
+                            failure = attempt.incomplete ? "incomplete" : nil
+                        }
+                    } catch {
+                        candidate = ""
+                        delivered = input
+                        failure = String(describing: type(of: error))
+                    }
                     rows.append(Row(id: fixture.id, input: input, candidate: candidate, delivered: delivered,
                                     expected: fixture.expected, seconds: ProcessInfo.processInfo.systemUptime - start,
-                                    passed: delivered == fixture.expected))
+                                    passed: delivered == fixture.expected, failure: failure))
                 }
                 let loaded = footprint()
                 let residentLoaded = residentMemory()
@@ -86,19 +106,79 @@ enum CleanupEvaluation {
                 try await Task.sleep(nanoseconds: 100_000_000)
                 let released = footprint()
                 let residentReleased = residentMemory()
+                let reloadStart = ProcessInfo.processInfo.systemUptime
+                let reloadSeconds: Double?
+                do {
+                    try await worker.prepare(model)
+                    reloadSeconds = ProcessInfo.processInfo.systemUptime - reloadStart
+                } catch {
+                    // Preserve completed rows if current memory pressure prevents
+                    // this optional second load. Never silently erase a run.
+                    reloadSeconds = nil
+                }
+                await worker.unloadAndWait()
                 let encoder = JSONEncoder()
                 encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
                 let report = Report(model: model.name, loadSeconds: load, footprintBefore: before,
                                     footprintLoaded: loaded, footprintReleased: released,
                                     residentLoaded: residentLoaded, residentReleased: residentReleased, warmIdleCPUPercent: idleCPU,
                                     deadlineSeconds: deadlineSeconds, deadlineStopped: deadlineStopped,
-                                    cancellationStopped: cancellationStopped, rows: rows)
+                                    cancellationStopped: cancellationStopped, reloadSeconds: reloadSeconds, rows: rows)
                 try encoder.encode(report).write(to: output, options: .atomic)
                 exit(0)
+            } catch let failure as CleanupFailure {
+                fputs("Cleanup evaluation failed: \(failure)\n", stderr)
+                exit(1)
             } catch {
                 // Only explicit synthetic input runs here, but don't print model
                 // paths or provider errors into the app's diagnostic pipeline.
                 fputs("Cleanup evaluation failed\n", stderr)
+                exit(1)
+            }
+        }
+        return true
+    }
+
+    struct LearningFixture: Codable {
+        let id: String
+        let original: String
+        let edited: String
+        let expected: [VocabularyCorrection]
+    }
+    struct LearningRow: Codable {
+        let id: String
+        let approved: [VocabularyCorrection]
+        let expected: [VocabularyCorrection]
+        let passed: Bool
+        let seconds: Double
+    }
+
+    private static func runLearningIfRequested() -> Bool {
+        guard let index = CommandLine.arguments.firstIndex(of: "--evaluate-correction-learning"),
+              CommandLine.arguments.count > index + 2 else { return false }
+        let input = URL(fileURLWithPath: CommandLine.arguments[index + 1])
+        let output = URL(fileURLWithPath: CommandLine.arguments[index + 2])
+        let model = CommandLine.arguments.count > index + 3 ? CleanupModel(rawValue: CommandLine.arguments[index + 3]) ?? .gemma4E2B : .gemma4E2B
+        Task {
+            do {
+                let fixtures = try JSONDecoder().decode([LearningFixture].self, from: Data(contentsOf: input))
+                let service = CleanupService()
+                service.configure(model: model, enabled: true)
+                var rows: [LearningRow] = []
+                for fixture in fixtures {
+                    let started = ProcessInfo.processInfo.systemUptime
+                    let approved = try await service.assess(CorrectionEdit(original: fixture.original, edited: fixture.edited))
+                    rows.append(LearningRow(id: fixture.id, approved: approved, expected: fixture.expected,
+                                            passed: Set(approved) == Set(fixture.expected),
+                                            seconds: ProcessInfo.processInfo.systemUptime - started))
+                }
+                await service.shutdown()
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                try encoder.encode(rows).write(to: output, options: .atomic)
+                exit(0)
+            } catch {
+                fputs("Correction learning evaluation failed\n", stderr)
                 exit(1)
             }
         }

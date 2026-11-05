@@ -70,10 +70,10 @@ struct LocalDiagnosticLogHandler: LogHandler {
         set { metadata[key] = newValue }
     }
     func log(event: LogEvent) {
-        guard ["agency.thatworks.WhiskerFlow.DictationLifecycle", "agency.thatworks.WhiskerFlow.MeetingProcessing"].contains(label) else { return }
+        guard ["agency.thatworks.WhiskerFlow.DictationLifecycle", "agency.thatworks.WhiskerFlow.MeetingProcessing", "agency.thatworks.WhiskerFlow.Cleanup"].contains(label) else { return }
         var values = metadata
         if let extra = event.metadata { values.merge(extra) { _, new in new } }
-        let allowedEvents: Set = ["meeting_window_empty", "meeting_speaker_probe", "app_started", "state_changed", "recording_requested", "recording_rejected", "recording_started", "finish_started", "decode_returned", "paste_started", "paste_posted", "paste_returned", "finish_returned", "finish_timeout", "capture_discarded", "main_thread_stalled", "main_thread_recovered", "heartbeat", "stage_started", "stage_finished", "resource_snapshot", "stack_capture_started", "stack_captured", "stack_capture_failed", "stack_capture_skipped", "call_detection_started", "call_detected", "call_ended", "call_unrecognised", "correction_watch", "correction_observed", "dictionary_learned", "capture_engine_timeout", "capture_start_timing", "capture_opening", "interaction_state", "hotkey_transition", "system_sleep", "system_wake", "monitoring_gap", "globe_key_override_applied", "globe_key_override_restored", "media_pause_checked", "media_paused", "media_resumed"]
+        let allowedEvents: Set = ["cleanup_finished", "correction_assessed", "meeting_window_empty", "meeting_speaker_probe", "app_started", "state_changed", "recording_requested", "recording_rejected", "recording_started", "finish_started", "decode_returned", "paste_started", "paste_posted", "paste_returned", "finish_returned", "finish_timeout", "capture_discarded", "main_thread_stalled", "main_thread_recovered", "heartbeat", "stage_started", "stage_finished", "resource_snapshot", "stack_capture_started", "stack_captured", "stack_capture_failed", "stack_capture_skipped", "call_detection_started", "call_detected", "call_ended", "call_unrecognised", "correction_watch", "correction_observed", "dictionary_learned", "capture_engine_timeout", "capture_start_timing", "capture_opening", "interaction_state", "hotkey_transition", "system_sleep", "system_wake", "monitoring_gap", "globe_key_override_applied", "globe_key_override_restored", "media_pause_checked", "media_paused", "media_resumed"]
         guard let name = values["event"]?.description, allowedEvents.contains(name) else { return }
         var fields = ["event": name, "level": event.level.rawValue]
         for key in ["window_start_ms", "window_end_ms", "worker_elapsed_ms", "resume_delay_ms", "sample_report_bytes", "sample_thread_headers", "sample_main_headers", "sample_symbol_lines", "elapsed_ms", "pending", "samples", "conversion_failures", "speaker_count", "visual_tile_count", "load_1m", "cpu_count", "app_cpu_percent", "system_cpu_percent", "sample_interval_ms", "rss_bytes", "swap_used_bytes", "swapins_pages", "swapouts_pages", "swapins_delta_pages", "swapouts_delta_pages", "compressed_pages", "page_size_bytes", "window_sources", "titles", "titles_with_meet", "titles_with_code", "corrections", "learned", "engine_ms", "engine_start_ms", "visible_windows", "context_age_ms"] {
@@ -90,6 +90,7 @@ struct LocalDiagnosticLogHandler: LogHandler {
             if let value = values[key]?.description, states.contains(value) { fields[key] = value }
         }
         let categories: [String: Set<String>] = [
+            "cleanup_outcome": ["cleaned", "partial", "unchanged", "rejected", "cancelled", "fallback", "skipped", "too_long", "unavailable", "approved", "failed"],
             "track": ["microphone", "system", "mixed"],
             "capture_failure": ["no_frames", "launch_failed", "terminated", "nonzero_exit", "write_failed"],
             "stage": ["recognition", "translation", "text_processing", "history_save", "ui_update", "completion_sound"],

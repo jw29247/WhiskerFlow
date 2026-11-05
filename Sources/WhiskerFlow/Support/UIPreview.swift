@@ -76,10 +76,6 @@ enum UIPreview {
     static var isPaired: Bool { mode != "disconnected" && mode != "setup" && onboardingStep == nil }
     /// `--ui-destination=Dictionary` opens that sidebar item for screenshots.
     static var destination: String? { argument("--ui-destination=") }
-    static var dictionaryTab: DictionaryTab {
-        argument("--ui-dictionary-tab=").flatMap(DictionaryTab.init(rawValue:)) ?? .words
-    }
-
     /// `--ui-snapshot=/path.png` renders the main window into a PNG once the UI
     /// has settled, then quits. It draws in-process, so it needs no Screen
     /// Recording permission.
@@ -143,8 +139,8 @@ enum UIPreview {
                 onboardingStore.save(OnboardingProgress(current: step, furthest: step,
                                                         completed: passed.filter { $0 < step }, startedAt: Date()))
             }
-            let (dictionary, corrections) = sampleDictionary()
-            let state = AppState(settings: settings, store: store, correctionStore: corrections,
+            let dictionary = sampleDictionary()
+            let state = AppState(settings: settings, store: store,
                                  dictionaryStore: dictionary, microphonePermission: permission,
                                  onboardingStore: onboardingStore)
             if mode != "empty" && mode != "setup" && onboardingStep == nil {
@@ -201,7 +197,7 @@ enum UIPreview {
 
     /// Sample entries covering every row state: starred, learned, imported,
     /// absorbed misspellings, flags, usage, and suggestions both blocked and demoted.
-    private static func sampleDictionary() -> (DictionaryStore, CorrectionStore) {
+    private static func sampleDictionary() -> DictionaryStore {
         let now = Date()
         let hours = { (h: Double) in now.addingTimeInterval(-h * 3600) }
         func entry(_ base: DictionaryEntry, starred: Bool = false, uses: Int = 0, lastUsed: Date? = nil) -> DictionaryEntry {
@@ -212,7 +208,7 @@ enum UIPreview {
             return entry
         }
         var dictionary = UserDictionary()
-        guard mode != "empty" && mode != "setup" else { return (DictionaryStore(), CorrectionStore()) }
+        guard mode != "empty" && mode != "setup" else { return DictionaryStore() }
         dictionary.entries = [
             entry(.word("Siobhan", addedAt: hours(900)), starred: true, uses: 14, lastUsed: hours(2)),
             entry(.word("Kubernetes", variants: ["kubernetis"], origin: .learned, addedAt: hours(300)), uses: 6, lastUsed: hours(30)),
@@ -227,15 +223,9 @@ enum UIPreview {
         demoted.useCount = 1
         dictionary.demoted = [DemotedEntry(entry: demoted, demotedAt: hours(20))]
         dictionary.readOnlyUsage[DictionaryPair(heard: "manukora", written: "Manukora").key] = DictionaryUsageStat(count: 4, lastUsedAt: hours(26))
-        let corrections = CorrectionStore()
-        corrections.record([VocabularyCorrection(find: "firmest teller", replaceWith: "Firma Stella")], sessionID: UUID(), application: "Slack")
-        for app in ["Notes", "Mail", "Slack"] {
-            corrections.record([VocabularyCorrection(find: "word", replaceWith: "Word")], sessionID: UUID(), application: app)
-        }
-        corrections.record([VocabularyCorrection(find: "oti", replaceWith: "Otty")], sessionID: UUID(), application: "Linear")
         let store = DictionaryStore()
         store.update { $0 = dictionary }
-        return (store, corrections)
+        return store
     }
 
     /// One second of silence, so the detail view shows its recording controls.

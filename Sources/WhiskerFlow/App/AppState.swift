@@ -112,8 +112,8 @@ final class AppState {
             lifecycleLogger.info("Dictation state changed", metadata: ["event": "state_changed", "state": "\(status.diagnosticName)", "session": "\(latestRecordingSessionID?.uuidString ?? "")", "recording": "\(isRecording)", "transcribing": "\(isTranscribing)"])
         }
     }
-    var isRecording = false
-    var isTranscribing = false
+    var isRecording = false { didSet { automaticCorrections.setBusy(isRecording || isTranscribing) } }
+    var isTranscribing = false { didSet { automaticCorrections.setBusy(isRecording || isTranscribing) } }
     var audioLevel: Float = 0
     /// Rolling verdict on the live input, surfaced as a HUD warning.
     var signalQuality: AudioSignalQuality = .unknown
@@ -126,9 +126,6 @@ final class AppState {
     var devices: [AudioInputDescriptor] = []
     var lastError: String?
     var searchText = ""
-    /// Corrections spotted in the user's last transcript edit, offered as
-    /// personal vocabulary rules until accepted or dismissed.
-    var pendingVocabularySuggestions: [VocabularyCorrection] = []
     /// The latest automatic Dictionary addition, offered for Undo.
     var dictionaryNotice: DictionaryNotice?
     var meetingModelState: ModelState = .unloaded
@@ -162,9 +159,10 @@ final class AppState {
     var meetingAssistant: MeetingAssistantController { meetingCapture.assistant }
     private var correctionEditBaselines: [UUID: String] = [:]
     /// What the latest paste or History edit added to the Dictionary.
-    private var learnedThisSession: (id: UUID, changes: [DictionaryChange])?
+    private var learnedBySession: [UUID: [DictionaryChange]] = [:]
+    private var assessedPairsBySession: [UUID: [DictionaryPair]] = [:]
+    let automaticCorrections = AutomaticCorrectionLearner()
     let assistant: AssistantController
-    let corrections: CorrectionStore
     let dictionary: DictionaryStore
     let insights: InsightsStore
     /// The company board in Atlas: daily counts go up, everyone's come back.
@@ -252,13 +250,13 @@ final class AppState {
     init(
         settings: AppSettings? = nil,
         store: TranscriptStore? = nil,
-        correctionStore: CorrectionStore? = nil,
         dictionaryStore: DictionaryStore? = nil,
         insightsStore: InsightsStore? = nil,
         microphonePermission: MicrophonePermissionController? = nil,
         pasteService: (any TextDeliveryService)? = nil,
         onboardingStore: (any OnboardingProgressStoring)? = nil,
-        transcription: TranscriptionService? = nil
+        transcription: TranscriptionService? = nil,
+        correctionAssessor: ((CorrectionEdit) async throws -> [VocabularyCorrection])? = nil
     ) {
         let resolvedSettings = settings ?? AppSettings()
         let resolvedMicrophonePermission = microphonePermission ?? MicrophonePermissionController(
@@ -268,7 +266,6 @@ final class AppState {
         self.settings = resolvedSettings
         self.store = store ?? .defaultStore()
         self.assistant = store == nil && !UIPreview.isEnabled ? .defaultStore() : AssistantController()
-        self.corrections = correctionStore ?? (store == nil ? .defaultStore() : CorrectionStore())
         self.dictionary = dictionaryStore ?? (store == nil
             ? .defaultStore(legacyVocabulary: resolvedSettings.vocabulary)
             : DictionaryStore(legacyVocabulary: resolvedSettings.vocabulary))
@@ -348,12 +345,17 @@ final class AppState {
         }
         correctionMonitor.isEnabled = { [weak self] in
             guard let self else { return false }
-            return self.settings.rememberCorrections && !UIPreview.isEnabled
+            return self.settings.cleanupEnabled && self.settings.rememberCorrections && !UIPreview.isEnabled
         }
-        correctionMonitor.onCorrections = { [weak self] changes, sessionID, application in
-            self?.corrections.record(changes, sessionID: sessionID, application: application)
-            self?.learnFromCorrections(changes, sessionID: sessionID)
+        correctionMonitor.onEdit = { [weak self] original, edited, sessionID, application in
+            self?.automaticCorrections.enqueue(original: original, edited: edited, sessionID: sessionID, application: application)
         }
+        automaticCorrections.assess = correctionAssessor ?? { [weak self] edit in
+            guard let self else { throw CancellationError() }
+            return try await self.cleanup.assess(edit)
+        }
+        automaticCorrections.onValidated = { [weak self] edit, approved in self?.applyValidatedCorrections(edit, approved: approved) }
+        automaticCorrections.configure(enabled: self.settings.cleanupEnabled && self.settings.rememberCorrections)
         live.onLevel = { [weak self] level, peak in
             guard let self else { return }
             audioLevel = level
@@ -650,8 +652,6 @@ final class AppState {
 
         records = store.records
         selectedRecordID = records.first?.id
-        dictionary.update { DictionaryLearning.demoteStale(&$0) }
-        learnHeldDictionaryRewritesOnce()
         loadInsights()
         startRetentionPruning()
         refreshAccessibilityPermission()
@@ -731,6 +731,7 @@ final class AppState {
     /// a wedged decode must not keep the process alive past it.
     func shutdown() async {
         stopMonitors()
+        automaticCorrections.stop()
         await cleanup.shutdown()
         warmUpTask?.cancel()
         warmUpTask = nil
@@ -868,7 +869,12 @@ final class AppState {
     /// The team glossary plus the user's personal rules, applied to every
     /// transcript. Personal rules override shared ones on conflict.
     var effectiveVocabulary: Vocabulary {
-        Vocabulary.effective(shared: Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: assistant.vocabulary), personal: dictionary.vocabulary)
+        dictationVocabulary(usesCleanup: settings.cleanupEnabled, includesClient: true)
+    }
+
+    func dictationVocabulary(usesCleanup: Bool, includesClient: Bool) -> Vocabulary {
+        let shared = includesClient ? Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: assistant.vocabulary) : sharedVocabulary.vocabulary
+        return Vocabulary.effective(shared: shared, personal: usesCleanup ? dictionary.vocabulary : dictionary.explicitVocabulary)
     }
 
     // MARK: - Dictionary
@@ -888,92 +894,48 @@ final class AppState {
         return shared + client
     }
 
-    var correctionObservations: [CorrectionObservation] {
-        corrections.records.map {
-            CorrectionObservation(pair: DictionaryPair(heard: $0.original, written: $0.replacement),
-                                  sessionID: $0.sessionID, application: $0.application, date: $0.date)
-        }
-    }
-
-    var dictionarySuggestions: [DictionarySuggestion] {
-        DictionaryLearning.suggestions(observations: correctionObservations, dictionary: dictionary.dictionary,
-                                       readOnly: readOnlyDictionaryRules)
-    }
-
     /// Hints for the recognisers, from the Dictionary and the read-only libraries.
     var recognizerHints: RecognizerHints {
         RecognizerHints(
             terms: DictionaryBiasing.terms(personal: dictionary.entries, readOnly: readOnlyDictionaryRules.map(\.rule)),
-            appleSpeech: settings.biasAppleSpeech,
-            parakeet: settings.biasParakeet
+            appleSpeech: settings.biasAppleSpeech && !settings.cleanupEnabled,
+            parakeet: settings.biasParakeet && !settings.cleanupEnabled
         )
     }
 
-    /// Promotes corrections that have now been seen often enough. `changes` is
-    /// the whole of the edit in one paste or History record so far, so anything
-    /// that edit added earlier and no longer contains (a half-typed fix, an
-    /// edit the user took back) is removed again.
-    private func learnFromCorrections(_ changes: [VocabularyCorrection], sessionID: UUID) {
-        guard settings.rememberCorrections, settings.autoAddLearnedWords else { return }
-        let pairs = changes.map { DictionaryPair(heard: $0.find, written: $0.replaceWith) }
-        var earlier = learnedThisSession?.id == sessionID ? learnedThisSession?.changes ?? [] : []
+    private func applyValidatedCorrections(_ edit: AutomaticCorrectionLearner.Pending, approved: [VocabularyCorrection]) {
+        guard settings.cleanupEnabled, settings.rememberCorrections else { return }
+        let pairs = approved.map { DictionaryPair(heard: $0.find, written: $0.replaceWith) }
+        let earlier = learnedBySession[edit.sessionID] ?? []
         let superseded = earlier.filter { !pairs.contains($0.pair) }
-        earlier.removeAll { !pairs.contains($0.pair) }
+        assessedPairsBySession[edit.sessionID] = pairs
+        let confirmedElsewhere = Set(assessedPairsBySession.filter { $0.key != edit.sessionID }.flatMap(\.value))
         var learned: [DictionaryChange] = []
-        let observations = correctionObservations
-        let readOnly = readOnlyDictionaryRules
         dictionary.update { dictionary in
-            for change in superseded.reversed() { DictionaryLearning.revert(change, in: &dictionary) }
-            learned = DictionaryLearning.learn(from: pairs, observations: observations, dictionary: &dictionary,
-                                               readOnly: readOnly, isKnownWord: Self.isKnownWord)
+            for change in superseded.reversed() where !confirmedElsewhere.contains(change.pair)
+                && dictionary.entries.contains(where: { $0.id == change.after.id && $0.origin == .learned && $0.pair == change.pair }) {
+                DictionaryLearning.revert(change, in: &dictionary)
+            }
+            learned = DictionaryLearning.learnAssessed(pairs, in: &dictionary)
         }
-        learnedThisSession = (sessionID, earlier + learned)
+        if learnedBySession.count >= 100 {
+            learnedBySession.removeAll()
+            assessedPairsBySession = [edit.sessionID: pairs]
+        }
+        learnedBySession[edit.sessionID] = earlier.filter { pairs.contains($0.pair) } + learned
         if let notice = dictionaryNotice, !superseded.isEmpty {
             let kept = notice.changes.filter { change in !superseded.contains { $0.after.id == change.after.id } }
             dictionaryNotice = kept.isEmpty ? nil : DictionaryNotice(changes: kept, isSaved: dictionary.errorMessage == nil)
         }
-        lifecycleLogger.info("Dictionary learning ran", metadata: ["event": "dictionary_learned", "corrections": "\(pairs.count)",
-                                                                   "learned": "\(learned.count)"])
-        guard !learned.isEmpty else { return }
-        dictionaryNotice = DictionaryNotice(changes: learned, isSaved: dictionary.errorMessage == nil)
-        // A short HUD note for users who fixed the word in another app; Undo lives
-        // in the main window and the Dictionary, since the HUD takes no clicks.
-        if !isRecording, !isTranscribing, status == .idle || status.hudNotificationMessage != nil, status != .delivering {
-            if let error = dictionary.errorMessage {
-                status = .failure(error)
-            } else {
-                status = .success(dictionaryNotice?.hudMessage ?? "Added to Dictionary")
-            }
-        }
+        lifecycleLogger.info("Corrections learned", metadata: ["event": "dictionary_learned", "corrections": "\(pairs.count)", "learned": "\(learned.count)"])
+        if !learned.isEmpty { dictionaryNotice = DictionaryNotice(changes: learned, isSaved: dictionary.errorMessage == nil) }
     }
 
-    /// Used only to keep ordinary sentence lowercasing out of the dictionary.
-    /// Lowercase English avoids the checker's name and acronym exemptions.
-    static func isKnownWord(_ word: String) -> Bool {
-        NSSpellChecker.shared.checkSpelling(of: word.lowercased(), startingAt: 0, language: "en", wrap: false,
-                                            inSpellDocumentWithTag: 0, wordCount: nil).location == NSNotFound
-    }
-
-    /// Earlier builds saved a spelling hint on the first correction of a real
-    /// word, leaving the mishearing unchanged. Recover those rewrites once.
-    func learnHeldDictionaryRewritesOnce() {
-        guard !settings.dictionaryHeldRewritesLearned, settings.rememberCorrections,
-              settings.autoAddLearnedWords, !UIPreview.isEnabled,
-              dictionary.errorMessage == nil, corrections.errorMessage == nil else { return }
-        let observations = correctionObservations
-        let readOnly = readOnlyDictionaryRules
-        var learned: [DictionaryChange] = []
+    func removeCorrection(_ entry: DictionaryEntry) {
         dictionary.update { dictionary in
-            learned = DictionaryLearning.learnHeldRewrites(observations: observations, dictionary: &dictionary,
-                                                           readOnly: readOnly, isKnownWord: Self.isKnownWord)
+            dictionary.entries.removeAll { $0.id == entry.id }
+            for rule in entry.rules { dictionary.reject(DictionaryPair(heard: rule.find, written: rule.replaceWith)) }
         }
-        if !learned.isEmpty {
-            dictionaryNotice = DictionaryNotice(changes: learned, isSaved: dictionary.errorMessage == nil)
-        }
-        guard dictionary.errorMessage == nil else { return }
-        settings.dictionaryHeldRewritesLearned = true
-        lifecycleLogger.info("Dictionary held rewrites learned", metadata: ["event": "dictionary_held_rewrites",
-                                                                            "learned": "\(learned.count)"])
     }
 
     func undoDictionaryNotice() {
@@ -982,15 +944,6 @@ final class AppState {
             for change in notice.changes.reversed() { DictionaryLearning.undo(change, in: &dictionary) }
         }
         dictionaryNotice = nil
-    }
-
-    func acceptDictionarySuggestion(_ suggestion: DictionarySuggestion) {
-        dictionary.update { _ = DictionaryLearning.accept(suggestion, in: &$0) }
-    }
-
-    func dismissDictionarySuggestion(_ suggestion: DictionarySuggestion) {
-        dictionary.update { DictionaryLearning.dismiss(suggestion, in: &$0) }
-        corrections.remove(VocabularyCorrection(find: suggestion.pair.heard, replaceWith: suggestion.pair.written))
     }
 
     /// Counts which entries shaped a delivered transcript, then retires
@@ -1012,7 +965,6 @@ final class AppState {
         let now = Date()
         dictionary.update { dictionary in
             DictionaryUsage.record(counts, readOnly: readOnly, in: &dictionary, at: now)
-            DictionaryLearning.demoteStale(&dictionary, at: now)
         }
     }
 
@@ -1191,14 +1143,8 @@ final class AppState {
             if settings.rememberCorrections {
                 let baseline = correctionEditBaselines[record.id] ?? record.text
                 correctionEditBaselines[record.id] = baseline
-                let changes = VocabularyCorrectionDetector.corrections(original: baseline, edited: text,
-                                                                       maxSuggestions: 20, allowShortCorrections: true)
-                corrections.record(changes, sessionID: record.id, application: "WhiskerFlow")
-                learnFromCorrections(changes, sessionID: record.id)
+                automaticCorrections.enqueue(original: baseline, edited: text, sessionID: record.id, application: "WhiskerFlow")
             }
-            pendingVocabularySuggestions = VocabularyCorrectionDetector.corrections(
-                original: record.text, edited: text, existingRules: effectiveVocabulary
-            )
         } catch {
             handleStorageError(error, message: "Could not save transcript changes")
         }
@@ -1227,20 +1173,6 @@ final class AppState {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         status = .success("Copied to clipboard")
-    }
-
-    func acceptVocabularySuggestion(_ suggestion: VocabularyCorrection) {
-        let pair = DictionaryPair(heard: suggestion.find, written: suggestion.replaceWith)
-        let evaluation = DictionaryLearning.evaluate(pair, observations: correctionObservations,
-                                                     dictionary: dictionary.dictionary, readOnly: readOnlyDictionaryRules)
-        let accepted = DictionarySuggestion(pair: pair, proposed: evaluation.proposed, sightings: evaluation.sightings,
-                                            lastSeen: nil, applications: [], demotedAt: nil, issues: evaluation.issues)
-        acceptDictionarySuggestion(accepted)
-        pendingVocabularySuggestions.removeAll { $0 == suggestion }
-    }
-
-    func dismissVocabularySuggestions() {
-        pendingVocabularySuggestions = []
     }
 
     func delete(_ record: TranscriptRecord) {
@@ -1325,7 +1257,7 @@ final class AppState {
                 let english = await self.englishText(for: outcome.result.text, configuration: configuration)
                 let cleaned = await self.cleanupText(english.text, configuration: configuration)
                 let text = await Task.detached(priority: .userInitiated) {
-                    AssistantTextProcessing.process(cleaned, tone: configuration.writing.tone,
+                    AssistantTextProcessing.finish(cleaned.text, usesCleanup: configuration.cleanupModel != nil, tone: configuration.writing.tone,
                                                     vocabulary: configuration.vocabulary, formatting: configuration.formatting,
                                                     recognizeCorrections: configuration.recognizeCorrections)
                 }.value
@@ -2356,7 +2288,7 @@ final class AppState {
             lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "text_processing", "session": "\(sessionID ?? record.id)"])
             let processed = await Task.detached(priority: .userInitiated) {
                 let started = ProcessInfo.processInfo.systemUptime
-                let text = AssistantTextProcessing.process(cleaned, tone: configuration.writing.tone,
+                let text = AssistantTextProcessing.finish(cleaned.text, usesCleanup: configuration.cleanupModel != nil, tone: configuration.writing.tone,
                     vocabulary: configuration.vocabulary, formatting: configuration.formatting,
                     recognizeCorrections: configuration.recognizeCorrections)
                 let completed = ProcessInfo.processInfo.systemUptime
@@ -2652,20 +2584,19 @@ final class AppState {
         var formatting = settings.formatting
         formatting.language = plan.outputLanguage
         let writing = assistant.resolveWritingStyle(AppContext(bundleIdentifier: pasteTargetApplication?.bundleIdentifier))
+        let usesCleanup = settings.cleanupEnabled && assistant.capturePurpose != .selectionInstruction && writing.tone != .literal
         return TranscriptionJobConfiguration(
             engine: engine,
             language: language,
             languagePlan: plan,
-            vocabulary: accountReady ? effectiveVocabulary : Vocabulary.effective(shared: sharedVocabulary.vocabulary, personal: dictionary.vocabulary),
+            vocabulary: dictationVocabulary(usesCleanup: usesCleanup, includesClient: accountReady),
             formatting: formatting,
             allowAppleFallback: allowAppleFallback,
             delivery: settings.delivery,
             playSounds: settings.playSounds,
             writing: writing,
             recognizeCorrections: assistant.saved.recognizeCorrections,
-            cleanupModel: settings.cleanupEnabled && assistant.capturePurpose != .selectionInstruction
-                && writing.tone != .literal
-                ? .gemma2 : nil,
+            cleanupModel: usesCleanup ? .gemma4E2B : nil,
             hints: recognizerHints,
             purpose: assistant.capturePurpose,
             quickKind: assistant.quickCaptureKind,
@@ -2675,13 +2606,15 @@ final class AppState {
     }
 
     func configureCleanup() {
-        cleanup.configure(model: .gemma2, enabled: settings.cleanupEnabled)
+        cleanup.configure(model: .gemma4E2B, enabled: settings.cleanupEnabled)
+        automaticCorrections.configure(enabled: settings.cleanupEnabled && settings.rememberCorrections)
+        if settings.cleanupEnabled && !UIPreview.isEnabled { cleanup.prewarm(.gemma4E2B) }
     }
 
-    private func cleanupText(_ text: String, configuration: TranscriptionJobConfiguration) async -> String {
+    private func cleanupText(_ text: String, configuration: TranscriptionJobConfiguration) async -> CleanupResult {
         guard let model = configuration.cleanupModel, configuration.writing.tone != .literal,
-              configuration.purpose != .selectionInstruction else { return text }
-        return await cleanup.clean(text, model: model).text
+              configuration.purpose != .selectionInstruction else { return CleanupResult(text: text, outcome: "skipped") }
+        return await cleanup.clean(text, model: model, vocabulary: configuration.vocabulary)
     }
 
     /// Apple's speech model for the chosen language, if it isn't Parakeet's.

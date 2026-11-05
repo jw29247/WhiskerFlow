@@ -266,80 +266,16 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            sharedLibrarySection
-
-            Section("Your dictionary") {
-                Text("Words and replacements now live in the Dictionary (⌘4 in the main window), with learned suggestions, usage and CSV import/export. \(appState.dictionary.entries.count) personal \(appState.dictionary.entries.count == 1 ? "entry" : "entries").")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Recogniser hints") {
-                Text("Tell the speech recogniser which Dictionary words to expect, before any replacements run. Replacements still apply afterwards either way.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Toggle("Apple Speech", isOn: $appState.settings.biasAppleSpeech)
-                Text("Passes Words and the written side of Replacements as contextual phrases (up to 100).")
+            Section("Corrections") {
+                Text("Cleanup uses the spellings you fix and relevant team terms in one local AI pass. Recognition fixes are learned automatically after AI checks them. View or forget saved entries in Corrections (⌘4).")
                     .font(.caption).foregroundStyle(.secondary)
-                Toggle("Parakeet", isOn: $appState.settings.biasParakeet)
-                    .onChange(of: appState.settings.biasParakeet) { _, enabled in
-                        if enabled { appState.warmUpEngine() }
-                    }
-                Text("Rescores the transcript against a separate 98 MB English-only model, downloaded once. Adds about 0.2 s and can occasionally swap in the wrong term.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-    }
-
-    private var sharedLibrarySection: some View {
-        Section("Shared library") {
-            Text("Agency-managed client names and phrases refresh automatically and remain available offline.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            HStack {
-                sharedStatusView
-                Spacer()
-                Button("Refresh") { appState.refreshSharedVocabulary() }
-            }
-
-            if !appState.sharedVocabulary.rules.isEmpty {
-                DisclosureGroup("\(appState.sharedVocabulary.rules.count) shared replacements") {
-                    ForEach(appState.sharedVocabulary.rules) { rule in
-                        HStack {
-                            Text(rule.find)
-                            Image(systemName: "arrow.right").foregroundStyle(.secondary)
-                            Text(rule.replaceWith)
-                            Spacer()
-                        }
-                        .foregroundStyle(.secondary)
-                    }
+                if !appState.settings.cleanupEnabled {
+                    Text("Enable Cleanup to use contextual AI corrections. Existing spelling rules remain available as a fallback.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
-    }
-
-    @ViewBuilder
-    private var sharedStatusView: some View {
-        switch appState.sharedVocabulary.status {
-        case .idle:
-            Text("Not configured").font(.caption).foregroundStyle(.secondary)
-        case .loading:
-            Label("Updating…", systemImage: "arrow.triangle.2.circlepath")
-                .font(.caption).foregroundStyle(.secondary)
-        case .loaded(let count, let date):
-            VStack(alignment: .leading, spacing: 2) {
-                Label("\(count) terms loaded", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Text("Updated \(date.formatted(date: .abbreviated, time: .shortened))")
-                    .foregroundStyle(.secondary)
-            }
-            .font(.caption)
-        case .failed(let message):
-            Label(message, systemImage: "exclamationmark.triangle")
-                .font(.caption).foregroundStyle(.orange).lineLimit(1)
-        }
+        .formStyle(.grouped)
     }
 
 }

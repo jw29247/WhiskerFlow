@@ -7,7 +7,7 @@ final class CleanupServiceTests: XCTestCase {
     func testDisabledCleanupReturnsOriginalWithoutLoadingAModel() async {
         let service = CleanupService()
         let input = "Um, don't change this yet."
-        let result = await service.clean(input, model: .gemma2)
+        let result = await service.clean(input, model: .gemma4E2B)
         XCTAssertEqual(result.text, input)
         XCTAssertEqual(result.outcome, "skipped")
         XCTAssertFalse(service.needsShutdown)
@@ -16,11 +16,11 @@ final class CleanupServiceTests: XCTestCase {
 
     func testOversizedTranscriptKeepsOriginalWithoutLoading() async {
         let service = CleanupService()
-        service.configure(model: .gemma2, enabled: true)
+        service.configure(model: .gemma4E2B, enabled: true)
         let input = String(repeating: "A", count: TranscriptCleanup.maximumCharacters + 1)
-        let result = await service.clean(input, model: .gemma2)
+        let result = await service.clean(input, model: .gemma4E2B)
         XCTAssertEqual(result.text, input)
-        XCTAssertEqual(result.outcome, "skipped")
+        XCTAssertEqual(result.outcome, "too_long")
         XCTAssertFalse(service.needsShutdown)
     }
 
@@ -28,6 +28,6 @@ final class CleanupServiceTests: XCTestCase {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: file) }
         try Data("unexpected model data".utf8).write(to: file)
-        XCTAssertThrowsError(try CleanupWorker.validate(file, model: .gemma2))
+        XCTAssertThrowsError(try CleanupWorker.validate(file, model: .gemma4E2B))
     }
 }

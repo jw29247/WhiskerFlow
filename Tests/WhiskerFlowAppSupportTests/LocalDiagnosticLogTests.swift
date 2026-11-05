@@ -79,6 +79,22 @@ final class LocalDiagnosticLogTests: XCTestCase {
         XCTAssertFalse(line.contains("transcript"))
     }
 
+    func testCleanupOutcomesAreRecordedWithoutTranscriptOrLearnedTerms() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sink = LocalDiagnosticLog(directory: root)
+        let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.Cleanup", factory: { LocalDiagnosticLogHandler(label: $0, sink: sink) })
+        logger.info("private text", metadata: ["event": "cleanup_finished", "cleanup_outcome": "rejected", "elapsed_ms": "120",
+                                              "transcript": "private text", "heard": "private term"])
+        logger.info("private text", metadata: ["event": "correction_assessed", "cleanup_outcome": "private term"])
+        sink.flush()
+        let lines = try String(contentsOf: root.appendingPathComponent("diagnostics.jsonl"))
+        XCTAssertTrue(lines.contains("rejected"))
+        XCTAssertTrue(lines.contains("correction_assessed"))
+        XCTAssertFalse(lines.contains("private"))
+        XCTAssertFalse(lines.contains("transcript"))
+    }
+
     func testRotationBoundsRetainedFiles() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

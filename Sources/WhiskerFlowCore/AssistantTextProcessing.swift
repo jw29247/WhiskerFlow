@@ -35,6 +35,17 @@ public enum AssistantTextProcessing {
         }
     }
 
+    /// Cleanup owns wording, self-corrections and spelling, including its fallback. Only
+    /// layout commands and the selected writing style remain after it.
+    public static func finish(_ text: String, usesCleanup: Bool, tone: WritingTone, vocabulary: Vocabulary,
+                              formatting: FormattingOptions, recognizeCorrections: Bool) -> String {
+        guard usesCleanup else { return process(text, tone: tone, vocabulary: vocabulary, formatting: formatting,
+                                             recognizeCorrections: recognizeCorrections) }
+        let layout = TranscriptFormatter.format(text, options: .init(spokenLineCommands: formatting.spokenLineCommands,
+            removeFillerWords: false, language: formatting.language))
+        return WritingToneRenderer.render(layout, tone: tone)
+    }
+
     /// Counts the corrections `process` applies to `raw`, for Insights. Run off
     /// the delivery path: it repeats the self-correction and vocabulary passes.
     public static func correctionCounts(_ raw: String, tone: WritingTone, vocabulary: Vocabulary,

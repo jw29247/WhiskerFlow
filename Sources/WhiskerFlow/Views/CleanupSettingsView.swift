@@ -7,14 +7,14 @@ struct CleanupSettingsView: View {
     @State private var result: CleanupResult?
     @State private var testing = false
 
-    private let model = CleanupModel.gemma2
+    private let model = CleanupModel.gemma4E2B
 
     var body: some View {
         Form {
             Section("Cleanup") {
                 Toggle("Clean up dictation", isOn: $appState.settings.cleanupEnabled)
                     .disabled(!CleanupService.supported || (!appState.cleanup.installed(model) && !appState.settings.cleanupEnabled))
-                Text("Removes ums, accidental repeats and spoken self-corrections while keeping your wording and meaning. Runs entirely on this Mac after transcription. The original stays in History when history is enabled.")
+                Text("Corrects recognition mistakes, spelling and grammar into British English, removes hesitations and resolves spoken self-corrections while keeping your meaning. Runs entirely on this Mac after transcription. The original stays in History when history is enabled.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Cleanup is a preview. Check names, numbers and corrections before sending important text. Literal writing style and voice editing instructions skip Cleanup.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -26,23 +26,29 @@ struct CleanupSettingsView: View {
                 }
             }
 
+            Section("Learning") {
+                Text("Edits to pasted dictation and History are checked by the same local model in the background. Recognition fixes are saved to Corrections automatically. Rewording and style changes aren't learned. Dictation takes priority over learning.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("Local model") {
-                Text("Gemma 2 2B uses 4-bit weights and needs at least 8 GB of memory. Cleanup checks free memory before loading and pauses under memory pressure. Macs with less than 16 GB release it sooner between dictations.")
+                Text("Gemma 4 E2B uses 4-bit weights and needs at least 8 GB of memory. Cleanup checks free memory before loading and pauses under memory pressure. Macs with less than 16 GB release it sooner between dictations.")
                     .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Selected", value: model.name)
                 LabeledContent("Download", value: ByteCountFormatter.string(fromByteCount: model.byteCount, countStyle: .file))
                 LabeledContent("Status", value: appState.cleanup.status)
+                LabeledContent("Last transcript", value: appState.cleanup.lastRun)
                 if appState.cleanup.downloading {
                     ProgressView(value: appState.cleanup.downloadProgress)
                     Button("Cancel download") { appState.cleanup.cancelDownload() }
                 } else if !appState.cleanup.installed(model) {
-                    Text("Downloading means you agree to Google's Gemma terms and use policy. The model downloads from Hugging Face. Cleanup processes your text on this Mac.")
+                    Text("The model is provided under the Apache 2.0 licence and downloads from Hugging Face. Cleanup processes your text on this Mac.")
                         .font(.caption).foregroundStyle(.secondary)
                     HStack {
-                        Link("Gemma terms", destination: URL(string: "https://ai.google.dev/gemma/terms")!)
-                        Link("Use policy", destination: URL(string: "https://ai.google.dev/gemma/prohibited_use_policy")!)
+                        Link("Model licence", destination: URL(string: "https://huggingface.co/google/gemma-4-E2B-it/blob/main/LICENSE")!)
+                        Link("About Gemma 4", destination: URL(string: "https://huggingface.co/google/gemma-4-E2B-it")!)
                     }
-                    Button("Agree and download \(model.name)") {
+                    Button("Download \(model.name)") {
                         appState.cleanup.download(model) {
                             appState.settings.cleanupEnabled = true
                             appState.configureCleanup()
@@ -52,7 +58,7 @@ struct CleanupSettingsView: View {
                     Button("Download model again") { appState.cleanup.download(model) {} }
                         .disabled(appState.cleanup.running)
                 }
-                Text("Warms up when you start dictating, then sleeps after \(Int(model.idleSeconds)) seconds without use. Memory pressure releases the model immediately. If Cleanup is unavailable or takes too long, dictation uses the original transcript.")
+                Text("Warms up when Cleanup is enabled and when you start dictating, then sleeps after \(Int(model.idleSeconds)) seconds without use. Memory pressure releases the model immediately. If Cleanup is unavailable or takes too long, dictation uses the original transcript.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Release model memory now") { appState.cleanup.sleepNow() }
                     .disabled(appState.cleanup.running)
@@ -63,20 +69,20 @@ struct CleanupSettingsView: View {
                     .accessibilityLabel("Transcript to clean up")
                 Button(testing ? "Cleaning up…" : "Clean up this text") {
                     testing = true
+                    appState.automaticCorrections.setBusy(true)
                     let input = sample
                     let selected = model
+                    let vocabulary = appState.effectiveVocabulary
                     Task { @MainActor in
-                        result = await appState.cleanup.clean(input, model: selected)
+                        result = await appState.cleanup.clean(input, model: selected, vocabulary: vocabulary)
                         testing = false
+                        appState.automaticCorrections.setBusy(appState.isRecording || appState.isTranscribing)
                     }
-                }.disabled(testing || appState.cleanup.running || !appState.settings.cleanupEnabled
+                }.disabled(testing || appState.isRecording || appState.isTranscribing || appState.cleanup.running || !appState.settings.cleanupEnabled
                     || !appState.cleanup.installed(model) || sample.isEmpty)
                 if let result {
                     Text(result.text).textSelection(.enabled)
-                    if ["fallback", "rejected", "skipped"].contains(result.outcome) {
-                        Text("Kept the original because Cleanup couldn't safely finish.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
+                    Text(result.summary).font(.caption).foregroundStyle(.secondary)
                 }
             }
         }.formStyle(.grouped)

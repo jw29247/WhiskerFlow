@@ -1,5 +1,13 @@
 Cleanup runs Gemma locally using llama.cpp. Model files are downloaded separately.
 
+Gemma 4 E2B is distributed separately under the Apache License, Version 2.0.
+Copyright Google LLC.
+Model: https://huggingface.co/google/gemma-4-E2B-it
+License: https://www.apache.org/licenses/LICENSE-2.0
+Pinned GGUF conversion: https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF
+
+llama.cpp. Model files are downloaded separately.
+
 Gemma is provided under and subject to the Gemma Terms of Use found at https://ai.google.dev/gemma/terms.
 Gemma prohibited use policy: https://ai.google.dev/gemma/prohibited_use_policy
 Gemma models: Copyright Google LLC.

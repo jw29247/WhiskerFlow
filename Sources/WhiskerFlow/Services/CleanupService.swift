@@ -8,12 +8,27 @@ import WhiskerFlowCore
 struct CleanupResult: Sendable {
     let text: String
     let outcome: String
+
+    var summary: String {
+        switch outcome {
+        case "cleaned": return "Cleaned up the transcript"
+        case "partial": return "Cleaned up the transcript. Kept some wording to preserve your meaning."
+        case "unchanged": return "Checked the transcript. No changes needed."
+        case "rejected": return "Kept the original because the proposed edit changed too much."
+        case "cancelled": return "Cleanup was interrupted. Kept the original."
+        case "too_long": return "Transcript exceeds the preview limit. Kept the original."
+        case "unavailable": return "Cleanup is paused or the model isn't ready. Kept the original."
+        case "skipped": return "Cleanup is off or busy. Kept the original."
+        default: return "Cleanup couldn't finish in time. Kept the original."
+        }
+    }
 }
 
 @MainActor
 @Observable
 final class CleanupService {
     private(set) var status = "Off"
+    private(set) var lastRun = "No transcript checked yet"
     private(set) var downloading = false
     private(set) var running = false
     private(set) var downloadProgress: Double = 0
@@ -78,11 +93,16 @@ final class CleanupService {
         }
     }
 
-    func clean(_ original: String, model: CleanupModel) async -> CleanupResult {
+    func clean(_ original: String, model: CleanupModel, vocabulary: Vocabulary = Vocabulary()) async -> CleanupResult {
         guard configuredModel == model, !running, !downloading, canRun(model), installed(model),
               !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               original.count <= TranscriptCleanup.maximumCharacters else {
-            return CleanupResult(text: original, outcome: "skipped")
+            let outcome = original.count > TranscriptCleanup.maximumCharacters ? "too_long"
+                : configuredModel != model || running || downloading ? "skipped" : "unavailable"
+            let result = CleanupResult(text: original, outcome: outcome)
+            lastRun = result.summary
+            logger.info("Cleanup skipped", metadata: ["event": "cleanup_finished", "cleanup_outcome": "\(outcome)"])
+            return result
         }
         running = true
         needsShutdown = true
@@ -104,28 +124,31 @@ final class CleanupService {
                 Observability.cleanupOperations.add(value: 1, attributes: attributes)
                 Observability.cleanupDuration.record(value: ProcessInfo.processInfo.systemUptime - started, attributes: attributes)
                 span.setAttribute(key: "outcome", value: outcome)
-                self.logger.info("Cleanup finished", metadata: ["outcome": "\(outcome)", "model": "\(model.rawValue)"])
+                self.logger.info("Cleanup finished", metadata: ["event": "cleanup_finished", "cleanup_outcome": "\(outcome)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - started) * 1000)"])
             }
             do {
                 let worker = self.worker
                 let seconds: TimeInterval = original.count > 800 ? 8 : 3
-                let candidate = try await withAbandoningDeadline(seconds: seconds) {
-                    try await worker.generate(original, model: model, seconds: seconds)
+                let attempt = try await withAbandoningDeadline(seconds: seconds) {
+                    try await worker.cleanTranscript(original, model: model, seconds: seconds, vocabulary: vocabulary)
                 }
                 guard self.configurationID == identifier, !Task.isCancelled else {
                     outcome = "cancelled"
                     return CleanupResult(text: original, outcome: outcome)
                 }
-                guard let text = TranscriptCleanup.accepted(candidate, original: original) else {
-                    outcome = "rejected"
-                    span.status = .ok
-                    return CleanupResult(text: original, outcome: outcome)
-                }
-                outcome = text == original ? "unchanged" : "cleaned"
+                let text = attempt.text
+                span.setAttribute(key: "rejected_segments", value: attempt.rejectedSegments)
+                outcome = text == original ? (attempt.rejectedSegments > 0 ? "rejected" : "unchanged")
+                    : (attempt.rejectedSegments > 0 ? "partial" : "cleaned")
+                if text == original && attempt.incomplete { outcome = "fallback" }
                 span.status = .ok
                 return CleanupResult(text: text, outcome: outcome)
             } catch {
-                outcome = error is CancellationError ? "cancelled" : "fallback"
+                switch error {
+                case is CancellationError: outcome = "cancelled"
+                case CleanupFailure.unavailable: outcome = "unavailable"
+                default: outcome = "fallback"
+                }
                 span.status = .error(description: "Local cleanup unavailable")
                 span.addEvent(name: "exception", attributes: ["exception.type": .string(String(describing: type(of: error)))])
                 span.addEvent(name: "cleanup.fallback", attributes: ["reason": .string(outcome)])
@@ -133,11 +156,61 @@ final class CleanupService {
             }
         }
         running = false
+        lastRun = result.summary
         if configurationID == identifier {
-            status = result.outcome == "fallback" ? "Used original transcript" : "Warm and ready"
+            status = result.outcome == "unavailable" ? "Paused to save resources"
+                : result.outcome == "fallback" ? "Used original transcript" : "Warm and ready"
             scheduleSleep(model)
         }
         return result
+    }
+
+    /// Background learning shares the warmed model and is cancelled by the
+    /// caller as soon as foreground dictation starts.
+    func assess(_ edit: CorrectionEdit) async throws -> [VocabularyCorrection] {
+        guard let model = configuredModel, !running, !downloading, canRun(model), installed(model) else {
+            throw CleanupFailure.unavailable
+        }
+        let identifier = configurationID
+        needsShutdown = true
+        idleTask?.cancel()
+        defer { if configurationID == identifier { scheduleSleep(model) } }
+        let started = ProcessInfo.processInfo.systemUptime
+        return try await Observability.tracer.spanBuilder(spanName: "corrections.assess").withActiveSpan { span in
+            span.setAttributes([
+                "gen_ai.provider.name": .string("local.gemma"), "gen_ai.request.model": .string(model.rawValue),
+                "app.gen_ai.use_case": .string("correction_learning"), "app.gen_ai.call_site": .string("corrections.assess"),
+                "candidates.count": .int(edit.candidates.count)
+            ])
+            var outcome = "failed"
+            defer {
+                let dimensions: [String: AttributeValue] = ["outcome": .string(outcome), "use_case": .string("correction_learning")]
+                Observability.cleanupOperations.add(value: 1, attributes: dimensions)
+                Observability.cleanupDuration.record(value: ProcessInfo.processInfo.systemUptime - started, attributes: dimensions)
+                span.setAttribute(key: "outcome", value: outcome)
+                self.logger.info("Correction assessment finished", metadata: ["event": "correction_assessed", "cleanup_outcome": "\(outcome)"])
+            }
+            do {
+                var approved: [VocabularyCorrection] = []
+                for candidate in edit.candidates {
+                    try Task.checkCancellation()
+                    let response = try await self.worker.generatePrompt(CorrectionAssessment.prompt(for: candidate, edit: edit, model: model),
+                                                                        model: model, tokenLimit: 12, seconds: 2)
+                    guard self.configurationID == identifier else { throw CancellationError() }
+                    if CorrectionAssessment.approved(response) { approved.append(candidate) }
+                }
+                try Task.checkCancellation()
+                span.setAttribute(key: "approved.count", value: approved.count)
+                span.status = .ok
+                outcome = approved.isEmpty ? "unchanged" : "approved"
+                return approved
+            } catch {
+                outcome = error is CancellationError ? "cancelled" : "unavailable"
+                span.status = .error(description: "Local correction assessment interrupted")
+                span.addEvent(name: "exception", attributes: ["exception.type": .string(String(describing: type(of: error)))])
+                throw error
+            }
+        }
     }
 
     func download(_ model: CleanupModel, completion: @escaping @MainActor () -> Void) {

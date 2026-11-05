@@ -1,0 +1,157 @@
+[
+  {
+    "id": "technical-spelling",
+    "original": "We need kubernetis for this.",
+    "edited": "We need Kubernetes for this.",
+    "expected": [
+      {
+        "find": "kubernetis",
+        "replaceWith": "Kubernetes"
+      }
+    ]
+  },
+  {
+    "id": "product-name",
+    "original": "Please open click up.",
+    "edited": "Please open ClickUp.",
+    "expected": [
+      {
+        "find": "click up",
+        "replaceWith": "ClickUp"
+      }
+    ]
+  },
+  {
+    "id": "name-spelling",
+    "original": "Ask Mark about it.",
+    "edited": "Ask Marc about it.",
+    "expected": [
+      {
+        "find": "Mark",
+        "replaceWith": "Marc"
+      }
+    ]
+  },
+  {
+    "id": "asr-word",
+    "original": "Mistakes and stings like that.",
+    "edited": "Mistakes and things like that.",
+    "expected": [
+      {
+        "find": "stings",
+        "replaceWith": "things"
+      }
+    ]
+  },
+  {
+    "id": "synonym",
+    "original": "Please send the file.",
+    "edited": "Please share the file.",
+    "expected": []
+  },
+  {
+    "id": "stronger-adjective",
+    "original": "It was good work.",
+    "edited": "It was excellent work.",
+    "expected": []
+  },
+  {
+    "id": "different-person",
+    "original": "Send it to Sam.",
+    "edited": "Send it to Sarah.",
+    "expected": []
+  },
+  {
+    "id": "changed-uncertainty",
+    "original": "I probably want to go.",
+    "edited": "I definitely want to go.",
+    "expected": []
+  },
+  {
+    "id": "grammar-only",
+    "original": "There is a few things.",
+    "edited": "There are a few things.",
+    "expected": []
+  },
+  {
+    "id": "changed-number",
+    "original": "Please send 15 copies.",
+    "edited": "Please send 50 copies.",
+    "expected": []
+  },
+  {
+    "id": "changed-day",
+    "original": "Come on Wednesday please.",
+    "edited": "Come on Thursday please.",
+    "expected": []
+  },
+  {
+    "id": "british-spelling",
+    "original": "Please organize the work.",
+    "edited": "Please organise the work.",
+    "expected": [
+      {
+        "find": "organize",
+        "replaceWith": "organise"
+      }
+    ]
+  },
+  {
+    "id": "near-synonym",
+    "original": "That was nice work.",
+    "edited": "That was fine work.",
+    "expected": []
+  },
+  {
+    "id": "near-rewording",
+    "original": "I want a bigger house.",
+    "edited": "I want a better house.",
+    "expected": []
+  },
+  {
+    "id": "different-short-name",
+    "original": "Call Ben about it.",
+    "edited": "Call Bob about it.",
+    "expected": []
+  },
+  {
+    "id": "grammar-verb",
+    "original": "We needs to fix it.",
+    "edited": "We need to fix it.",
+    "expected": []
+  },
+  {
+    "id": "sentence-style",
+    "original": "Well, I think so.",
+    "edited": "well, I think so.",
+    "expected": []
+  },
+  {
+    "id": "soundalike-product",
+    "original": "The tablet is an eye pad.",
+    "edited": "The tablet is an iPad.",
+    "expected": [
+      {
+        "find": "eye pad",
+        "replaceWith": "iPad"
+      }
+    ]
+  },
+  {
+    "id": "valid-common-word-edit",
+    "original": "Please lend the book.",
+    "edited": "Please send the book.",
+    "expected": []
+  },
+  {
+    "id": "homophone-fix",
+    "original": "The fix came straight away after his weight.",
+    "edited": "The fix came straight away after his wait.",
+    "expected": [
+      {
+        "find": "weight",
+        "replaceWith": "wait"
+      }
+    ]
+  }
+]
