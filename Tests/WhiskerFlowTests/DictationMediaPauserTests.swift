@@ -153,23 +153,36 @@ final class DictationMediaPauserTests: XCTestCase {
     func testDictationWhilePlayIsLandingPausesAgain() async {
         let box = NowPlayingBox(NowPlayingStatus(isPlaying: true, pid: 42))
         let log = log
+        let firstPause = expectation(description: "Initial pause landed")
+        let playSent = expectation(description: "Play sent but not landed")
+        let secondPause = expectation(description: "New dictation paused playback again")
+        let allowPlayToLand = DispatchSemaphore(value: 0)
+        defer { allowPlayToLand.signal() }
         let pauser = DictationMediaPauser(
             ownPID: 1, ownBundleID: "agency.thatworks.WhiskerFlow",
             readStatus: { box.status }, readProcesses: { [] }, bundleIDForPID: { _ in nil },
             send: { command in
                 log.append(command)
-                if command == .play { Thread.sleep(forTimeInterval: 0.3) }
-                box.status = NowPlayingStatus(isPlaying: command == .play, pid: 42)
+                switch command {
+                case .pause:
+                    box.status = NowPlayingStatus(isPlaying: false, pid: 42)
+                    (log.sent.count == 1 ? firstPause : secondPause).fulfill()
+                case .play:
+                    playSent.fulfill()
+                    _ = allowPlayToLand.wait(timeout: .now() + 5)
+                    box.status = NowPlayingStatus(isPlaying: true, pid: 42)
+                }
                 return true
             }
         )
         pauser.dictationStarted(inCall: false)
-        await settle()
+        await fulfillment(of: [firstPause], timeout: 5)
         pauser.dictationEnded()
-        await settle(0.5) // the play is sent and has not landed yet
+        await fulfillment(of: [playSent], timeout: 5)
         XCTAssertEqual(log.sent, [.pause, .play])
         pauser.dictationStarted(inCall: false)
-        await settle(0.5)
+        allowPlayToLand.signal()
+        await fulfillment(of: [secondPause], timeout: 5)
         XCTAssertEqual(log.sent, [.pause, .play, .pause])
         withExtendedLifetime(pauser) {}
     }

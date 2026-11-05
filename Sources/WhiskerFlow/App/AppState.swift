@@ -68,6 +68,7 @@ final class AppState {
         /// Resolved from the app at key press; a browser's tab can refine it at release.
         var writing = WritingStyleResolution(category: .other, tone: .formal, source: .fallback)
         var recognizeCorrections = false
+        var localCleanupEnabled = false
         var hints: RecognizerHints = .none
         var purpose: AssistantController.CapturePurpose = .dictation
         var quickKind: AssistantRecordKind = .note
@@ -151,6 +152,7 @@ final class AppState {
     private let live: LiveDictationSession
     private let mediaPauser = DictationMediaPauser()
     let translator = DictationTranslator()
+    let localCleanup: LocalCleanupController
     /// Why the last dictation wasn't translated (a language still to download).
     var translationNotice: String?
     private var devicePrepareTask: Task<Void, Never>?
@@ -256,7 +258,8 @@ final class AppState {
         microphonePermission: MicrophonePermissionController? = nil,
         pasteService: (any TextDeliveryService)? = nil,
         onboardingStore: (any OnboardingProgressStoring)? = nil,
-        transcription: TranscriptionService? = nil
+        transcription: TranscriptionService? = nil,
+        localCleanup: LocalCleanupController? = nil
     ) {
         let resolvedSettings = settings ?? AppSettings()
         let resolvedMicrophonePermission = microphonePermission ?? MicrophonePermissionController(
@@ -274,6 +277,7 @@ final class AppState {
         self.insights = insightsStore ?? (store == nil && !UIPreview.isEnabled ? .defaultStore() : .temporaryStore())
         self.microphonePermission = resolvedMicrophonePermission
         self.transcription = transcription
+        self.localCleanup = localCleanup ?? LocalCleanupController()
         self.meetingCapture = MeetingCaptureCoordinator(
             settings: resolvedSettings,
             microphonePermission: resolvedMicrophonePermission,
@@ -674,6 +678,7 @@ final class AppState {
         hudController = RecordingHUDController(appState: self)
         warmUpEngine()
         warmUpMeetingEngine()
+        if settings.localCleanupEnabled { localCleanup.prepare(download: true) }
         startLeaderboardReporting()
         // Whisper was removed; free the space its downloaded models took.
         Task.detached(priority: .background) { ModelStoragePaths.removeWhisperModels() }
@@ -1319,11 +1324,7 @@ final class AppState {
                                                        allowAppleFallback: false)
                 }
                 let english = await self.englishText(for: outcome.result.text, configuration: configuration)
-                let text = await Task.detached(priority: .userInitiated) {
-                    AssistantTextProcessing.process(english.text, tone: configuration.writing.tone,
-                                                    vocabulary: configuration.vocabulary, formatting: configuration.formatting,
-                                                    recognizeCorrections: configuration.recognizeCorrections)
-                }.value
+                let text = await self.processDictationText(english.text, configuration: configuration)
                 try self.store.markTranscribed(id: record.id, text: text, durationSeconds: outcome.result.duration,
                                                model: outcome.engine.modelIdentifier, engine: outcome.engine.rawValue,
                                                language: outcome.result.language, rawRecognition: outcome.result.text)
@@ -2347,17 +2348,9 @@ final class AppState {
             }
             let text_processingStarted = ProcessInfo.processInfo.systemUptime
             lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "text_processing", "session": "\(sessionID ?? record.id)"])
-            let processed = await Task.detached(priority: .userInitiated) {
-                let started = ProcessInfo.processInfo.systemUptime
-                let text = AssistantTextProcessing.process(english.text, tone: configuration.writing.tone,
-                    vocabulary: configuration.vocabulary, formatting: configuration.formatting,
-                    recognizeCorrections: configuration.recognizeCorrections)
-                let completed = ProcessInfo.processInfo.systemUptime
-                return (text: text, workSeconds: completed - started, completed: completed)
-            }.value
+            let finalText = await processDictationText(english.text, configuration: configuration)
             let resumed = ProcessInfo.processInfo.systemUptime
-            let finalText = processed.text
-            lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "text_processing", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((resumed - text_processingStarted) * 1000)", "worker_elapsed_ms": "\(processed.workSeconds * 1000)", "resume_delay_ms": "\(max(0, resumed - processed.completed) * 1000)"])
+            lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "text_processing", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((resumed - text_processingStarted) * 1000)"])
             let history_saveStarted = ProcessInfo.processInfo.systemUptime
             lifecycleLogger.info("Dictation stage started", metadata: ["event": "stage_started", "stage": "history_save", "session": "\(sessionID ?? record.id)"])
             // A quick capture's draft is its delivery. Save it before History
@@ -2655,12 +2648,45 @@ final class AppState {
             playSounds: settings.playSounds,
             writing: assistant.resolveWritingStyle(AppContext(bundleIdentifier: pasteTargetApplication?.bundleIdentifier)),
             recognizeCorrections: assistant.saved.recognizeCorrections,
+            localCleanupEnabled: settings.localCleanupEnabled,
             hints: recognizerHints,
             purpose: assistant.capturePurpose,
             quickKind: assistant.quickCaptureKind,
             clientReference: accountReady ? assistant.saved.selectedClient : nil,
             accountIdentity: accountReady ? assistant.saved.accountIdentity : nil
         )
+    }
+
+    /// Keep cleanup after recognition/translation and before persistence/paste.
+    /// Dictionary replacements run once, before AI, so names are spelled as chosen.
+    private func processDictationText(_ raw: String, configuration: TranscriptionJobConfiguration) async -> String {
+        let baseline = await Task.detached(priority: .userInitiated) {
+            AssistantTextProcessing.process(raw, tone: configuration.writing.tone,
+                                            vocabulary: configuration.vocabulary, formatting: configuration.formatting,
+                                            recognizeCorrections: configuration.recognizeCorrections)
+        }.value
+        guard configuration.localCleanupEnabled, configuration.writing.tone != .literal,
+              configuration.purpose != .selectionInstruction else { return baseline }
+        let input = await Task.detached(priority: .userInitiated) {
+            TranscriptFormatter.format(configuration.vocabulary.apply(to: raw), options: .init(
+                spokenLineCommands: configuration.formatting.spokenLineCommands,
+                language: configuration.formatting.language))
+        }.value
+        let request = DictationCleanupRequest(text: input, recognizeCorrections: configuration.recognizeCorrections)
+        let result = await localCleanup.clean(request, fallback: baseline)
+        guard result.applied else { return baseline }
+        return await Task.detached(priority: .userInitiated) {
+            WritingToneRenderer.render(result.text, tone: configuration.writing.tone)
+        }.value
+    }
+
+    /// Uses the delivery pipeline, with a fixed neutral tone and no paste.
+    func previewLocalCleanup(_ raw: String) async -> String {
+        var configuration = makeTranscriptionConfiguration()
+        configuration.localCleanupEnabled = true
+        configuration.writing = .init(category: .other, tone: .formal, source: .fallback)
+        configuration.purpose = .dictation
+        return await processDictationText(raw, configuration: configuration)
     }
 
     /// Apple's speech model for the chosen language, if it isn't Parakeet's.

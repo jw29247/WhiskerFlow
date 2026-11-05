@@ -44,6 +44,22 @@ jobs:
             bash "$t"
           done
 
+      - name: Package local test build
+        if: github.event_name == 'pull_request'
+        run: |
+          BUNDLE_IDENTIFIER_OVERRIDE=agency.thatworks.WhiskerFlow.preview \
+          BUNDLE_NAME_OVERRIDE='WhiskerFlow Preview' \
+            script/bundle_app.sh '.build/WhiskerFlow Preview.app'
+          ditto -c -k --sequesterRsrc --keepParent '.build/WhiskerFlow Preview.app' '.build/WhiskerFlow-Preview.zip'
+
+      - name: Upload local test build
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhiskerFlow-Preview
+          path: .build/WhiskerFlow-Preview.zip
+          retention-days: 14
+
   lint:
     runs-on: macos-26
     steps:

@@ -20,6 +20,15 @@
       }
     },
     {
+      "identity" : "litert-lm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/google-ai-edge/LiteRT-LM.git",
+      "state" : {
+        "revision" : "83ce6067f2e2a3fb697556928f93936693ded971",
+        "version" : "0.19.0"
+      }
+    },
+    {
       "identity" : "opentelemetry-swift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/open-telemetry/opentelemetry-swift.git",
