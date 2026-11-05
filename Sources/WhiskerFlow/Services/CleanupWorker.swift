@@ -76,7 +76,8 @@ final class CleanupWorker: @unchecked Sendable {
                                  tokenLimit: min(1800, max(80, text.utf8.count / 2 + 40)), seconds: seconds)
     }
 
-    func cleanTranscript(_ text: String, model: CleanupModel, seconds: TimeInterval, vocabulary: Vocabulary) async throws -> CleanupAttempt {
+    func cleanTranscript(_ raw: String, model: CleanupModel, seconds: TimeInterval, vocabulary: Vocabulary) async throws -> CleanupAttempt {
+        let text = DictatedNumberFormatter.format(raw)
         let started = ProcessInfo.processInfo.systemUptime
         var candidates = "", delivered = "", rejected = 0
         let segments = TranscriptCleanup.segments(for: text)

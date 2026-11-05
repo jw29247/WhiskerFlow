@@ -2,6 +2,17 @@ import XCTest
 @testable import WhiskerFlowCore
 
 final class TranscriptCleanupTests: XCTestCase {
+    func testAcceptsNumberFormattingWithoutChangingTheAmount() {
+        for original in ["Send 451 pounds and fifty one pence.",
+                         "Send four hundred and fifty-one pounds and fifty-one pence."] {
+            XCTAssertEqual(TranscriptCleanup.accepted("Send £451.51.", original: original), "Send £451.51.")
+            XCTAssertNil(TranscriptCleanup.accepted("Send £451.15.", original: original))
+            XCTAssertNil(TranscriptCleanup.accepted("Send $451.51.", original: original))
+        }
+        XCTAssertEqual(TranscriptCleanup.accepted("We need 21 copies.", original: "We need twenty-one copies."), "We need 21 copies.")
+        XCTAssertNil(TranscriptCleanup.accepted("Send £451.51.", original: "Don't send four hundred and fifty-one pounds and fifty-one pence."))
+    }
+
     func testAmbiguousOpeningIsEditedSeparatelyFromLaterNarrative() {
         let raw = "And you set a reminder for tomorrow.\n\nThen we can review the project."
         let segments = TranscriptCleanup.segments(for: raw)

@@ -32,7 +32,7 @@
   {
     "id": "number-correction",
     "input": "We need fifteen, no, fifty copies by Friday.",
-    "expected": "We need fifty copies by Friday."
+    "expected": "We need 50 copies by Friday."
   },
   {
     "id": "name-correction",
@@ -52,7 +52,7 @@
   {
     "id": "money-and-negation",
     "input": "Sam owes seventeen pounds fifty, not seventy-five pounds.",
-    "expected": "Sam owes seventeen pounds fifty, not seventy-five pounds."
+    "expected": "Sam owes £17.50, not £75."
   },
   {
     "id": "several-fillers",
@@ -67,7 +67,7 @@
   {
     "id": "false-start",
     "input": "I need to, I need to book a table for two.",
-    "expected": "I need to book a table for two."
+    "expected": "I need to book a table for 2."
   },
   {
     "id": "british-spelling",
@@ -181,5 +181,50 @@
     "id": "swearing-with-fillers",
     "input": "Um I I think this fucking thing is broken.",
     "expected": "I think this fucking thing is broken."
+  },
+  {
+    "id": "sterling-mixed",
+    "input": "Please send 451 pounds and fifty one pence.",
+    "expected": "Please send £451.51."
+  },
+  {
+    "id": "sterling-spoken",
+    "input": "Please send four hundred and fifty-one pounds and fifty-one pence.",
+    "expected": "Please send £451.51."
+  },
+  {
+    "id": "sterling-pence",
+    "input": "That costs fifty-one pence.",
+    "expected": "That costs £0.51."
+  },
+  {
+    "id": "sterling-short-pence",
+    "input": "The charge is seventeen pounds fifty.",
+    "expected": "The charge is £17.50."
+  },
+  {
+    "id": "sterling-negation",
+    "input": "Don't send four hundred and fifty-one pounds and fifty-one pence.",
+    "expected": "Don't send £451.51."
+  },
+  {
+    "id": "sterling-swearing",
+    "input": "That fucking costs four hundred and fifty-one pounds and fifty-one pence.",
+    "expected": "That fucking costs £451.51."
+  },
+  {
+    "id": "spoken-quantities",
+    "input": "We need twenty-one copies and three boxes.",
+    "expected": "We need 21 copies and 3 boxes."
+  },
+  {
+    "id": "spoken-decimal",
+    "input": "It is one point zero five metres.",
+    "expected": "It is 1.05 metres."
+  },
+  {
+    "id": "sterling-weight",
+    "input": "The parcel weighs five pounds.",
+    "expected": "The parcel weighs 5 pounds."
   }
 ]

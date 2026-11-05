@@ -5,6 +5,16 @@ import WhiskerFlowCleanupSupport
 
 @MainActor
 final class CleanupServiceTests: XCTestCase {
+    func testFormatsNumbersWhenTheAIIsSkippedForAnOversizedTranscript() async {
+        let service = CleanupService()
+        service.configure(model: .gemma4E2B, enabled: true)
+        let input = "Pay four hundred and fifty-one pounds and fifty-one pence. " + String(repeating: "Other wording. ", count: 400)
+        let result = await service.clean(input, model: .gemma4E2B)
+        XCTAssertEqual(result.text, "Pay £451.51. " + String(repeating: "Other wording. ", count: 400))
+        XCTAssertEqual(result.outcome, "formatted")
+        XCTAssertFalse(service.needsShutdown)
+    }
+
     func testWarningAllowsBoundedForegroundWorkButNeverIdleWarmingOrCriticalPressure() {
         let gib: UInt64 = 1_073_741_824
         let reserve: UInt64 = gib
@@ -19,7 +29,7 @@ final class CleanupServiceTests: XCTestCase {
 
     func testDisabledCleanupReturnsOriginalWithoutLoadingAModel() async {
         let service = CleanupService()
-        let input = "Um, don't change this yet."
+        let input = "Um, don't change one pound and five pence yet."
         let result = await service.clean(input, model: .gemma4E2B)
         XCTAssertEqual(result.text, input)
         XCTAssertEqual(result.outcome, "skipped")

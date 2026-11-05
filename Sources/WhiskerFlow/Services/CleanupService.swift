@@ -14,6 +14,7 @@ struct CleanupResult: Sendable {
         case "cleaned": return "Cleaned up the transcript"
         case "partial": return "Cleaned up the transcript. Kept some wording to preserve your meaning."
         case "unchanged": return "Checked the transcript. No changes needed."
+        case "formatted": return "Formatted numbers. Kept the rest of the recognised wording."
         case "rejected": return "Kept the original because the proposed edit changed too much."
         case "cancelled": return "Cleanup was interrupted. Kept the original."
         case "too_long": return "Transcript exceeds the preview limit. Kept the original."
@@ -96,13 +97,14 @@ final class CleanupService {
         }
     }
 
-    func clean(_ original: String, model: CleanupModel, vocabulary: Vocabulary = Vocabulary()) async -> CleanupResult {
+    func clean(_ raw: String, model: CleanupModel, vocabulary: Vocabulary = Vocabulary()) async -> CleanupResult {
+        let original = configuredModel == model ? DictatedNumberFormatter.format(raw) : raw
         guard configuredModel == model, !running, !downloading, canRun(model), installed(model),
               !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               original.count <= TranscriptCleanup.maximumCharacters else {
             let outcome = original.count > TranscriptCleanup.maximumCharacters ? "too_long"
                 : configuredModel != model || running || downloading ? "skipped" : "unavailable"
-            let result = CleanupResult(text: original, outcome: outcome)
+            let result = CleanupResult(text: original, outcome: original != raw ? "formatted" : outcome)
             lastRun = result.summary
             logger.info("Cleanup skipped", metadata: ["event": "cleanup_finished", "cleanup_outcome": "\(outcome)"])
             return result
@@ -137,13 +139,13 @@ final class CleanupService {
                 }
                 guard self.configurationID == identifier, !Task.isCancelled else {
                     outcome = "cancelled"
-                    return CleanupResult(text: original, outcome: outcome)
+                    return CleanupResult(text: original, outcome: original != raw ? "formatted" : outcome)
                 }
                 let text = attempt.text
                 span.setAttribute(key: "rejected_segments", value: attempt.rejectedSegments)
-                outcome = text == original ? (attempt.rejectedSegments > 0 ? "rejected" : "unchanged")
+                outcome = text == raw ? (attempt.rejectedSegments > 0 ? "rejected" : "unchanged")
                     : (attempt.rejectedSegments > 0 ? "partial" : "cleaned")
-                if text == original && attempt.incomplete { outcome = "fallback" }
+                if text == raw && attempt.incomplete { outcome = "fallback" }
                 span.status = .ok
                 return CleanupResult(text: text, outcome: outcome)
             } catch {
@@ -155,13 +157,14 @@ final class CleanupService {
                 span.status = .error(description: "Local cleanup unavailable")
                 span.addEvent(name: "exception", attributes: ["exception.type": .string(String(describing: type(of: error)))])
                 span.addEvent(name: "cleanup.fallback", attributes: ["reason": .string(outcome)])
-                return CleanupResult(text: original, outcome: outcome)
+                return CleanupResult(text: original, outcome: original != raw ? "formatted" : outcome)
             }
         }
         running = false
         lastRun = result.summary
         if configurationID == identifier {
             status = result.outcome == "unavailable" ? "Paused to save resources"
+                : result.outcome == "formatted" ? "Ready on next dictation"
                 : result.outcome == "fallback" ? "Used original transcript" : "Warm and ready"
             scheduleSleep(model)
         }

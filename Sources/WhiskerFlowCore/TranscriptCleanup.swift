@@ -34,8 +34,9 @@ public enum TranscriptCleanup {
         // Resolve the existing, tightly bounded single-word repair grammar in
         // the model's input. Validation still compares the output with the raw
         // transcript, so this cannot bypass meaning preservation.
-        let repaired = SpokenSelfCorrection.resolve(transcript)
-        let input = accepted(repaired, original: transcript) != nil ? repaired : transcript
+        let numericTranscript = DictatedNumberFormatter.format(transcript)
+        let repaired = SpokenSelfCorrection.resolve(numericTranscript)
+        let input = accepted(repaired, original: numericTranscript) != nil ? repaired : numericTranscript
         let explicitRepair = input.range(of: #",\s*no,\s*"#, options: [.regularExpression, .caseInsensitive]) != nil
         let hasNegation = input.range(of: #"\b(?:not|never|don't|doesn't|didn't|can't|won't|without)\b"#,
                                       options: [.regularExpression, .caseInsensitive]) != nil
@@ -127,13 +128,14 @@ public enum TranscriptCleanup {
     /// invented clauses and changes to protected facts. The model still makes
     /// the contextual decision; saved rules aren't blindly applied to its output.
     public static func accepted(_ candidate: String, original: String, vocabulary: Vocabulary = Vocabulary()) -> String? {
-        var result = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let numericOriginal = DictatedNumberFormatter.format(original)
+        var result = DictatedNumberFormatter.format(candidate.trimmingCharacters(in: .whitespacesAndNewlines))
             .replacingOccurrences(of: "’", with: "'")
             .replacingOccurrences(of: "“", with: "\"").replacingOccurrences(of: "”", with: "\"")
         guard !result.isEmpty, !result.contains("<"), !result.contains("```"), !result.contains("�"),
               result.count <= original.count + max(40, original.count / 5),
               result.filter({ $0 == "?" }).count >= original.filter({ $0 == "?" }).count else { return nil }
-        let originalNumbers = numbers(original)
+        let originalNumbers = numbers(numericOriginal)
         guard words(result).filter(isProfanity) == words(original).filter(isProfanity) else { return nil }
         var numericStart = 0
         for number in numbers(result) {
@@ -142,9 +144,9 @@ public enum TranscriptCleanup {
         }
         let relevant = relevantVocabulary(for: original, vocabulary: vocabulary)
         result = canonicalSpellings(in: result, original: original, vocabulary: relevant)
-        if acceptsWords(result, original: original) { return result }
-        let reference = CompiledVocabulary(relevant).apply(to: original)
-        return reference != original && acceptsWords(result, original: reference) ? result : nil
+        if acceptsWords(result, original: numericOriginal) { return result }
+        let reference = DictatedNumberFormatter.format(CompiledVocabulary(relevant).apply(to: original))
+        return reference != numericOriginal && acceptsWords(result, original: reference) ? result : nil
     }
 
     /// A rejected edit in a later sentence must not discard a safe repair to
