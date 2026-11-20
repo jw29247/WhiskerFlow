@@ -25,16 +25,77 @@ final class AppSettingsMigrationTests: XCTestCase {
         AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
     }
 
-    func testMeetingModeIsOnByDefaultAndTurnsOnOnceForExistingInstalls() {
+    func testAutomaticMeetingRecordingIsOffOnAFreshInstallAndNotAsked() {
         withDefaults { defaults, name in
-            XCTAssertTrue(settings(defaults, name).meetingModeEnabled, "fresh install")
+            let fresh = settings(defaults, name)
+            XCTAssertFalse(fresh.meetingModeEnabled)
+            XCTAssertFalse(fresh.meetingModeChoicePending)
+            XCTAssertFalse(settings(defaults, name).meetingModeChoicePending, "a relaunch")
         }
+    }
+
+    /// 2.0.0 to 2.1.0 switched automatic recording on for every install.
+    func testAnEarlierOnResetsToOffOnceAndAsks() {
+        withDefaults { defaults, name in
+            defaults.set(true, forKey: "meetingModeEnabled")
+            defaults.set(true, forKey: "meetingModeDefaultOnMigrated")
+            let upgraded = settings(defaults, name)
+            XCTAssertFalse(upgraded.meetingModeEnabled)
+            XCTAssertTrue(upgraded.meetingModeChoicePending)
+            XCTAssertNil(defaults.object(forKey: "meetingModeDefaultOnMigrated"))
+
+            let relaunched = settings(defaults, name)
+            XCTAssertFalse(relaunched.meetingModeEnabled)
+            XCTAssertTrue(relaunched.meetingModeChoicePending, "still asked until answered")
+        }
+    }
+
+    func testAnEarlierOffStaysOffAndIsNotAsked() {
         withDefaults { defaults, name in
             defaults.set(false, forKey: "meetingModeEnabled")
             let upgraded = settings(defaults, name)
-            XCTAssertTrue(upgraded.meetingModeEnabled, "an earlier off switches on once")
-            upgraded.meetingModeEnabled = false
-            XCTAssertFalse(settings(defaults, name).meetingModeEnabled, "a later choice is kept")
+            XCTAssertFalse(upgraded.meetingModeEnabled)
+            XCTAssertFalse(upgraded.meetingModeChoicePending)
+        }
+    }
+
+    func testAnsweringTheQuestionIsKeptAcrossRelaunches() {
+        for answer in [false, true] {
+            withDefaults { defaults, name in
+                defaults.set(true, forKey: "meetingModeEnabled")
+                let upgraded = settings(defaults, name)
+                upgraded.answerMeetingModeChoice(enabled: answer)
+                XCTAssertFalse(upgraded.meetingModeChoicePending)
+                XCTAssertEqual(upgraded.meetingModeEnabled, answer)
+
+                let relaunched = settings(defaults, name)
+                XCTAssertFalse(relaunched.meetingModeChoicePending, "not asked again")
+                XCTAssertEqual(relaunched.meetingModeEnabled, answer, "not reset again")
+            }
+        }
+    }
+
+    func testALaterChoiceSurvivesRelaunch() {
+        withDefaults { defaults, name in
+            settings(defaults, name).meetingModeEnabled = true
+            let relaunched = settings(defaults, name)
+            XCTAssertTrue(relaunched.meetingModeEnabled)
+            XCTAssertFalse(relaunched.meetingModeChoicePending)
+            relaunched.meetingModeEnabled = false
+            XCTAssertFalse(settings(defaults, name).meetingModeEnabled)
+        }
+    }
+
+    func testChangingTheToggleWhilePendingAnswersTheQuestion() {
+        withDefaults { defaults, name in
+            defaults.set(true, forKey: "meetingModeEnabled")
+            let upgraded = settings(defaults, name)
+            upgraded.meetingModeEnabled = true
+            XCTAssertFalse(upgraded.meetingModeChoicePending)
+
+            let relaunched = settings(defaults, name)
+            XCTAssertTrue(relaunched.meetingModeEnabled)
+            XCTAssertFalse(relaunched.meetingModeChoicePending)
         }
     }
 
