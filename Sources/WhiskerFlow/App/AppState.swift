@@ -1087,6 +1087,12 @@ final class AppState {
         meetingCapture.refreshConfiguration()
   }
 
+  /// The answer to the one-time automatic recording notice in the main window.
+  func answerAutomaticRecordingNotice(turnOn: Bool) {
+        settings.answerMeetingModeChoice(enabled: turnOn)
+        if turnOn { refreshMeetingConfiguration() }
+  }
+
   func refreshMeetingSchedule() {
         guard !UIPreview.isEnabled else { return }
     meetingCapture.refreshSchedule()

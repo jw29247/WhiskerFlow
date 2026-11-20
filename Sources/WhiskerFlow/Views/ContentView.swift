@@ -63,6 +63,21 @@ struct ContentView: View {
                             .buttonStyle(.plain).help("Dismiss").accessibilityLabel("Dismiss")
                     }.foregroundStyle(FlowStyle.ink).padding(15).background(FlowStyle.selection)
                 }
+                if appState.settings.meetingModeChoicePending {
+                    // Asked once, after the reset of a setting an earlier update
+                    // turned on without asking. Either answer, or a change to the
+                    // setting anywhere else, clears it.
+                    HStack(alignment: .top, spacing: 12) {
+                        Label("Automatic meeting recording is now off. An earlier update turned it on without asking. When it is on, WhiskerFlow starts recording a scheduled Google Meet call as soon as you join it in Chrome, without asking first, and uploads the recording and transcript to Atlas.",
+                              systemImage: "calendar.badge.clock")
+                            .font(.callout).fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 8) {
+                            Button("Keep it off") { appState.answerAutomaticRecordingNotice(turnOn: false) }
+                            Button("Turn on automatic recording") { appState.answerAutomaticRecordingNotice(turnOn: true) }
+                        }.fixedSize()
+                    }.foregroundStyle(FlowStyle.ink).padding(15).background(FlowStyle.selection)
+                }
                 switch destination {
                 case .dictate:
                     DictationView(appState: appState, openSetup: { appState.onboarding.present() }) { record in
