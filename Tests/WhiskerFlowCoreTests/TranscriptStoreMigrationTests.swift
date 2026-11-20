@@ -21,7 +21,7 @@ final class TranscriptStoreMigrationTests: XCTestCase {
             .filter { $0.lastPathComponent.hasPrefix(prefix) }
     }
 
-    func testLegacyJSONHistoryIsImportedAndKeptAsABackup() throws {
+    func testLegacyJSONHistoryIsImportedAndThenRemoved() throws {
         let now = Date()
         let records = [
             TranscriptRecord(text: "First words", audioFilePath: "", createdAt: now.addingTimeInterval(-60),
@@ -30,8 +30,7 @@ final class TranscriptStoreMigrationTests: XCTestCase {
             TranscriptRecord(text: "", audioFilePath: directory.appendingPathComponent("f.wav").path,
                              createdAt: now.addingTimeInterval(-120), status: .failed(errorMessage: "Timed out"))
         ]
-        let original = try JSONEncoder.whiskerFlow.encode(records)
-        try original.write(to: jsonURL)
+        try JSONEncoder.whiskerFlow.encode(records).write(to: jsonURL)
 
         let store = TranscriptStore(fileURL: jsonURL)
         try store.load()
@@ -41,8 +40,7 @@ final class TranscriptStoreMigrationTests: XCTestCase {
         XCTAssertEqual(store.records[0].engine, "parakeetTDTv3")
         XCTAssertEqual(store.records[1].status, .failed(errorMessage: "Timed out"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: jsonURL.path))
-        let backup = try XCTUnwrap(try backups("transcripts.migrated-").first)
-        XCTAssertEqual(try Data(contentsOf: backup), original, "the old file must survive byte for byte")
+        XCTAssertEqual(try backups("transcripts.migrated-"), [], "no plain copy may outlive retention")
 
         let reloaded = TranscriptStore(fileURL: jsonURL)
         try reloaded.load()
@@ -73,6 +71,83 @@ final class TranscriptStoreMigrationTests: XCTestCase {
         let store = TranscriptStore(fileURL: jsonURL)
         try store.load()
         XCTAssertEqual(Set(store.records.map(\.id)), [record.id, later.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: jsonURL.path))
+    }
+
+    func testAFailedRemovalDoesNotFailLoadOrDuplicateRecords() throws {
+        let now = Date()
+        let records = [
+            TranscriptRecord(text: "one", audioFilePath: "", createdAt: now.addingTimeInterval(-60), status: .transcribed),
+            TranscriptRecord(text: "two", audioFilePath: "", createdAt: now.addingTimeInterval(-120), status: .transcribed)
+        ]
+        let original = try JSONEncoder.whiskerFlow.encode(records)
+        try original.write(to: jsonURL)
+        let staleBackup = directory.appendingPathComponent("transcripts.migrated-1730000000.json")
+        try original.write(to: staleBackup)
+
+        var attempted: [String] = []
+        let failing = TranscriptStore(fileURL: jsonURL, removeItem: { url in
+            attempted.append(url.lastPathComponent)
+            throw CocoaError(.fileWriteNoPermission)
+        })
+        try failing.load()
+        XCTAssertEqual(failing.records.map(\.id), records.map(\.id))
+        XCTAssertEqual(attempted, ["transcripts.json", "transcripts.migrated-1730000000.json"])
+        XCTAssertEqual(try Data(contentsOf: jsonURL), original)
+        XCTAssertEqual(try Data(contentsOf: staleBackup), original)
+
+        // The next load imports the leftover again and retries its removal.
+        try failing.load()
+        XCTAssertEqual(failing.records.map(\.id), records.map(\.id), "a re-import must not duplicate records")
+
+        let store = TranscriptStore(fileURL: jsonURL)
+        try store.load()
+        XCTAssertEqual(store.records.map(\.id), records.map(\.id))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: jsonURL.path))
+        XCTAssertEqual(try backups("transcripts.migrated-"), [])
+    }
+
+    func testMigratedBackupsFromEarlierBuildsAreRemovedOnLoad() throws {
+        // Earlier builds left the imported JSON beside the database it was imported into.
+        let record = TranscriptRecord(text: "in the database", audioFilePath: "", status: .transcribed)
+        try TranscriptStore(fileURL: jsonURL).replaceAll([record])
+        for name in ["transcripts.migrated-1730000000.json", "transcripts.migrated-42.json"] {
+            try JSONEncoder.whiskerFlow.encode([record]).write(to: directory.appendingPathComponent(name))
+        }
+
+        let store = TranscriptStore(fileURL: jsonURL)
+        try store.load()
+        XCTAssertEqual(store.records.map(\.id), [record.id])
+        XCTAssertEqual(try backups("transcripts.migrated-"), [])
+    }
+
+    func testFilesThatOnlyResembleAMigratedBackupAreKept() throws {
+        let record = TranscriptRecord(text: "in the database", audioFilePath: "", status: .transcribed)
+        try TranscriptStore(fileURL: jsonURL).replaceAll([record])
+        // Corrupt backups are the only copy of a history that could not be read.
+        let lookalikes = [
+            "transcripts.corrupt-1730000000.json",
+            "transcripts.corrupt-1730000000.sqlite",
+            "other.migrated-1730000000.json",
+            "transcripts.migrated-1730000000.json.bak",
+            "transcripts.migrated-1730000000.sqlite",
+            "transcripts.migrated-.json",
+            "transcripts.migrated-17300x0000.json"
+        ]
+        for name in lookalikes { try Data(name.utf8).write(to: directory.appendingPathComponent(name)) }
+        let folder = directory.appendingPathComponent("transcripts.migrated-1730000000.json", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+
+        let store = TranscriptStore(fileURL: jsonURL)
+        try store.load()
+
+        for name in lookalikes {
+            XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent(name)), Data(name.utf8), name)
+        }
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue, "only regular files are removed")
+        XCTAssertEqual(store.records.map(\.id), [record.id], "the database itself is untouched")
     }
 
     func testDamagedDatabaseIsMovedAsideAndHistoryStartsFresh() throws {
