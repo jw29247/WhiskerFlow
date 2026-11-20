@@ -253,13 +253,13 @@ struct MeetingSetupView: View {
         Section("Automatic recording") {
             Toggle("Record scheduled meetings automatically", isOn: $appState.settings.meetingModeEnabled)
                 .onChange(of: appState.settings.meetingModeEnabled) { _, _ in appState.refreshMeetingConfiguration() }
-            Text("Off by default: WhiskerFlow asks before recording any call. Turn this on to skip the question for Atlas calendar meetings in Google Meet and start recording as soon as you join. You can stop a recording at any time in Meetings.")
+            Text("Off unless you turn it on. When it is on, WhiskerFlow does not ask: it starts recording an Atlas calendar meeting as soon as you join it in Google Meet in Chrome, and uploads the recording and transcript to Atlas. You can stop a recording at any time in Meetings.")
                 .font(.caption).foregroundStyle(FlowStyle.muted)
         }
         Section("Calls") {
             Toggle("Ask to record when a call starts", isOn: Binding(
                 get: { appState.settings.askToRecordCalls }, set: { appState.setAskToRecordCalls($0) }))
-            Text("Works with Zoom, Microsoft Teams, Slack huddles and Webex, and with Google Meet, Teams, Zoom and Webex in Chrome, Safari, Edge, Arc, Brave, Firefox and other browsers. WhiskerFlow notices an app using the microphone and reads its window titles through Accessibility, on this Mac. Nothing to install, and recording never starts without your answer.")
+            Text("Works with Zoom, Microsoft Teams, Slack huddles and Webex, and with Google Meet, Teams, Zoom and Webex in Chrome, Safari, Edge, Arc, Brave, Firefox and other browsers. WhiskerFlow notices an app using the microphone and reads its window titles through Accessibility, on this Mac. Nothing to install. A detected call is recorded only if you choose Record. Automatic recording of scheduled meetings is a separate setting.")
                 .font(.caption).foregroundStyle(FlowStyle.muted)
         }
         Section("Transcripts on this Mac") {
