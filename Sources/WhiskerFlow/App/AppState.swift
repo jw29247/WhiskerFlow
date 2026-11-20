@@ -837,7 +837,9 @@ final class AppState {
     func warmUpMeetingEngine() {
         guard !UIPreview.isEnabled else { return }
         meetingWarmUpTask?.cancel()
-        guard settings.meetingModeEnabled, isAtlasPaired else {
+        // Not gated on automatic recording: "Record" and "Record this
+        // meeting?" work with it off, and share the dictation model.
+        guard isAtlasPaired else {
             meetingModelState = .unloaded
             return
         }
