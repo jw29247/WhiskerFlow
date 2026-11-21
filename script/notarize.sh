@@ -15,8 +15,8 @@
 #   NOTES="Short release note" script/notarize.sh
 #
 # Release gate: refuses to start unless HEAD has a completed, successful run of
-# the CI workflow on GitHub and no tracked file has uncommitted changes (see
-# script/require_green_ci.sh). Release from a pushed release/<version> branch
+# the CI workflow on GitHub and the checkout has no uncommitted changes or
+# untracked files (see script/require_green_ci.sh). Release from a pushed release/<version> branch
 # whose PR checks have passed.
 #
 # Env overrides:

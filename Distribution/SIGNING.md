@@ -72,8 +72,9 @@ Commit the updated `Info.plist`, and **back up the private key** somewhere safe
 Follow the release procedure in [`AGENTS.md`](../AGENTS.md#whiskerflow-release-and-auto-update-flow):
 bump with `script/bump_version.sh <version>` on a `release/<version>` branch,
 push it, open a PR and wait for CI to pass. `notarize.sh` refuses to build a
-commit without a successful CI run on GitHub, or with uncommitted tracked
-changes (emergency override: `ALLOW_UNVERIFIED_RELEASE=1`). Then, on that
+commit without a successful CI run on GitHub, or with uncommitted changes or
+untracked files in the checkout (emergency override:
+`ALLOW_UNVERIFIED_RELEASE=1`). Then, on that
 commit:
 
 ```bash

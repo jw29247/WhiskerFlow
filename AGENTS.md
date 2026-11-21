@@ -86,9 +86,9 @@ the `.zip` enclosure referenced there.
 
 `main` is protected (pull requests only; `build-test` and `lint` required).
 `script/notarize.sh` refuses to build unless the exact commit has a completed,
-successful `CI` run on GitHub and no tracked file has uncommitted changes (PR
-runs report the PR head SHA, so a release branch with passing PR checks
-qualifies). `ALLOW_UNVERIFIED_RELEASE=1` skips that gate; use it only in an
+successful `CI` run on GitHub and the checkout has no uncommitted changes or
+untracked files (PR runs report the PR head SHA, so a release branch with
+passing PR checks qualifies). `ALLOW_UNVERIFIED_RELEASE=1` skips that gate; use it only in an
 emergency and say so in the release notes.
 
 For a real release:

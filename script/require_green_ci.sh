@@ -2,7 +2,8 @@
 #
 # Release gate: refuses unless the exact commit being released (HEAD of this
 # checkout) has a completed, successful run of the CI workflow
-# (.github/workflows/ci.yml) on GitHub, and no tracked file differs from it.
+# (.github/workflows/ci.yml) on GitHub, and the checkout matches it: no
+# uncommitted changes and no untracked files.
 #
 # Called first thing by script/notarize.sh. `gh` is resolved from PATH so
 # script/test_release_gate.sh can substitute a fake.
@@ -55,16 +56,19 @@ Release from a clone of the repository, on the commit CI has verified.
 MSG
 fi
 
-# 1. The build must match the verified commit: no tracked-file changes,
-#    staged or not. Untracked files are not part of the build inputs we track.
-dirty="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=no)"
+# 1. The build must match the verified commit: no tracked-file changes, staged
+#    or not, and no untracked files. SwiftPM builds every source file it finds
+#    under a target's directory, so an untracked file would be signed and
+#    shipped without ever having been through CI. Ignored paths (.build, dist)
+#    do not count.
+dirty="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=normal)"
 if [[ -n "$dirty" ]]; then
-  refuse "tracked files have uncommitted changes, so the build would not match commit ${head_sha:0:12}." <<MSG
+  refuse "the checkout has uncommitted changes or untracked files, so the build would not match commit ${head_sha:0:12}." <<MSG
 $dirty
 
-Commit these changes, push them and wait for CI to pass on the new commit, or
-discard them (git restore <file>). If these are appcast.xml / the cask from an
-earlier interrupted notarize.sh run, restore them and re-run.
+Commit these, push them and wait for CI to pass on the new commit, or remove
+them (git restore <file>; delete untracked files). If these are appcast.xml /
+the cask from an earlier interrupted notarize.sh run, restore them and re-run.
 MSG
 fi
 

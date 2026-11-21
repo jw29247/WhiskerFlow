@@ -16,6 +16,7 @@ REPO_DIR="$TMP/repo"
 mkdir -p "$REPO_DIR/script"
 cp "$GATE_SCRIPT" "$REPO_DIR/script/"
 echo "tracked" >"$REPO_DIR/tracked.txt"
+printf '.build/\ndist/\n' >"$REPO_DIR/.gitignore"
 git -C "$REPO_DIR" init -q
 git -C "$REPO_DIR" add -A
 git -C "$REPO_DIR" -c user.name=test -c user.email=test@example.invalid \
@@ -153,10 +154,20 @@ git -C "$REPO_DIR" add tracked.txt
 expect_refusal "staged change" "uncommitted changes" FAKE_GH_RUNS="completed success $URL"
 git -C "$REPO_DIR" reset -q --hard
 
-# Untracked files are not build inputs we track; they do not block.
-touch "$REPO_DIR/untracked.txt"
-expect_pass "untracked file" FAKE_GH_RUNS="completed success $URL"
-rm "$REPO_DIR/untracked.txt"
+# An untracked file refuses too: SwiftPM would compile an untracked source file
+# that CI never saw.
+mkdir -p "$REPO_DIR/Sources/App"
+touch "$REPO_DIR/Sources/App/Untracked.swift"
+expect_refusal "untracked file" "untracked files" FAKE_GH_RUNS="completed success $URL"
+[[ "$OUTPUT" == *"Sources/"* ]] || fail "untracked file: path not listed"
+[[ -s "$LOG" ]] && fail "untracked file: gh was consulted"
+rm -r "$REPO_DIR/Sources"
+
+# Ignored build output (.build, dist) does not block.
+mkdir -p "$REPO_DIR/dist"
+touch "$REPO_DIR/dist/WhiskerFlow.zip"
+expect_pass "ignored build output" FAKE_GH_RUNS="completed success $URL"
+rm -r "$REPO_DIR/dist"
 
 # The override passes, loudly, even with no CI run, a dirty tree and no gh.
 echo "changed" >>"$REPO_DIR/tracked.txt"
