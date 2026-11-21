@@ -23,7 +23,9 @@ for invalid in '' '1.2' 'not-a-version'; do
   cmp "$PLIST" "$TEST_ROOT/expected.plist"
 done
 
-if VERSION=99.98.97 bash "$ROOT_DIR/script/notarize.sh" >"$TEST_ROOT/release.log" 2>&1; then
+# The release gate is covered by test_release_gate.sh; skip it here so the
+# version check is reached without the network.
+if ALLOW_UNVERIFIED_RELEASE=1 VERSION=99.98.97 bash "$ROOT_DIR/script/notarize.sh" >"$TEST_ROOT/release.log" 2>&1; then
   echo "FAIL: release accepted a version that disagrees with Info.plist" >&2
   exit 1
 fi
