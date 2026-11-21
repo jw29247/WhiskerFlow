@@ -116,6 +116,12 @@ the team the one-line installer; it grabs and installs the latest notarized DMG:
 curl -fsSL https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/script/install.sh | bash
 ```
 
+It refuses a build that fails the Developer ID team check or Gatekeeper
+assessment, and keeps the quarantine flag (notarised builds don't need it
+removed). A running WhiskerFlow is asked to quit first and reopened afterwards;
+if it doesn't quit within 30 seconds, the installer stops without changing the
+installed app.
+
 > Note: `brew install --cask "<raw URL>"` no longer works — modern Homebrew
 > removed URL installs and requires `brew trust` for third-party taps. Homebrew
 > users can instead `brew tap jw29247/whiskerflow https://github.com/jw29247/WhiskerFlow`

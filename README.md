@@ -28,6 +28,11 @@ transcribes locally and pastes the text wherever your cursor is.
 curl -fsSL https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/script/install.sh | bash
 ```
 
+The installer checks the app's signature and asks Gatekeeper to approve it before
+installing. If WhiskerFlow is already running, it asks it to quit and reopens it
+afterwards; if WhiskerFlow doesn't quit (for example while it saves a recording),
+nothing is changed — quit it yourself and run the installer again.
+
 **Manual** — download `WhiskerFlow-x.y.z.dmg` from [Releases](https://github.com/jw29247/WhiskerFlow/releases/latest),
 open it, and drag the app to Applications. Builds are Developer-ID signed and notarized,
 so they open normally — no right-click → Open needed.
