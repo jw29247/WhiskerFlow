@@ -14,21 +14,21 @@ let package = Package(
     ],
     dependencies: [
         // Parakeet TDT v3 provides the fast, high-quality on-device default.
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.6"),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.18.3"),
         // In-app auto-updates (appcast + EdDSA-signed updates). Sparkle ships as a
         // binary XCFramework; `script/bundle_app.sh` embeds & re-signs it.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
-        .package(url: "https://github.com/getsentry/sentry-cocoa", exact: "9.21.0"),
+        .package(url: "https://github.com/getsentry/sentry-cocoa", exact: "9.35.0"),
         // Pin the Swift 5.9-compatible OpenTelemetry release. Declaring the core
         // package explicitly keeps SwiftPM from resolving its 2.x range to a
         // Swift 6-only release.
         .package(
             url: "https://github.com/open-telemetry/opentelemetry-swift.git",
-            exact: "2.2.0"
+            exact: "2.2.1"
         ),
         .package(
             url: "https://github.com/open-telemetry/opentelemetry-swift-core.git",
-            exact: "2.2.0"
+            exact: "2.6.0"
         ),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.3")
     ],
