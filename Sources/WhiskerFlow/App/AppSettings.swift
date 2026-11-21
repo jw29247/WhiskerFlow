@@ -74,7 +74,22 @@ final class AppSettings {
     /// Atlas is the production service used by Meeting Mode. The connection
     /// token returned after Clerk sign-in remains in Keychain.
     var atlasBaseURL: String { Self.atlasProductionURL }
-    var meetingModeEnabled: Bool { didSet { defaults.set(meetingModeEnabled, forKey: Keys.meetingModeEnabled) } }
+    /// Automatic recording of scheduled meetings: when on, a scheduled Google
+    /// Meet call is recorded as soon as the user joins it, without asking, and
+    /// uploaded to Atlas. Off unless the user turns it on. Any change the user
+    /// makes is also their answer to the one-time question below.
+    var meetingModeEnabled: Bool {
+        didSet {
+            defaults.set(meetingModeEnabled, forKey: Keys.meetingModeEnabled)
+            if meetingModeChoicePending { meetingModeChoicePending = false }
+        }
+    }
+    /// 2.0.0 to 2.1.0 turned automatic recording on for every install without
+    /// asking. The reset turned it back off; this stays true until the user
+    /// says whether they want it, so the main window can ask once.
+    var meetingModeChoicePending: Bool {
+        didSet { defaults.set(meetingModeChoicePending, forKey: Keys.meetingModeChoicePending) }
+    }
     /// Show "Record this meeting?" when a call starts in a call app or browser.
     var askToRecordCalls: Bool { didSet { defaults.set(askToRecordCalls, forKey: Keys.askToRecordCalls) } }
     /// The private meeting coach. On by default and remembered.
@@ -224,15 +239,20 @@ final class AppSettings {
             min(max($0, InsightsSummary.typingWordsPerMinuteRange.lowerBound), InsightsSummary.typingWordsPerMinuteRange.upperBound)
         } ?? InsightsSummary.defaultTypingWordsPerMinute
         defaults.removeObject(forKey: Keys.atlasBaseURL)
-        // Meeting Mode is on by default (2 October 2026). Existing installs
-        // switch on once, whatever they stored before, and keep any later
-        // choice. It records only after "Record this meeting?" or a scheduled
-        // opt-in, and needs Atlas; the model is the dictation model.
-        if !defaults.bool(forKey: Keys.meetingModeDefaultOnMigrated) {
-            defaults.set(true, forKey: Keys.meetingModeEnabled)
-            defaults.set(true, forKey: Keys.meetingModeDefaultOnMigrated)
+        // Automatic meeting recording is off by default. 2.0.0 to 2.1.0
+        // switched it on for every install without asking, so it is reset
+        // once: an install that has it on goes back to off and is asked what
+        // it wants. Later choices are kept.
+        defaults.removeObject(forKey: Keys.meetingModeDefaultOnMigrated)
+        if !defaults.bool(forKey: Keys.meetingModeConsentReset) {
+            defaults.set(true, forKey: Keys.meetingModeConsentReset)
+            if defaults.bool(forKey: Keys.meetingModeEnabled) {
+                defaults.set(false, forKey: Keys.meetingModeEnabled)
+                defaults.set(true, forKey: Keys.meetingModeChoicePending)
+            }
         }
-        meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? true
+        meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? false
+        meetingModeChoicePending = defaults.bool(forKey: Keys.meetingModeChoicePending)
         askToRecordCalls = defaults.object(forKey: Keys.askToRecordCalls) as? Bool ?? true
         coachEnabled = defaults.object(forKey: Keys.coachEnabled) as? Bool ?? true
         coachLiveAnalysis = defaults.object(forKey: Keys.coachLiveAnalysis) as? Bool ?? true
@@ -273,6 +293,12 @@ final class AppSettings {
         selectedInput = selection
         defaults.removeObject(forKey: Keys.selectedDeviceID)
         legacySelectedDeviceID = nil
+    }
+
+    /// The user's answer to the one-time automatic recording question.
+    func answerMeetingModeChoice(enabled: Bool) {
+        meetingModeEnabled = enabled
+        meetingModeChoicePending = false
     }
 
     /// The key combination the monitor should watch for, resolving presets and
@@ -416,7 +442,10 @@ final class AppSettings {
         static let launchAtLogin = "launchAtLogin"
         static let atlasBaseURL = "atlasBaseURL"
         static let meetingModeEnabled = "meetingModeEnabled"
+        /// Left by 2.0.0 to 2.1.0, which used it to switch automatic recording on once.
         static let meetingModeDefaultOnMigrated = "meetingModeDefaultOnMigrated"
+        static let meetingModeConsentReset = "meetingModeConsentReset"
+        static let meetingModeChoicePending = "meetingModeChoicePending"
         static let meetingTranscriptRetention = "meetingTranscriptRetention"
         static let askToRecordCalls = "askToRecordCalls"
         static let coachEnabled = "coachEnabled"

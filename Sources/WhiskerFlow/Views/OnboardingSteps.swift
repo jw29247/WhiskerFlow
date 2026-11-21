@@ -28,7 +28,7 @@ struct OnboardingWelcomeStep: View {
             .padding(.vertical, 6)
             OnboardingCard {
                 Label("Private by design", systemImage: "lock.shield").font(.system(size: 14, weight: .medium))
-                Text("Dictation runs entirely on this Mac. Your voice and your words aren’t sent anywhere. Meeting recording is separate, and stays off unless you turn it on.")
+                Text("Dictation runs entirely on this Mac. Your voice and your words aren’t sent anywhere. Meeting recording is separate: it starts only when you choose Record or turn on automatic recording, and recordings are uploaded to Atlas.")
                     .font(.system(size: 13)).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: 470)
@@ -682,7 +682,7 @@ struct OnboardingExtrasStep: View {
                         .onChange(of: appState.settings.meetingModeEnabled) { _, _ in appState.refreshMeetingConfiguration() }
                 }
                 Text(paired
-                     ? "Records eligible calendar meetings and saves the recording and transcript to Atlas."
+                     ? "When on, scheduled Google Meet calls are recorded as soon as you join, without asking, and uploaded to Atlas. When off, WhiskerFlow asks first."
                      : "Connect Atlas first. Meetings are saved to your Atlas workspace.")
                     .font(.caption).foregroundStyle(FlowStyle.muted)
                 Divider()

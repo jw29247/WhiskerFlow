@@ -112,6 +112,9 @@ enum UIPreview {
         if isEnabled {
             let identifier = "agency.thatworks.WhiskerFlow.ui-preview.\(UUID().uuidString)"
             let defaults = UserDefaults(suiteName: identifier)!
+            // An install that 2.0.0 to 2.1.0 left recording automatically: the
+            // reset turns it off and the main window asks once.
+            if mode == "auto-record-notice" { defaults.set(true, forKey: "meetingModeEnabled") }
             let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: identifier))
             settings.showMenuBarExtra = false
             if mode == "toggle" { settings.recordingMode = .toggle; settings.delivery = .copyOnly }
@@ -143,7 +146,7 @@ enum UIPreview {
             let state = AppState(settings: settings, store: store,
                                  dictionaryStore: dictionary, microphonePermission: permission,
                                  onboardingStore: onboardingStore)
-            if mode != "empty" && mode != "setup" && onboardingStep == nil {
+            if mode != "empty" && mode != "setup" && mode != "auto-record-notice" && onboardingStep == nil {
                 let learned = dictionary.entries.first { $0.written == "Claude" }!
                 state.dictionaryNotice = DictionaryNotice(changes: [
                     DictionaryChange(pair: learned.pair, before: nil, after: learned)

@@ -94,8 +94,8 @@ struct CallPromptView: View {
                         .buttonStyle(FlowPrimaryButtonStyle())
                     Button("Not now") { appState.declineCallPrompt() }
                 }.controlSize(.small).padding(.top, 2)
-                Text("Recorded and transcribed on this Mac. Stops when the call ends.")
-                    .font(.caption2).foregroundStyle(FlowStyle.muted)
+                Text("Transcribed on this Mac, then the recording and transcript are uploaded to Atlas. Stops when the call ends.")
+                    .font(.caption2).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(16)

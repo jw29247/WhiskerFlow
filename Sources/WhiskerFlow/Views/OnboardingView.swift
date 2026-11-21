@@ -133,7 +133,9 @@ extension AppState {
             accessibilityGranted: hasAccessibilityPermission,
             modelReady: modelState == .ready,
             atlasConnected: isAtlasPaired,
-            meetingRecordingReady: settings.meetingModeEnabled && hasScreenRecordingPermission
+            // Automatic recording is optional; setup needs only the access
+            // that recording a meeting requires.
+            meetingRecordingReady: hasScreenRecordingPermission
         )
     }
 }
