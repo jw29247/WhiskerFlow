@@ -25,7 +25,6 @@ final class LocalDiagnosticLog: @unchecked Sendable {
         row["pid"] = String(ProcessInfo.processInfo.processIdentifier)
         row["launch"] = identity.launchID
         row["build"] = identity.build
-        row["installation_id"] = identity.installationID
         guard let encoded = try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]) else {
             lock.lock(); pending -= 1; lock.unlock(); return
         }
@@ -70,9 +69,21 @@ struct LocalDiagnosticLogHandler: LogHandler {
         set { metadata[key] = newValue }
     }
     func log(event: LogEvent) {
-        guard ["agency.thatworks.WhiskerFlow.DictationLifecycle", "agency.thatworks.WhiskerFlow.MeetingProcessing", "agency.thatworks.WhiskerFlow.Cleanup"].contains(label) else { return }
+        guard ["agency.thatworks.WhiskerFlow.DictationLifecycle", "agency.thatworks.WhiskerFlow.MeetingProcessing", "agency.thatworks.WhiskerFlow.Cleanup", "agency.thatworks.WhiskerFlow.Diagnostics"].contains(label) else { return }
         var values = metadata
         if let extra = event.metadata { values.merge(extra) { _, new in new } }
+        if let name = values["event"]?.description, ["diagnostic_error", "diagnostic_breadcrumb"].contains(name) {
+            // `DiagnosticsService` failures and breadcrumbs: an allow-listed
+            // category plus `DiagnosticPrivacy`'s allow-listed metadata, nothing else.
+            let raw = values.mapValues(\.description)
+            guard let category = raw["category"], DiagnosticPrivacy.allowsCategory(category) else { return }
+            var fields = DiagnosticPrivacy.safeMetadata(from: raw)
+            fields["event"] = name
+            fields["level"] = event.level.rawValue
+            fields["category"] = category
+            sink.append(fields)
+            return
+        }
         let allowedEvents: Set = ["cleanup_finished", "correction_assessed", "meeting_window_empty", "meeting_speaker_probe", "app_started", "state_changed", "recording_requested", "recording_rejected", "recording_started", "finish_started", "decode_returned", "paste_started", "paste_posted", "paste_returned", "finish_returned", "finish_timeout", "capture_discarded", "main_thread_stalled", "main_thread_recovered", "heartbeat", "stage_started", "stage_finished", "resource_snapshot", "stack_capture_started", "stack_captured", "stack_capture_failed", "stack_capture_skipped", "call_detection_started", "call_detected", "call_ended", "call_unrecognised", "correction_watch", "correction_observed", "dictionary_learned", "capture_engine_timeout", "capture_start_timing", "capture_opening", "interaction_state", "hotkey_transition", "system_sleep", "system_wake", "monitoring_gap", "globe_key_override_applied", "globe_key_override_restored", "media_pause_checked", "media_paused", "media_resumed"]
         guard let name = values["event"]?.description, allowedEvents.contains(name) else { return }
         var fields = ["event": name, "level": event.level.rawValue]

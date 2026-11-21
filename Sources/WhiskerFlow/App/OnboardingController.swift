@@ -3,8 +3,7 @@ import Observation
 import WhiskerFlowAppSupport
 
 /// Owns the setup flow for the app: persists every change so a quit resumes
-/// on the same screen, and reports each transition to anonymous telemetry.
-/// Step logic lives in `OnboardingFlow`.
+/// on the same screen. Step logic lives in `OnboardingFlow`.
 @MainActor
 @Observable
 final class OnboardingController {
@@ -15,12 +14,9 @@ final class OnboardingController {
     var accessibilityRequestedAt: Date?
 
     @ObservationIgnored private let store: any OnboardingProgressStoring
-    @ObservationIgnored private let record: (OnboardingTelemetryEvent) -> Void
 
-    init(store: any OnboardingProgressStoring,
-         record: @escaping (OnboardingTelemetryEvent) -> Void = { Observability.recordOnboarding($0) }) {
+    init(store: any OnboardingProgressStoring) {
         self.store = store
-        self.record = record
         flow = OnboardingFlow(progress: store.load() ?? OnboardingProgress())
     }
 
@@ -38,8 +34,8 @@ final class OnboardingController {
             present()
             return true
         case .skip(let markFinished):
-            // Recorded as done without telemetry: this user never saw setup.
-            if markFinished { apply(emitting: false) { $0.finish() } }
+            // Recorded as done: this user never saw setup.
+            if markFinished { apply { $0.finish() } }
             return false
         }
     }
@@ -66,10 +62,10 @@ final class OnboardingController {
         if !wasFinished && flow.progress.isFinished { isPresented = false }
     }
 
-    func back() { apply { $0.back(); return [] } }
+    func back() { apply { $0.back() } }
     func jump(to step: OnboardingStep) { apply { $0.jump(to: step) } }
     func markPassed(_ step: OnboardingStep) { apply { $0.markPassed(step) } }
-    func invalidate(_ step: OnboardingStep) { apply { $0.invalidate(step); return [] } }
+    func invalidate(_ step: OnboardingStep) { apply { $0.invalidate(step) } }
 
     func finish() {
         apply { $0.finish() }
@@ -82,18 +78,12 @@ final class OnboardingController {
         isPresented = false
     }
 
-    private func apply(emitting: Bool = true, _ change: (inout OnboardingFlow) -> [OnboardingTelemetryEvent]) {
+    private func apply(_ change: (inout OnboardingFlow) -> Void) {
         var next = flow
-        let events = change(&next)
+        change(&next)
         if next != flow {
             flow = next
             store.save(next.progress)
         }
-        if emitting { emit(events) }
-    }
-
-    private func emit(_ events: [OnboardingTelemetryEvent]) {
-        guard !UIPreview.isEnabled else { return }
-        events.forEach(record)
     }
 }
