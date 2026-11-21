@@ -18,7 +18,7 @@ final class LocalDiagnosticLogTests: XCTestCase {
         sink.flush()
         let lines = try String(contentsOf: root.appendingPathComponent("diagnostics.jsonl"), encoding: .utf8)
         let rows = try lines.split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: String]) }
-        XCTAssertEqual(rows[0]["installation_id"], DiagnosticIdentity.current.installationID)
+        XCTAssertNil(rows[0]["installation_id"])
         XCTAssertEqual(rows[0]["launch"], DiagnosticIdentity.current.launchID)
         XCTAssertEqual(rows[0]["stall_id"], stallID)
         XCTAssertEqual(rows[0]["app_active"], "false")

@@ -25,7 +25,6 @@ final class LocalDiagnosticLog: @unchecked Sendable {
         row["pid"] = String(ProcessInfo.processInfo.processIdentifier)
         row["launch"] = identity.launchID
         row["build"] = identity.build
-        row["installation_id"] = identity.installationID
         guard let encoded = try? JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]) else {
             lock.lock(); pending -= 1; lock.unlock(); return
         }
