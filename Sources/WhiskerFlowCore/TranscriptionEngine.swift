@@ -52,7 +52,7 @@ public enum TranscriptionEngineKind: String, Codable, CaseIterable, Sendable, Id
     public var blurb: String {
         switch self {
         case .parakeetTDTv3: return "Fast, accurate on-device dictation, recommended for near-instant results."
-        case .appleSpeech: return "No download, fully offline, built into macOS."
+        case .appleSpeech: return "No download, built into macOS. Only runs where this Mac can recognise the language offline."
         case .appleDictation: return "Apple's on-device dictation model, for languages Parakeet doesn't cover."
         }
     }
@@ -169,6 +169,9 @@ public enum TranscriptionError: LocalizedError, Equatable {
     case emptyTranscript
     case cancelled
     case timedOut(seconds: Int)
+    /// Apple Speech has no on-device model for the language and would have to
+    /// send the audio to Apple.
+    case onDeviceRecognitionUnavailable
     case underlying(String)
 
     public var errorDescription: String? {
@@ -183,6 +186,9 @@ public enum TranscriptionError: LocalizedError, Equatable {
             return "Transcription was cancelled."
         case .timedOut(let seconds):
             return "Transcription timed out after \(seconds)s."
+        case .onDeviceRecognitionUnavailable:
+            return "Apple Speech can't recognise this language on this Mac without sending audio to Apple, "
+                + "so WhiskerFlow didn't use it."
         case .underlying(let message):
             return message
         }

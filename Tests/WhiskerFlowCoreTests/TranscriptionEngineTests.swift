@@ -28,6 +28,14 @@ final class TranscriptionEngineTests: XCTestCase {
         XCTAssertEqual(TranscriptionEngineKind.displayName(forStored: "appleSpeech"), "Apple Speech (built-in)")
     }
 
+    func testOnDeviceRefusalExplainsWhyAppleSpeechWasNotUsed() {
+        XCTAssertEqual(
+            TranscriptionError.onDeviceRecognitionUnavailable.localizedDescription,
+            "Apple Speech can't recognise this language on this Mac without sending audio to Apple, "
+                + "so WhiskerFlow didn't use it."
+        )
+    }
+
     func testRecognizerHintsHaveNoWhisperSwitch() {
         let hints = RecognizerHints(terms: ["Atlas"], appleSpeech: true, parakeet: false)
         XCTAssertEqual(hints.terms(for: .appleSpeech), ["Atlas"])

@@ -7,7 +7,8 @@ transcribes locally and pastes the text wherever your cursor is.
   Meeting Mode uploads meeting recordings and transcripts to the connected Atlas
   account. Operational telemetry excludes audio and transcript text.
 - **Zero-setup install** — no Python, no Homebrew. The model downloads itself on first use.
-- **Works offline too** — a built-in Apple Speech engine needs no download at all.
+- **Works offline too** — a built-in Apple Speech engine needs no download, for the languages
+  macOS can recognise on this Mac. It never sends audio to Apple.
 - **Styles by app category** — dictation into Messages, Slack, Mail, code editors, AI chats and documents
   is written in that category's tone (Formal, Casual, Very casual or Literal). Browsers are sorted by the
   website you're on. Change tones, or move individual apps, in **Assistant → Styles**; all rules run on this Mac.
@@ -68,7 +69,7 @@ icon gives quick access to recent transcripts.
 | Engine | Download | Offline | Notes |
 | --- | --- | --- | --- |
 | Parakeet TDT v3 (default) | model on first use | after download | Fast on-device dictation and meeting transcripts, Apple Silicon |
-| Apple Speech | none | always | Built into macOS; the fallback, and the only engine on Intel Macs |
+| Apple Speech | none | always | Built into macOS; the fallback, and the only engine on Intel Macs. On-device only: a language macOS can't recognise on this Mac is refused, not sent to Apple |
 
 Pick the engine and language in **Settings → Engine**. Whisper (WhisperKit and the
 Whisper CLI) was removed; a build that finds its downloaded models deletes them.

@@ -26,12 +26,11 @@ actor AppleSpeechEngine: Sendable {
         else {
             throw TranscriptionError.engineUnavailable(.appleSpeech)
         }
+        try Self.requireOnDeviceRecognition(supported: recognizer.supportsOnDeviceRecognition)
 
         let speechRequest = SFSpeechURLRecognitionRequest(url: request.audioURL)
         speechRequest.shouldReportPartialResults = false
-        if recognizer.supportsOnDeviceRecognition {
-            speechRequest.requiresOnDeviceRecognition = true
-        }
+        speechRequest.requiresOnDeviceRecognition = true
         // Dictionary words bias the recogniser towards those spellings. Apple
         // recommends at most 100 phrases; more are accepted but dilute each one.
         let terms = request.hints.terms(for: .appleSpeech)
@@ -79,6 +78,13 @@ actor AppleSpeechEngine: Sendable {
     }
 
     static let maximumContextualStrings = 100
+
+    /// Dictation audio never leaves the Mac. Without an on-device model for the
+    /// locale, `SFSpeechRecognizer` would send the audio to Apple's servers, so
+    /// the engine refuses before any recognition task starts.
+    static func requireOnDeviceRecognition(supported: Bool) throws {
+        guard supported else { throw TranscriptionError.onDeviceRecognitionUnavailable }
+    }
 
     private static func audioSeconds(at url: URL) -> Double? {
         guard let file = try? AVAudioFile(forReading: url) else { return nil }

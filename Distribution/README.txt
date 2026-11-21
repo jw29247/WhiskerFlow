@@ -23,7 +23,8 @@ downloads its model (about 500 MB) and keeps it warm afterwards. Meetings are
 transcribed with the same model.
 
 If you have no internet on first run, WhiskerFlow uses Apple Speech (built-in)
-until the download finishes; it works fully offline with zero download.
+until the download finishes; it works fully offline with zero download, for the
+languages macOS can recognise on this Mac. It never sends audio to Apple.
 
 Notes
 -----
