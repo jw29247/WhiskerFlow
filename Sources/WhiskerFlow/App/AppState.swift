@@ -178,7 +178,7 @@ final class AppState {
     private let correctionMonitor = PasteCorrectionMonitor()
     private let soundService = SoundService()
     let microphonePermission: MicrophonePermissionController
-    let sharedVocabulary = SharedVocabularyService()
+    let sharedVocabulary: SharedVocabularyService
     private var hotkeyMonitor: HotkeyMonitor?
     private let globeKeyShortcutOverride = GlobeKeyShortcutOverride()
     private var assistantHotkeyMonitors: [HotkeyMonitor] = []
@@ -294,6 +294,11 @@ final class AppState {
             usageDays: { tally in LeaderboardReport.days(buckets: insights.buckets, meetings: tally) },
             defaults: resolvedSettings.userDefaults
         )
+        self.sharedVocabulary = SharedVocabularyService(client: { [resolvedSettings] in
+            guard reportsUsage, !resolvedSettings.atlasDeviceToken.isEmpty,
+                  let url = URL(string: resolvedSettings.atlasBaseURL), url.scheme == "https" else { return nil }
+            return GlossaryAtlasClient(baseURL: url, token: resolvedSettings.atlasDeviceToken)
+        })
         self.live = LiveDictationSession(transcription: transcription)
         enforcesAtlasSignIn = reportsUsage
         var defaultPasteService = PasteService()
@@ -583,6 +588,8 @@ final class AppState {
         guard !UIPreview.isEnabled else { return }
         let token = settings.atlasDeviceToken
         if atlasTokenAvailable != !token.isEmpty { atlasTokenAvailable = !token.isEmpty }
+        // A sign-in or reconnect fetches the glossary now; a sign-out stops using the old token.
+        sharedVocabulary.credentialsChanged()
         // A failed Keychain read (locked keychain, re-signed build, busy securityd)
         // looks exactly like "no token", and the app has no sign-out. Keep the last
         // known account so a transient failure cannot wipe the assistant's
@@ -661,7 +668,7 @@ final class AppState {
         // catalog synchronously while scene restoration is laying it out can
         // re-enter its delegate and crash AppKit; defer one actor turn.
         refreshDevices()
-        sharedVocabulary.configureAgencyLibrary()
+        sharedVocabulary.start()
         sharedVocabulary.startPeriodicRefresh()
         startAudioDeviceMonitor()
         hotkeyReadinessActivity = ProcessInfo.processInfo.beginActivity(

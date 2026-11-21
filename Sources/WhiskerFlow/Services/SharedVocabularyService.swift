@@ -3,22 +3,24 @@ import Observation
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
-/// Fetches the agency-managed vocabulary glossary so client names and jargon
-/// spell correctly for everyone without per-user setup.
+/// Fetches the agency-managed vocabulary glossary from Atlas so client names
+/// and jargon spell correctly for everyone without per-user setup.
 ///
 /// The glossary is read-only and the payload is the same JSON shape as a local
 /// `Vocabulary` (`{ "rules": [ { "find": …, "replaceWith": … } ] }`). The last
-/// good copy is cached to disk so it keeps working offline. This only ever
-/// performs an HTTPS GET to the configured URL — no transcript or user data is sent.
+/// good copy is cached to disk so it keeps working offline and while signed out.
+/// The request is authorised by the Atlas device token and carries no
+/// arguments, so no transcript or user data is sent. Signed out, nothing is
+/// requested; any failure keeps the last good rules.
 ///
-/// Every fetch is tagged with a monotonically increasing `generation`. Pointing
-/// at a new URL (or turning the feature off) bumps the generation and cancels any
-/// in-flight fetch, and a fetch only commits its result if its generation is still
-/// current — so a slow response can never resurrect a superseded or disabled glossary.
+/// Every fetch is tagged with a monotonically increasing `generation`. A newer
+/// fetch (a refresh, a sign-in or a reconnect) bumps the generation and cancels
+/// any in-flight fetch, and a fetch only commits its result if its generation is
+/// still current, so a slow response can never resurrect a superseded glossary
+/// or one fetched with a token that has since been replaced.
 @MainActor
 @Observable
 final class SharedVocabularyService {
-    static let agencyURLString = "https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/shared-vocabulary.json"
     enum Status: Equatable {
         case idle
         case loading
@@ -29,17 +31,25 @@ final class SharedVocabularyService {
     private(set) var rules: [VocabularyRule] = []
     private(set) var status: Status = .idle
 
-    @ObservationIgnored private var urlString = ""
+    @ObservationIgnored private var isStarted = false
+    /// The token the latest fetch used, so a sign-in, reconnect or sign-out is
+    /// noticed and a replaced token is never used again.
+    @ObservationIgnored private var fetchedToken: String?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private let cacheURL: URL
-    @ObservationIgnored private let session: URLSession
+    @ObservationIgnored private let client: () -> GlossaryAtlasClient?
     @ObservationIgnored private var fetchTask: Task<Void, Never>?
     @ObservationIgnored private var periodicTask: Task<Void, Never>?
 
     var vocabulary: Vocabulary { Vocabulary(rules: rules) }
 
-    init(session: URLSession = .shared, cacheURL: URL = SharedVocabularyService.defaultCacheURL) {
-        self.session = session
+    /// `client` returns nil while signed out. It is read at the start of every
+    /// fetch, so it always reflects the current token.
+    init(
+        client: @escaping () -> GlossaryAtlasClient? = { nil },
+        cacheURL: URL = SharedVocabularyService.defaultCacheURL
+    ) {
+        self.client = client
         self.cacheURL = cacheURL
         loadInitialVocabulary()
     }
@@ -49,37 +59,28 @@ final class SharedVocabularyService {
         periodicTask?.cancel()
     }
 
-    /// Point the service at a URL. Returns `true` if the URL changed (and a fetch
-    /// was started). An empty URL turns the feature off and clears the cache.
-    @discardableResult
-    func configure(urlString newValue: String) -> Bool {
-        let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed != urlString else { return false }
-        urlString = trimmed
-        if trimmed.isEmpty {
-            generation &+= 1          // supersede any in-flight fetch
-            fetchTask?.cancel()
-            fetchTask = nil
-            rules = []
-            status = .idle
-            try? FileManager.default.removeItem(at: cacheURL)
-            return true
-        }
+    /// Fetch the agency glossary now (if signed in) and on every later refresh.
+    func start() {
+        guard !isStarted else { return }
+        isStarted = true
         startFetch()
-        return true
     }
 
-    func configureAgencyLibrary() {
-        _ = configure(urlString: Self.agencyURLString)
-    }
-
-    /// Re-fetch the current URL, superseding any in-flight fetch.
+    /// Re-fetch, superseding any in-flight fetch.
     func refresh() {
-        guard !urlString.isEmpty else { return }
+        guard isStarted else { return }
         startFetch()
     }
 
-    /// Re-fetch on a slow cadence. The first fetch comes from `configure`, so this
+    /// Call when the Atlas sign-in may have changed. A new token (sign-in or
+    /// reconnect) fetches straight away; a sign-out supersedes any fetch still
+    /// using the old token.
+    func credentialsChanged() {
+        guard isStarted, client()?.token != fetchedToken else { return }
+        startFetch()
+    }
+
+    /// Re-fetch on a slow cadence. The first fetch comes from `start`, so this
     /// sleeps before its first pass to avoid a duplicate launch fetch.
     func startPeriodicRefresh(interval: TimeInterval = 4 * 60 * 60) {
         periodicTask?.cancel()
@@ -91,31 +92,34 @@ final class SharedVocabularyService {
         }
     }
 
+    /// Waits for the fetch in flight, if any. Lets tests observe a fetch's outcome.
+    func waitForCurrentFetch() async {
+        await fetchTask?.value
+    }
+
     private func startFetch() {
         generation &+= 1
         let myGeneration = generation
-        let requested = urlString
         fetchTask?.cancel()
+        fetchTask = nil
+        guard let client = client() else {
+            // Signed out: request nothing, keep the cached rules, show no error.
+            fetchedToken = nil
+            if status == .loading { status = .idle }
+            return
+        }
+        fetchedToken = client.token
         fetchTask = Task { [weak self] in
-            await self?.performFetch(generation: myGeneration, urlString: requested)
+            await self?.performFetch(generation: myGeneration, client: client)
         }
     }
 
-    private func performFetch(generation myGeneration: Int, urlString requested: String) async {
-        guard let url = URL(string: requested), url.scheme?.lowercased() == "https" else {
-            if myGeneration == generation { status = .failed("Glossary URL must start with https://") }
-            return
-        }
+    private func performFetch(generation myGeneration: Int, client: GlossaryAtlasClient) async {
         if myGeneration == generation { status = .loading }
         do {
-            var request = URLRequest(url: url)
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            let (data, response) = try await session.data(for: request)
-            // Bail if a newer configure/refresh superseded this fetch while it ran.
+            let data = try await client.fetch()
+            // Bail if a newer fetch, sign-in or sign-out superseded this one while it ran.
             guard myGeneration == generation else { return }
-            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                throw URLError(.badServerResponse)
-            }
             let vocab = try ingest(data, source: "remote")
             guard myGeneration == generation else { return }
             rules = vocab.rules
@@ -131,21 +135,24 @@ final class SharedVocabularyService {
             }
         } catch {
             // A superseded/cancelled fetch (newer generation) stays silent and
-            // leaves state to the fetch that replaced it. Otherwise surface the
-            // error but keep the last good rules so dictation still benefits.
+            // leaves state to the fetch that replaced it. Otherwise record the
+            // error but keep the last good rules (and their cache) so dictation
+            // still benefits.
             guard myGeneration == generation else { return }
             status = .failed(error.localizedDescription)
+            let clientError = error as? GlossaryClientError
+            guard clientError?.isReportable ?? true else { return }
             DiagnosticsService.capture(
                 error: error,
                 category: "glossary",
-                code: String((error as NSError).code)
+                code: clientError?.diagnosticCode ?? String((error as NSError).code)
             )
         }
     }
 
     /// The sanitizer silently discards any rule that would rewrite everyday speech.
-    /// The glossary is hand-maintained and served live from a branch, so a drop has
-    /// to be reported: otherwise the maintainer sees the rule "live" in the file
+    /// The glossary is hand-maintained and served live from Atlas, so a drop has
+    /// to be reported: otherwise the maintainer sees the rule "live" in Atlas
     /// while it never applies on a single machine.
     private func ingest(_ data: Data, source: String) throws -> Vocabulary {
         let report = try AgencyVocabularyPolicy.decodeReport(data)
