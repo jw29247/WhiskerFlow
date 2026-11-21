@@ -42,20 +42,9 @@ struct LeaderboardAtlasClient: Sendable {
     }
 
     private func call(tool: String, args: [String: Any]) async throws -> Any {
-        var request = URLRequest(url: baseURL.appendingPathComponent("api/notetaker"))
-        request.httpMethod = "POST"
-        request.timeoutInterval = 30
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["tool": tool, "args": args])
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue(String(Int(Date().timeIntervalSince1970 * 1_000)), forHTTPHeaderField: "x-request-timestamp")
-        let (body, response) = try await session.data(for: request)
-        let envelope = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if (200..<300).contains(status), envelope?["ok"] as? Bool == true, let value = envelope?["value"] {
-            return value
-        }
-        throw Self.error(status: status, code: envelope?["error"] as? String)
+        let reply = try await AtlasNotetakerRequest(baseURL: baseURL, token: token, session: session).send(tool: tool, args: args)
+        if let value = reply.value { return value }
+        throw Self.error(status: reply.status, code: reply.errorCode)
     }
 
     static func error(status: Int, code: String?) -> LeaderboardClientError {
