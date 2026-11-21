@@ -108,7 +108,8 @@ public enum TranscriptStoreError: LocalizedError, Equatable {
 /// Dictation history. Records live in memory, newest first, and are persisted
 /// row by row to a SQLite database next to the legacy `transcripts.json`, so a
 /// dictation's history write costs one row whatever the size of the history.
-/// A legacy JSON history is imported on `load()` and kept as a backup.
+/// A legacy JSON history is imported on `load()` and then removed, so no plain
+/// copy of the history outlives the user's retention setting.
 public final class TranscriptStore {
     private let fileURL: URL
     public let databaseURL: URL
@@ -118,6 +119,7 @@ public final class TranscriptStore {
     private let fileManager: FileManager
     private let moveItem: (URL, URL) throws -> Void
     private let copyItem: (URL, URL) throws -> Void
+    private let removeItem: (URL) throws -> Void
     private var persistenceSuspended = false
     private var database: SQLiteDatabase?
 
@@ -145,6 +147,9 @@ public final class TranscriptStore {
         },
         copyItem: @escaping (URL, URL) throws -> Void = { source, destination in
             try FileManager.default.copyItem(at: source, to: destination)
+        },
+        removeItem: @escaping (URL) throws -> Void = { url in
+            try FileManager.default.removeItem(at: url)
         }
     ) {
         self.fileURL = fileURL
@@ -157,6 +162,7 @@ public final class TranscriptStore {
         self.removeAudioFile = removeAudioFile
         self.moveItem = moveItem
         self.copyItem = copyItem
+        self.removeItem = removeItem
     }
 
     public var retryQueue: [TranscriptRecord] {
@@ -170,6 +176,7 @@ public final class TranscriptStore {
         records = []
         let db = try openDatabase()
         try importLegacyHistory(into: db)
+        removeMigratedBackups()
         records = try Self.fetchAll(from: db)
         try pruneExpired()
     }
@@ -425,10 +432,12 @@ public final class TranscriptStore {
         try db.execute("CREATE INDEX IF NOT EXISTS transcripts_created_at ON transcripts(created_at DESC, id DESC)")
     }
 
-    /// Imports `transcripts.json` from before the SQLite store, then moves it to
-    /// `transcripts.migrated-<timestamp>.json` as a backup. The import ignores
-    /// ids already present, so a JSON that could not be moved (or one written by
-    /// a downgraded build) is merged again rather than duplicated.
+    /// Imports `transcripts.json` from before the SQLite store, then removes it:
+    /// once the import has committed, the database is the history and retention
+    /// applies to it, whereas a plain copy left beside it would outlive any
+    /// retention setting. The import ignores ids already present, so a JSON that
+    /// could not be removed (or one written by a downgraded build) is merged
+    /// again on the next `load()` rather than duplicated, and its removal retried.
     private func importLegacyHistory(into db: SQLiteDatabase) throws {
         guard fileManager.fileExists(atPath: fileURL.path) else { return }
         let data: Data
@@ -460,7 +469,35 @@ public final class TranscriptStore {
             let insert = try db.prepare(Self.insertSQL(orIgnore: true))
             for record in legacy { try insert.bind(Self.values(for: record)).run() }
         }
-        _ = backUpLegacyFile(suffix: "migrated")
+        // A failed removal only means the next `load()` imports it again.
+        try? removeItem(fileURL)
+    }
+
+    /// Earlier builds kept the imported JSON as `transcripts.migrated-<timestamp>.json`.
+    /// Each was written only after its import committed, so the database plus
+    /// retention is the source of truth and the backup is a stale plain copy.
+    /// Only that exact name is matched: `corrupt` backups are the sole copy of a
+    /// history that could not be read, and stay.
+    private func removeMigratedBackups() {
+        let directory = fileURL.deletingLastPathComponent()
+        let prefix = fileURL.deletingPathExtension().lastPathComponent + ".migrated-"
+        let suffix = ".json"
+        guard let urls = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: []
+        ) else { return }
+
+        for url in urls {
+            let name = url.lastPathComponent
+            guard name.hasPrefix(prefix), name.hasSuffix(suffix),
+                  name.count > prefix.count + suffix.count else { continue }
+            let stamp = name.dropFirst(prefix.count).dropLast(suffix.count)
+            guard stamp.allSatisfy({ $0.isASCII && $0.isNumber }),
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+            // Best effort: a backup that can't be removed now is retried on the next load.
+            try? removeItem(url)
+        }
     }
 
     /// Success is the move/copy result, never a `fileExists` probe: an unrelated

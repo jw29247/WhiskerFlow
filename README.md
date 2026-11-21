@@ -105,7 +105,7 @@ swift script/make_icon.swift Resources/AppIcon.iconset && \
 
 - **`WhiskerFlowCore`** — pure, dependency-free (system SQLite only), unit-tested: the
   transcript store (`transcripts.sqlite`, migrated from the older `transcripts.json`,
-  which is kept as a backup), retention, Insights aggregates, search, vocabulary, transcription request/result models, and shared value types.
+  which is removed once imported so retention covers all history), retention, Insights aggregates, search, vocabulary, transcription request/result models, and shared value types.
 - **`WhiskerFlow`** (app target) — SwiftUI/AppKit UI plus the engines
   (`ParakeetTDTv3Engine`, `AppleSpeechEngine`) behind a
   `TranscriptionService` coordinator, audio capture, paste, and hotkey services.
