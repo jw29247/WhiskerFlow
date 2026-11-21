@@ -92,14 +92,21 @@ This will:
 5. verify Gatekeeper acceptance, and
 6. update `Casks/whiskerflow.rb` with the new version and the DMG's real `sha256`.
 
-Then publish **both** assets (the appcast points at the `.zip`) at the release
-commit, and commit the appcast + cask to the same PR. They go live when the PR
-merges to `main`:
+Then publish in this order (details in [`AGENTS.md`](../AGENTS.md#whiskerflow-release-and-auto-update-flow)):
 
 ```bash
-gh release create "v0.4.0" "dist/WhiskerFlow-0.4.0.dmg" "dist/WhiskerFlow-0.4.0.zip" \
-  --target "$(git rev-parse HEAD)" --title "WhiskerFlow 0.4.0" --notes "What changed…"
-git commit -am "release: WhiskerFlow 0.4.0" && git push   # appcast.xml + cask, then merge the PR
+# 1. Draft release with all three assets (a draft is invisible to every feed)
+gh release create "v0.4.0" --draft --target "$(git rev-parse HEAD)" \
+  "dist/WhiskerFlow-0.4.0.dmg" "dist/WhiskerFlow-0.4.0.zip" appcast.xml \
+  --title "WhiskerFlow 0.4.0" --notes "What changed…"
+# 2. Check the draft's assets and feed
+script/verify_release_feed.sh 0.4.0
+# 3. Publish: live for builds reading the latest-release feed
+gh release edit "v0.4.0" --draft=false --latest
+script/verify_release_feed.sh --published 0.4.0
+# 4. Commit appcast.xml + cask to the release PR, wait for CI, merge:
+#    live for older builds reading appcast.xml on main
+git commit -am "release: WhiskerFlow 0.4.0" && git push
 ```
 
 > The tag-triggered GitHub Actions workflow (`.github/workflows/release.yml`)
@@ -113,6 +120,8 @@ git commit -am "release: WhiskerFlow 0.4.0" && git push   # appcast.xml + cask, 
 
 The repo is **public** so the installer, Sparkle, and Homebrew can fetch
 `appcast.xml`, the cask, and the release binaries without authentication.
+Current builds read `appcast.xml` from the latest GitHub release's assets;
+builds up to 2.1.0 read it from `main`, so every release updates both.
 
 **First install** (or anyone still on ≤ 0.3.0, which predates auto-update) — send
 the team the one-line installer; it grabs and installs the latest notarized DMG:
