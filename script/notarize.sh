@@ -12,7 +12,12 @@
 #      (or use an App Store Connect API key: --key / --key-id / --issuer)
 #
 # Usage:
-#   script/notarize.sh
+#   NOTES="Short release note" script/notarize.sh
+#
+# Release gate: refuses to start unless HEAD has a completed, successful run of
+# the CI workflow on GitHub and the checkout has no uncommitted changes or
+# untracked files (see script/require_green_ci.sh). Release from a pushed release/<version> branch
+# whose PR checks have passed.
 #
 # Env overrides:
 #   DEVELOPER_ID    full signing identity (default: first "Developer ID Application" in keychain)
@@ -22,14 +27,22 @@
 #   WHISKERFLOW_SENTRY_DSN  public DSN embedded in the packaged app
 #   SENTRY_AUTH_TOKEN       release-only token used by sentry-cli
 #   SENTRY_ORG / SENTRY_PROJECT  destination for dSYMs and release metadata
+#   ALLOW_UNVERIFIED_RELEASE=1   EMERGENCY ONLY: skip the green-CI release gate
 #
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="${REPO:-jw29247/WhiskerFlow}"
+
+# --- Release gate: the exact commit must have passed CI. Runs before anything
+#     is resolved, built or deleted.
+#     It always checks the canonical repository, whatever REPO is set to.
+"$ROOT_DIR/script/require_green_ci.sh"
+RELEASE_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || echo "<release commit>")"
+
 PRODUCT="WhiskerFlow"
 VERSION="${VERSION:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT_DIR/Resources/Info.plist")}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-WhiskerFlow-Notary}"
-REPO="${REPO:-jw29247/WhiskerFlow}"
 WHISKERFLOW_SENTRY_DSN="${WHISKERFLOW_SENTRY_DSN:-https://e933f92c9d1aeb052c5e27580575e46c@o4511347438583808.ingest.de.sentry.io/4511710099013712}"
 export WHISKERFLOW_SENTRY_DSN
 
@@ -178,10 +191,15 @@ cat <<MSG
     sha256 (DMG):          $SHA
     Updated:               appcast.xml + $CASK
 
-Publish BOTH assets (the appcast enclosure points at the .zip), then commit so
-the appcast + cask go live on main:
+Next (release from commit $RELEASE_SHA):
+  1. Publish BOTH assets from this exact commit (the appcast enclosure points
+     at the .zip):
     gh release create "v$VERSION" "$DMG_PATH" "$SPARKLE_ZIP" \\
-      --repo "$REPO" --title "$PRODUCT $VERSION" --notes "What changed…"
+      --repo "$REPO" --target "$RELEASE_SHA" \\
+      --title "$PRODUCT $VERSION" --notes "What changed…"
+  2. Commit appcast.xml + the cask to the same release PR, push, wait for CI,
+     then merge. The update goes live for installed apps when the merge lands
+     on main:
     git commit -am "release: $PRODUCT $VERSION" && git push
 
 Existing users on $PRODUCT 0.4.0+ receive this automatically via Sparkle.
