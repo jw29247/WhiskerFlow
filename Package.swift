@@ -19,17 +19,6 @@ let package = Package(
         // binary XCFramework; `script/bundle_app.sh` embeds & re-signs it.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
         .package(url: "https://github.com/getsentry/sentry-cocoa", exact: "9.21.0"),
-        // Pin the Swift 5.9-compatible OpenTelemetry release. Declaring the core
-        // package explicitly keeps SwiftPM from resolving its 2.x range to a
-        // Swift 6-only release.
-        .package(
-            url: "https://github.com/open-telemetry/opentelemetry-swift.git",
-            exact: "2.2.0"
-        ),
-        .package(
-            url: "https://github.com/open-telemetry/opentelemetry-swift-core.git",
-            exact: "2.2.0"
-        ),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.3")
     ],
     targets: [
@@ -45,14 +34,7 @@ let package = Package(
             name: "WhiskerFlowAppSupport",
             dependencies: [
                 "WhiskerFlowCore",
-                .product(name: "Logging", package: "swift-log"),
-                .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
-                .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core"),
-                .product(
-                    name: "OpenTelemetryProtocolExporterHTTP",
-                    package: "opentelemetry-swift"
-                ),
-                .product(name: "OTelSwiftLog", package: "opentelemetry-swift")
+                .product(name: "Logging", package: "swift-log")
             ]
         ),
         .executableTarget(
@@ -65,9 +47,7 @@ let package = Package(
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "Sentry", package: "sentry-cocoa"),
-                .product(name: "Logging", package: "swift-log"),
-                .product(name: "OpenTelemetryApi", package: "opentelemetry-swift-core"),
-                .product(name: "OpenTelemetrySdk", package: "opentelemetry-swift-core")
+                .product(name: "Logging", package: "swift-log")
             ],
             resources: [.copy("Resources/shared-vocabulary.json"), .copy("Resources/CleanupNotices.txt")],
             // The on-device coach model ships with macOS 26. Weak-link it so the

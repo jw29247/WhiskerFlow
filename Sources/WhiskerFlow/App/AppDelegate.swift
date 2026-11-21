@@ -40,13 +40,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard WindowCloseGuard.confirmTermination() else { return .terminateCancel }
         guard let appState, appState.hasPendingWork || appState.cleanup.needsShutdown else {
             appState?.stopMonitors()
-            Observability.shutdown(timeout: 2)
             return .terminateNow
         }
         // `shutdown()` is bounded, so the reply always arrives.
         Task { @MainActor in
             await appState.shutdown()
-            Observability.shutdown(timeout: 2)
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
