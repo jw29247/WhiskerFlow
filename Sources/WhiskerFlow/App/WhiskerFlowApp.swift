@@ -22,7 +22,6 @@ struct WhiskerFlowApp: App {
         #endif
         if !UIPreview.isEnabled {
             LocalDiagnostics.start()
-            DiagnosticsService.start()
         }
         let appState = UIPreview.makeAppState()
         _appState = State(initialValue: appState)

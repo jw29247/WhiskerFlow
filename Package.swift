@@ -18,7 +18,6 @@ let package = Package(
         // In-app auto-updates (appcast + EdDSA-signed updates). Sparkle ships as a
         // binary XCFramework; `script/bundle_app.sh` embeds & re-signs it.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
-        .package(url: "https://github.com/getsentry/sentry-cocoa", exact: "9.21.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.6.3")
     ],
     targets: [
@@ -46,7 +45,6 @@ let package = Package(
                 "WhiskerFlowCleanupSupport",
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "Sparkle", package: "Sparkle"),
-                .product(name: "Sentry", package: "sentry-cocoa"),
                 .product(name: "Logging", package: "swift-log")
             ],
             resources: [.copy("Resources/shared-vocabulary.json"), .copy("Resources/CleanupNotices.txt")],
