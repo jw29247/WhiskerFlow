@@ -100,6 +100,17 @@ CONFIGURATION=release SIGN_IDENTITY="$SIGN_IDENTITY" \
   "$ROOT_DIR/script/bundle_app.sh" "$APP_BUNDLE" >/dev/null
 "$ROOT_DIR/script/verify_upgrade_identity.sh" "$APP_BUNDLE"
 echo "==> Built & signed $APP_BUNDLE"
+
+# The app is what users download, so nothing inside it may carry this Mac's
+# home-directory path. (2.1.0 shipped one in a generated resource accessor.)
+# /usr/bin/grep by path: this must search binary files, whatever `grep` a
+# shell profile has substituted.
+LEAKED_FILES="$(LC_ALL=C /usr/bin/grep -rlF -e "$HOME/" "$APP_BUNDLE" || true)"
+if [[ -n "$LEAKED_FILES" ]]; then
+  echo "ERROR: The built app contains a local home-directory path in:" >&2
+  echo "$LEAKED_FILES" >&2
+  exit 1
+fi
 xcrun dsymutil "$APP_BUNDLE/Contents/MacOS/$PRODUCT" -o "$DSYM_PATH"
 APP_UUIDS="$(xcrun dwarfdump --uuid "$APP_BUNDLE/Contents/MacOS/$PRODUCT" | awk '{print $2}' | sort)"
 DSYM_UUIDS="$(xcrun dwarfdump --uuid "$DSYM_PATH" | awk '{print $2}' | sort)"
@@ -107,9 +118,17 @@ if [[ -z "$APP_UUIDS" || "$APP_UUIDS" != "$DSYM_UUIDS" ]]; then
   echo "ERROR: Generated dSYM UUID does not match the release executable." >&2
   exit 1
 fi
+# SwiftPM's Swift Build backend embeds Swift's serialized debugging options,
+# full of local build paths, in the dSYM (__swift_ast), and no compiler flag
+# turns that off. The dSYM is never part of a release, so that only matters if
+# it is about to be uploaded.
 if strings "$DSYM_PATH/Contents/Resources/DWARF/$PRODUCT" | grep -F "$HOME/" >/dev/null; then
-  echo "ERROR: Generated dSYM contains a local home-directory path." >&2
-  exit 1
+  if [[ "$SENTRY_UPLOAD_ENABLED" == true ]]; then
+    echo "ERROR: Generated dSYM contains a local home-directory path and would be uploaded to Sentry." >&2
+    echo "       Unset the Sentry release credentials to keep the dSYM on this Mac instead." >&2
+    exit 1
+  fi
+  echo "==> NOTE: the dSYM contains local build paths. It stays on this Mac; do not upload or share it."
 fi
 echo "==> Generated matching dSYM at $DSYM_PATH"
 
