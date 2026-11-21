@@ -1,0 +1,24 @@
+# Weekly dependency update pull requests. Each one runs the full CI, so minor
+# and patch bumps are grouped to keep macOS runner time down.
+#
+# Not covered: the llama.cpp binary target in Package.swift is pinned by URL
+# and checksum, which Dependabot cannot update. Bump it by hand.
+version: 2
+updates:
+  - package-ecosystem: swift
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      swift-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns: ["*"]
