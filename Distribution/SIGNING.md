@@ -69,12 +69,15 @@ Commit the updated `Info.plist`, and **back up the private key** somewhere safe
 
 ## Cut a release
 
-Bump `CFBundleShortVersionString` **and** `CFBundleVersion` in
-`Resources/Info.plist` first (Sparkle compares `CFBundleVersion`, so it must
-increase every release), then:
+Follow the release procedure in [`AGENTS.md`](../AGENTS.md#whiskerflow-release-and-auto-update-flow):
+bump with `script/bump_version.sh <version>` on a `release/<version>` branch,
+push it, open a PR and wait for CI to pass. `notarize.sh` refuses to build a
+commit without a successful CI run on GitHub, or with uncommitted tracked
+changes (emergency override: `ALLOW_UNVERIFIED_RELEASE=1`). Then, on that
+commit:
 
 ```bash
-VERSION=0.4.0 script/notarize.sh        # optional: NOTES="One-line changelog"
+NOTES="One-line changelog" script/notarize.sh
 ```
 
 This will:
@@ -88,13 +91,14 @@ This will:
 5. verify Gatekeeper acceptance, and
 6. update `Casks/whiskerflow.rb` with the new version and the DMG's real `sha256`.
 
-Then publish **both** assets (the appcast points at the `.zip`) and commit the
-appcast + cask so they go live on `main`:
+Then publish **both** assets (the appcast points at the `.zip`) at the release
+commit, and commit the appcast + cask to the same PR. They go live when the PR
+merges to `main`:
 
 ```bash
 gh release create "v0.4.0" "dist/WhiskerFlow-0.4.0.dmg" "dist/WhiskerFlow-0.4.0.zip" \
-  --title "WhiskerFlow 0.4.0" --notes "What changed…"
-git commit -am "release: WhiskerFlow 0.4.0" && git push   # ships appcast.xml + cask
+  --target "$(git rev-parse HEAD)" --title "WhiskerFlow 0.4.0" --notes "What changed…"
+git commit -am "release: WhiskerFlow 0.4.0" && git push   # appcast.xml + cask, then merge the PR
 ```
 
 > The tag-triggered GitHub Actions workflow (`.github/workflows/release.yml`)
