@@ -266,14 +266,28 @@ page or a model licence), which open in your browser.
 
 **Other people are recorded.** A recording includes everyone in the call, and
 their voices and words are uploaded to Atlas with the transcript. WhiskerFlow
-does not tell other participants that you are recording. Telling them, and
-having their agreement where it is needed, is your responsibility.
+cannot tell the other participants itself and posts nothing to the call. Each
+time a recording starts, it reminds you to tell them and offers to copy a
+short notice for you to paste into the meeting chat. You can change the
+wording in Settings → Meetings → Recording notice. Telling them, and having
+their agreement where it is needed, is your responsibility.
 
 ## Signing out and uninstalling
 
-**Signing out.** WhiskerFlow has no sign-out button yet. Your device token
-stays in your Keychain until you remove it (Keychain Access, item
-`agency.thatworks.WhiskerFlow.meeting-capture`).
+**Signing out.** Settings → Meetings → Atlas → **Sign out…** removes your
+device token from the Keychain, and removes from this Mac what came from your
+account: the team glossary, your meeting schedule, the leaderboard, meeting
+summaries from Atlas and the Assistant's client list. Dictation history, your
+corrections, Insights, settings, meeting transcripts and notes, and Assistant
+drafts stay on this Mac. WhiskerFlow then will not dictate or record meetings
+until you sign in again.
+
+Sign-out waits while a meeting is recording or a recording has not reached
+Atlas yet. Meeting notes and bookmarks that have not reached Atlas stay on
+this Mac and are not sent afterwards.
+
+Signing out does not cancel the device token in Atlas: the app has no way to
+do that yet. Ask That Works if you need it cancelled.
 
 **Uninstalling.** Deleting the app does not delete its data. These stay until
 you remove them:
@@ -298,6 +312,11 @@ leaderboard counts) stays in Atlas. Ask That Works about it.
   release removes both and deletes the stored installation identifier.
 - **2.1.1 and earlier** download the shared glossary from this public GitHub
   repository, not from Atlas.
+- **2.1.1 and earlier** have no sign-out button. The device token stays in
+  your Keychain until you remove it (Keychain Access, item
+  `agency.thatworks.WhiskerFlow.meeting-capture`).
+- **2.1.1 and earlier** do not remind you to tell other participants that you
+  are recording.
 - **2.0.0 to 2.1.0** switched automatic meeting recording on without asking.
   2.1.1 switches it back off and asks once.
 - **Versions before 2.1.1** could let macOS send Apple Speech audio to Apple
