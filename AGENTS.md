@@ -80,9 +80,19 @@ files unchanged. Explicit user instructions take precedence.
 
 ## WhiskerFlow Release And Auto-Update Flow
 
-WhiskerFlow auto-updates through Sparkle. The trigger users see is not merely a
-GitHub tag or release: Sparkle reads `appcast.xml` from `main`, then downloads
-the `.zip` enclosure referenced there.
+WhiskerFlow auto-updates through Sparkle, which reads a feed (`appcast.xml`)
+and downloads the `.zip` enclosure referenced there. There are two feeds:
+
+- **Release feed.** Builds made after the switch read
+  `https://github.com/jw29247/WhiskerFlow/releases/latest/download/appcast.xml`,
+  the `appcast.xml` asset of the latest published GitHub release. Every release
+  must carry that asset: a published release without it leaves these builds
+  with no feed until it is uploaded.
+- **Legacy feed.** Builds made before the switch (every release up to 2.1.1) read
+  `https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/appcast.xml`.
+  Every release must still commit `appcast.xml` to `main` through the release
+  PR, because those installs know no other URL and only move to the release
+  feed by updating through this one.
 
 `main` is protected (pull requests only; `build-test` and `lint` required).
 `script/notarize.sh` refuses to build unless the exact commit has a completed,
@@ -113,21 +123,35 @@ For a real release:
    This requires a Developer ID Application certificate, the
    `WhiskerFlow-Notary` notarytool profile, the Sparkle private key available
    to `sign_update`, and an authenticated `gh`.
-3. Publish both generated assets, tagged at that commit:
+3. Create the GitHub release as a **draft** at that commit, with all three
+   assets. A draft is invisible to every feed:
 
    ```bash
-   gh release create "v<version>" \
-     "dist/WhiskerFlow-<version>.dmg" \
-     "dist/WhiskerFlow-<version>.zip" \
-     --target <release commit SHA> \
-     --title "WhiskerFlow <version>" \
-     --notes "Short release note"
+   gh release create "v<version>" --draft --target <release commit SHA> \
+     "dist/WhiskerFlow-<version>.dmg" "dist/WhiskerFlow-<version>.zip" appcast.xml \
+     --title "WhiskerFlow <version>" --notes "Short release note"
    ```
 
-   The `.dmg` is for fresh installs. The `.zip` is the Sparkle update payload.
-4. Commit the generated `appcast.xml` and `Casks/whiskerflow.rb` to the same
-   PR, wait for CI, and merge. Installed apps on the Sparkle update track
-   discover the release when that merge lands on `main`.
+   The `.dmg` is for fresh installs, the `.zip` is the Sparkle update payload
+   and `appcast.xml` is the release feed.
+4. Verify the draft. This fails unless the release has exactly those three
+   assets and its `appcast.xml` lists `<version>` first, signed, pointing at
+   this release's `.zip` with the right length:
+
+   ```bash
+   script/verify_release_feed.sh <version>
+   ```
+5. Publish it. **This is the go-live moment for builds on the release feed**,
+   because `releases/latest/download/…` now resolves to this release. Then
+   confirm the public feed serves it:
+
+   ```bash
+   gh release edit "v<version>" --draft=false --latest
+   script/verify_release_feed.sh --published <version>
+   ```
+6. Commit the generated `appcast.xml` and `Casks/whiskerflow.rb` to the same
+   PR, wait for CI, and merge. **This is the go-live moment for builds on the
+   legacy feed**, when the merge lands on `main`.
 
 Important gotcha: `.github/workflows/release.yml` is verification-only. It builds
 unsigned, un-notarized packaging artifacts on tags and does not publish release

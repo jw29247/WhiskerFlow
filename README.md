@@ -1,14 +1,24 @@
 # WhiskerFlow
 
-On-device push-to-talk dictation for macOS. Hold a key, speak, release — WhiskerFlow
-transcribes locally and pastes the text wherever your cursor is.
+WhiskerFlow is That Works' internal dictation tool for macOS. It requires signing in
+with a That Works Atlas account before it will dictate. The repository is public
+because installed copies read their updates from it.
 
-- **Fast & private** — dictation uses Parakeet TDT v3 on-device by default. Optional
-  Meeting Mode uploads meeting recordings and transcripts to the connected Atlas
-  account. No telemetry or crash reports are sent; diagnostics stay on this Mac.
-- **Zero-setup install** — no Python, no Homebrew. The model downloads itself on first use.
-- **Works offline too** — a built-in Apple Speech engine needs no download, for the languages
-  macOS can recognise on this Mac. It never sends audio to Apple.
+Push-to-talk dictation: hold a key, speak, release — WhiskerFlow transcribes on your
+Mac and pastes the text wherever your cursor is.
+
+**Privacy:** see [PRIVACY.md](PRIVACY.md) for what stays on your Mac, what is sent to
+Atlas and others, and what the app reads.
+
+- **On-device dictation** — dictation uses Parakeet TDT v3 on your Mac by default;
+  dictation audio and transcripts stay on the Mac. Meeting recordings and their
+  transcripts are uploaded to Atlas, and the team leaderboard on Atlas shows colleagues
+  your name and daily counts (never text). No telemetry or crash reports are sent;
+  diagnostics stay on this Mac (2.1.1 and earlier still send them; see
+  [PRIVACY.md](PRIVACY.md)).
+- **Nothing else to install** — no Python, no Homebrew. The model downloads itself on first use.
+- **Works offline too** — once you are signed in, a built-in Apple Speech engine needs no
+  download, for the languages macOS can recognise on this Mac. It never sends audio to Apple.
 - **Styles by app category** — dictation into Messages, Slack, Mail, code editors, AI chats and documents
   is written in that category's tone (Formal, Casual, Very casual or Literal). Browsers are sorted by the
   website you're on. Change tones, or move individual apps, in **Assistant → Styles**; all rules run on this Mac.
@@ -17,6 +27,7 @@ transcribes locally and pastes the text wherever your cursor is.
 
 ## Requirements
 
+- A That Works Atlas account.
 - macOS 26 (Tahoe) or later on an Apple Silicon Mac. WhiskerFlow 0.8.7 remains
   available for macOS 14 and 15. The release is arm64-only:
   FluidAudio, which runs the default Parakeet engine, does not build for Intel yet.
@@ -45,11 +56,11 @@ brew tap jw29247/whiskerflow https://github.com/jw29247/WhiskerFlow
 brew install --cask jw29247/whiskerflow/whiskerflow   # Homebrew may first ask you to `brew trust` the tap
 ```
 
-Once installed, **updates are automatic** — WhiskerFlow checks for and installs new
-releases in place (Sparkle), so the install step above is one-time.
+Once installed, WhiskerFlow checks for new releases daily and offers to install them in
+place (Sparkle), so the install step above is one-time.
 
-After launching, the onboarding screen walks you through Microphone and Accessibility
-permissions (Accessibility is what lets WhiskerFlow paste at the cursor).
+After launching, sign in with Atlas. The onboarding screen walks you through Microphone and
+Accessibility permissions (Accessibility is what lets WhiskerFlow paste at the cursor).
 
 ## Usage
 
@@ -61,7 +72,8 @@ Open the main window for searchable history, inline editing, retry of failed run
 and Insights (lifetime words, speaking speed, streaks and activity). Choose how long
 history is kept — forever, a year, 90 days (the default), 30 days, 7 days, 24 hours,
 or not at all — in **Settings → History** or from the History screen. Insights keep
-counts only, never transcript text, and survive any retention setting. The menu-bar
+counts only, never transcript text, and survive any retention setting; their daily
+totals feed the team leaderboard. The menu-bar
 icon gives quick access to recent transcripts.
 
 ### Engines
@@ -69,16 +81,19 @@ icon gives quick access to recent transcripts.
 | Engine | Download | Offline | Notes |
 | --- | --- | --- | --- |
 | Parakeet TDT v3 (default) | model on first use | after download | Fast on-device dictation and meeting transcripts, Apple Silicon |
-| Apple Speech | none | always | Built into macOS; the fallback, and the only engine on Intel Macs. On-device only: a language macOS can't recognise on this Mac is refused, not sent to Apple |
+| Apple Speech | none | always | Built into macOS; the fallback. On-device only: a language macOS can't recognise on this Mac is refused, not sent to Apple |
 
-Pick the engine and language in **Settings → Engine**. Whisper (WhisperKit and the
+Dictation in a language Parakeet doesn't cover uses Apple's on-device dictation model,
+which macOS downloads from Apple the first time you use that language.
+
+Pick the engine in **Settings → Advanced** and the language in **Settings → Dictation**. Whisper (WhisperKit and the
 Whisper CLI) was removed; a build that finds its downloaded models deletes them.
 
 ## Build from source
 
 ```sh
 swift build          # build
-swift test           # run the Core and AppSupport test suites
+swift test           # run the test suites
 swift run WhiskerFlow # run (or use script/build_and_run.sh to run as a .app bundle)
 ```
 
@@ -101,7 +116,7 @@ swift script/make_icon.swift Resources/AppIcon.iconset && \
   transcript store (`transcripts.sqlite`, migrated from the older `transcripts.json`,
   which is removed once imported so retention covers all history), retention, Insights aggregates, search, vocabulary, transcription request/result models, and shared value types.
 - **`WhiskerFlow`** (app target) — SwiftUI/AppKit UI plus the engines
-  (`ParakeetTDTv3Engine`, `AppleSpeechEngine`) behind a
+  (`ParakeetTDTv3Engine`, `AppleSpeechEngine`, `AppleDictationEngine`) behind a
   `TranscriptionService` coordinator, audio capture, paste, and hotkey services.
 
 ## Source compatibility in 0.8.6

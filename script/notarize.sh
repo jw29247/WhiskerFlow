@@ -214,15 +214,19 @@ cat <<MSG
     sha256 (DMG):          $SHA
     Updated:               appcast.xml + $CASK
 
-Next (release from commit $RELEASE_SHA):
-  1. Publish BOTH assets from this exact commit (the appcast enclosure points
-     at the .zip):
-    gh release create "v$VERSION" "$DMG_PATH" "$SPARKLE_ZIP" \\
-      --repo "$REPO" --target "$RELEASE_SHA" \\
+Next (release from commit $RELEASE_SHA). Never publish without appcast.xml:
+builds read their updates from the latest release's appcast.xml asset.
+  1. Create a DRAFT release with all three assets:
+    gh release create "v$VERSION" --draft --target "$RELEASE_SHA" --repo "$REPO" \\
+      "$DMG_PATH" "$SPARKLE_ZIP" "$ROOT_DIR/appcast.xml" \\
       --title "$PRODUCT $VERSION" --notes "What changed…"
-  2. Commit appcast.xml + the cask to the same release PR, push, wait for CI,
-     then merge. The update goes live for installed apps when the merge lands
-     on main:
+  2. Verify the draft:
+    script/verify_release_feed.sh $VERSION
+  3. Publish (live for builds on the release feed), then confirm:
+    gh release edit "v$VERSION" --draft=false --latest --repo "$REPO"
+    script/verify_release_feed.sh --published $VERSION
+  4. Commit appcast.xml + the cask to the same release PR, push, wait for CI,
+     then merge (live for builds up to 2.1.1, which read appcast.xml on main):
     git commit -am "release: $PRODUCT $VERSION" && git push
 
 Existing users on $PRODUCT 0.4.0+ receive this automatically via Sparkle.

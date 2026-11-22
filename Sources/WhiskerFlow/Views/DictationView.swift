@@ -91,6 +91,18 @@ struct DictationView: View {
                         }.padding(16).background(FlowStyle.line.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
                             .padding(.bottom, 20)
                     }
+                    if let notice = appState.autoStopNotice, !appState.isRecording {
+                        HStack(spacing: 14) {
+                            Image(systemName: "stop.circle")
+                            Text(notice.message).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+                            if let record = appState.records.first(where: { $0.id == notice.recordID }) {
+                                Button("Open in History") { openHistory(record) }
+                            }
+                            Button { appState.autoStopNotice = nil } label: { Image(systemName: "xmark") }
+                                .buttonStyle(.plain).accessibilityLabel("Dismiss")
+                        }.padding(16).background(FlowStyle.line.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+                            .padding(.bottom, 20)
+                    }
                     if appState.assistant.capturePurpose != .dictation {
                         HStack {
                             Text("Next recording: \(appState.assistant.capturePurpose.rawValue)").font(.callout)

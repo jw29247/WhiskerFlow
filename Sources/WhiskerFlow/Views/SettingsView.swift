@@ -51,6 +51,10 @@ struct SettingsView: View {
         .frame(width: 760, height: 650)
         .foregroundStyle(FlowStyle.ink).tint(FlowStyle.accent)
         .onChange(of: appState.settings.cleanupEnabled) { _, _ in appState.configureCleanup() }
+        .onAppear { appState.settings.launchAtLogin.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            appState.settings.launchAtLogin.refresh()
+        }
     }
 
     private var dictationTab: some View {
@@ -127,7 +131,7 @@ struct SettingsView: View {
             Section("App") {
                 Toggle("Show in menu bar", isOn: $appState.settings.showMenuBarExtra)
                 Toggle("Show Dock icon", isOn: $appState.settings.showDockIcon)
-                Toggle("Launch at login", isOn: $appState.settings.launchAtLogin)
+                LaunchAtLoginRow(controller: appState.settings.launchAtLogin)
             }
 
             Section("Setup") {
@@ -139,6 +143,7 @@ struct SettingsView: View {
             Section("Performance diagnostics") {
                 Text("WhiskerFlow records delays, resource usage and error codes on this Mac only, in ~/Library/Logs/WhiskerFlow, without audio or transcript text. These diagnostics are never sent anywhere.")
                     .font(.caption).foregroundStyle(.secondary)
+                Link("Privacy", destination: PrivacyPage.url).foregroundStyle(FlowStyle.accent)
             }
 
             Section("Updates") {
@@ -285,6 +290,29 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .meetings: return "calendar"
         case .app: return "macwindow"
         case .advanced: return "slider.horizontal.3"
+        }
+    }
+}
+
+/// The switch shows the system's login item, not the last request, with the
+/// reason beside it when macOS is waiting for approval or refused the change.
+private struct LaunchAtLoginRow: View {
+    let controller: LaunchAtLoginController
+
+    var body: some View {
+        Toggle("Launch at login", isOn: Binding(get: { controller.isOn }, set: { controller.set($0) }))
+        if controller.requiresApproval {
+            HStack {
+                Label("Needs your approval in Login Items before it takes effect.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                Spacer()
+                Button("Open Login Items") { controller.openLoginItemsSettings() }
+                    .controlSize(.small)
+            }
+        }
+        if let failure = controller.failure {
+            Label(failure, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundStyle(.orange)
         }
     }
 }

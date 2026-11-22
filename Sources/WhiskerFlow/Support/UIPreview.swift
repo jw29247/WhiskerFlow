@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
@@ -89,6 +90,14 @@ enum UIPreview {
                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            // A floating meeting panel (call prompt, reminder or coach) is
+            // written beside it as `-panel.png`.
+            if let panel = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.nonactivatingPanel) }),
+               let content = panel.contentView, let panelRep = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+                content.cacheDisplay(in: content.bounds, to: panelRep)
+                try? panelRep.representation(using: .png, properties: [:])?
+                    .write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-panel.png")))
+            }
             NSApp.terminate(nil)
         }
         #endif
@@ -105,19 +114,29 @@ enum UIPreview {
         guard mode.hasPrefix("onboarding-") else { return nil }
         return OnboardingStep(rawValue: String(mode.dropFirst("onboarding-".count)))
     }
-    static var isRecordingMeeting: Bool { mode == "meeting-recording" || mode == "coach" }
+    static var isRecordingMeeting: Bool { mode == "meeting-recording" || mode == "coach" || mode.hasPrefix("recording-notice") }
 
     static func makeAppState() -> AppState {
         #if DEBUG
         if isEnabled {
             let identifier = "agency.thatworks.WhiskerFlow.ui-preview.\(UUID().uuidString)"
+            // Floating panels aren't SwiftUI scenes: give them the preview's
+            // light or dark appearance too, not the Mac's.
+            NSApplication.shared.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
             let defaults = UserDefaults(suiteName: identifier)!
             // An install that 2.0.0 to 2.1.0 left recording automatically: the
             // reset turns it off and the main window asks once.
             if mode == "auto-record-notice" { defaults.set(true, forKey: "meetingModeEnabled") }
-            let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: identifier))
+            // `login-approval` shows a login item macOS holds for approval;
+            // `login-failed` a registration the system refused.
+            let loginItem = PreviewLoginItemService(status: mode == "login-approval" ? .requiresApproval : .notRegistered,
+                                                    refuses: mode == "login-failed")
+            let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: identifier),
+                                       loginItemService: loginItem)
+            if mode == "login-failed" { settings.launchAtLogin.set(true) }
             settings.showMenuBarExtra = false
             if mode == "toggle" { settings.recordingMode = .toggle; settings.delivery = .copyOnly }
+            if mode == "toggle-auto-stopped" { settings.recordingMode = .toggle }
             if let language = argument("--ui-language=") { settings.language = language }
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(identifier, isDirectory: true)
             let store = TranscriptStore(fileURL: root.appendingPathComponent("transcripts.json"), removeAudioFile: { _ in })
@@ -163,6 +182,11 @@ enum UIPreview {
             if mode == "recording" { state.isRecording = true; state.status = .recording; state.audioLevel = 0.16; state.liveText = "This is a preview of your words as you speak." }
             if mode == "secure-input" { state.isShortcutPausedBySecureInput = true }
             if mode == "transcribing" { state.isTranscribing = true; state.status = .transcribing }
+            if mode == "toggle-auto-stopped" {
+                let message = ToggleAutoStop.silence.savedMessage(copiedToClipboard: false)
+                state.status = .success(message)
+                state.autoStopNotice = AutoStopNotice(message: message, recordID: store.records.first?.id)
+            }
             if screen == "dictate-style" {
                 state.lastWritingStyle = DictationStyleReceipt(
                     resolution: .init(category: .email, tone: .formal, source: .website), appName: "Safari")
@@ -186,6 +210,11 @@ enum UIPreview {
             state.leaderboard.insertForPreview(previewLeaderboard)
             if mode == "call-prompt" { state.showCallPromptForPreview() }
             if mode == "coach" { seedCoach(state.meetingAssistant) }
+            // Every recording starts with "Tell the others you're recording".
+            // `recording-notice` shows it in its own floating panel (coach
+            // hidden); `recording-notice-copied` after Copy.
+            if isRecordingMeeting { state.recordingReminder.recordingStarted(sessionID: recordingSessionID) }
+            if mode == "recording-notice-copied" { state.recordingReminder.showCopiedForPreview() }
             return state
         }
         // End-to-end runs beside the installed app: same bundle ID (so the
@@ -418,5 +447,19 @@ private final class PreviewMicrophone: MicrophoneAuthorizationProviding {
     var authorizationState: MicrophoneAuthorizationState
     init(granted: Bool) { authorizationState = granted ? .authorized : .notDetermined }
     func requestAccess() async { authorizationState = .authorized }
+}
+
+/// Never touches the real login item.
+@MainActor
+private final class PreviewLoginItemService: LoginItemService {
+    var status: SMAppService.Status
+    private let refuses: Bool
+    init(status: SMAppService.Status, refuses: Bool) { self.status = status; self.refuses = refuses }
+    func register() throws {
+        if refuses { throw NSError(domain: "WhiskerFlowPreview", code: 1, userInfo: [NSLocalizedDescriptionKey: "Operation not permitted."]) }
+        status = .enabled
+    }
+    func unregister() throws { status = .notRegistered }
+    func openSystemSettings() {}
 }
 #endif

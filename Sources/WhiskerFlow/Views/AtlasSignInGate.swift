@@ -37,11 +37,18 @@ struct AtlasSignInGate: View {
                 .font(.system(size: 11))
                 .foregroundStyle(FlowStyle.muted)
                 .frame(maxWidth: 460)
+            Link("Privacy", destination: PrivacyPage.url)
+                .font(.system(size: 11))
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(FlowStyle.canvas)
     }
+}
+
+/// What WhiskerFlow does with your data, on GitHub.
+enum PrivacyPage {
+    static let url = URL(string: "https://github.com/jw29247/WhiskerFlow/blob/main/PRIVACY.md")!
 }
 
 /// Opens the main window when a dictation press needs sign-in first,

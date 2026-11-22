@@ -1397,7 +1397,7 @@ final class AudioCaptureService {
 
     func stop(reason: CaptureStopReason) -> CapturedAudio {
         // A discarded capture stopped a healthy unit, so it serves the next press too.
-        stopEngine(reusable: reason == .userReleased || reason == .cancelled)
+        stopEngine(reusable: reason.endsNormally || reason == .cancelled)
         onLevel?(0, 0)
         // Render failures count only when nothing was captured at all: then,
         // like failed conversions, they explain an empty capture that is not

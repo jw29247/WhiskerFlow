@@ -4,7 +4,7 @@
      xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
     <title>WhiskerFlow</title>
-    <link>https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/appcast.xml</link>
+    <link>https://github.com/jw29247/WhiskerFlow/releases/latest/download/appcast.xml</link>
     <description>Automatic updates for WhiskerFlow.</description>
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->

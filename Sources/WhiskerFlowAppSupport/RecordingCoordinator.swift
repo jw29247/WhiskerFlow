@@ -21,6 +21,28 @@ public enum CaptureStopReason: Equatable, Sendable {
     case deviceDisconnected
     case cancelled
     case failed
+    /// A toggle recording reached one of `ToggleRecordingLimits`.
+    case autoStopped(ToggleAutoStop)
+
+    /// A fixed token for diagnostics; never free text. The older reasons keep
+    /// the names `String(describing:)` gave them.
+    public var diagnosticName: String {
+        switch self {
+        case .userReleased: return "userReleased"
+        case .deviceDisconnected: return "deviceDisconnected"
+        case .cancelled: return "cancelled"
+        case .failed: return "failed"
+        case .autoStopped(let limit): return "autoStopped.\(limit.rawValue)"
+        }
+    }
+
+    /// An ordinary end of capture, so the engine can be kept for the next one.
+    public var endsNormally: Bool {
+        switch self {
+        case .userReleased, .autoStopped: return true
+        case .deviceDisconnected, .cancelled, .failed: return false
+        }
+    }
 }
 
 public struct CapturedAudio: Equatable, Sendable {

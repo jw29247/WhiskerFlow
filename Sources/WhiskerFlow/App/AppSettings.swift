@@ -1,7 +1,6 @@
 import Foundation
 import Logging
 import Observation
-import ServiceManagement
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
@@ -92,6 +91,9 @@ final class AppSettings {
     }
     /// Show "Record this meeting?" when a call starts in a call app or browser.
     var askToRecordCalls: Bool { didSet { defaults.set(askToRecordCalls, forKey: Keys.askToRecordCalls) } }
+    /// The user's wording for the recording notice they paste into the meeting
+    /// chat. Stored as typed; empty means the default (`MeetingRecordingNotice`).
+    var meetingRecordingNotice: String { didSet { defaults.set(meetingRecordingNotice, forKey: Keys.meetingRecordingNotice) } }
     /// The private meeting coach. On by default and remembered.
     var coachEnabled: Bool { didSet { defaults.set(coachEnabled, forKey: Keys.coachEnabled) } }
     /// Speaking pace from on-device transcription of your microphone while coaching.
@@ -186,14 +188,12 @@ final class AppSettings {
         #endif
     }
 
-    var launchAtLogin: Bool {
-        didSet {
-            defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
-            if !UIPreview.isEnabled { applyLaunchAtLogin(launchAtLogin) }
-        }
-    }
+    /// Reads the system's login item; the stored default only remembers the
+    /// last request.
+    @ObservationIgnored let launchAtLogin: LaunchAtLoginController
 
-    init(defaults: UserDefaults = .standard, meetingTokenStore: MeetingCaptureTokenStore = MeetingCaptureTokenStore()) {
+    init(defaults: UserDefaults = .standard, meetingTokenStore: MeetingCaptureTokenStore = MeetingCaptureTokenStore(),
+         loginItemService: LoginItemService? = nil) {
         self.defaults = defaults
         self.meetingTokenStore = meetingTokenStore
         hadPreviousLaunch = Keys.previousLaunchMarkers.contains { defaults.object(forKey: $0) != nil }
@@ -254,13 +254,16 @@ final class AppSettings {
         meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? false
         meetingModeChoicePending = defaults.bool(forKey: Keys.meetingModeChoicePending)
         askToRecordCalls = defaults.object(forKey: Keys.askToRecordCalls) as? Bool ?? true
+        meetingRecordingNotice = defaults.string(forKey: Keys.meetingRecordingNotice) ?? ""
         coachEnabled = defaults.object(forKey: Keys.coachEnabled) as? Bool ?? true
         coachLiveAnalysis = defaults.object(forKey: Keys.coachLiveAnalysis) as? Bool ?? true
         coachAISuggestions = defaults.object(forKey: Keys.coachAISuggestions) as? Bool ?? true
         meetingTranscriptRetention = defaults.string(forKey: Keys.meetingTranscriptRetention)
             .flatMap(MeetingTranscriptRetention.init(rawValue:)) ?? .defaultValue
         legacySelectedDeviceID = defaults.string(forKey: Keys.selectedDeviceID)
-        launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
+        launchAtLogin = LaunchAtLoginController(service: loginItemService ?? SystemLoginItemService()) {
+            defaults.set($0, forKey: Keys.launchAtLogin)
+        }
         defaults.removeObject(forKey: Keys.sharedVocabularyURL)
         // Echo cancellation was removed: it slowed every mic start and could
         // hang CoreAudio. Drop its setting and the hang record it kept.
@@ -322,22 +325,6 @@ final class AppSettings {
             let data = try JSONEncoder().encode(value)
             defaults.set(data, forKey: key)
             persistenceError = nil
-        } catch {
-            reportPersistenceFailure(error)
-        }
-    }
-
-    private func applyLaunchAtLogin(_ enabled: Bool) {
-        do {
-            if enabled {
-                if SMAppService.mainApp.status != .enabled {
-                    try SMAppService.mainApp.register()
-                }
-            } else {
-                if SMAppService.mainApp.status == .enabled {
-                    try SMAppService.mainApp.unregister()
-                }
-            }
         } catch {
             reportPersistenceFailure(error)
         }
@@ -448,6 +435,7 @@ final class AppSettings {
         static let meetingModeChoicePending = "meetingModeChoicePending"
         static let meetingTranscriptRetention = "meetingTranscriptRetention"
         static let askToRecordCalls = "askToRecordCalls"
+        static let meetingRecordingNotice = "meetingRecordingNotice"
         static let coachEnabled = "coachEnabled"
         static let coachLiveAnalysis = "coachLiveAnalysis"
         static let coachAISuggestions = "coachAISuggestions"
