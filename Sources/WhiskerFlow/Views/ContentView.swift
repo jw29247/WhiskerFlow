@@ -29,9 +29,9 @@ struct ContentView: View {
     }
 
     private var mainContent: some View {
-        HStack(spacing: 0) {
+        NavigationSplitView {
             sidebar
-            Rectangle().fill(FlowStyle.line).frame(width: 1)
+        } detail: {
             VStack(spacing: 0) {
                 if case .failure(let message) = appState.status {
                     HStack(spacing: 12) {
@@ -108,6 +108,7 @@ struct ContentView: View {
         .foregroundStyle(FlowStyle.ink)
         .tint(FlowStyle.accent)
         .background(WindowCloseGuard(isDirty: draft.isDirty, save: saveDraft, discard: { draft.discard() }))
+        .focusedSceneValue(\.showScreen, show)
         .focusedSceneValue(\.copyTranscript, destination == .history && currentRecord != nil ? { appState.copyEditorText(draft.text) } : nil)
         .alert("Save your changes?", isPresented: $confirmNavigation) {
             Button("Save changes") {
@@ -149,63 +150,70 @@ struct ContentView: View {
         }
     }
 
+    /// A native sidebar list: arrow keys move between screens and VoiceOver
+    /// announces the selected one. Choosing a row goes through the
+    /// unsaved-edits check, so a cancelled move leaves the selection where it was.
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        List(selection: Binding(get: { destination }, set: { item in if let item { show(item) } })) {
+            ForEach(FlowDestination.allCases) { item in
+                Label {
+                    HStack {
+                        Text(item.rawValue)
+                        Spacer()
+                        if item == .meetings && appState.isMeetingCapturing {
+                            Circle().fill(FlowStyle.recording).frame(width: 6, height: 6)
+                                .accessibilityLabel("Recording")
+                        }
+                    }
+                } icon: {
+                    Image(systemName: item.symbol)
+                }
+                .font(FlowStyle.body)
+                .padding(.vertical, 4)
+                .tag(item)
+                .help("\(item.rawValue) · ⌘\(item.shortcutLabel)")
+            }
+        }
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .top, spacing: 0) {
             HStack(spacing: 9) {
                 FlowWaveform(size: 25)
                 Text("WhiskerFlow").font(FlowStyle.subheading).tracking(-0.6)
             }
-            .padding(.horizontal, 25).padding(.top, 32).padding(.bottom, 42)
-
-            VStack(spacing: 8) {
-                ForEach(FlowDestination.allCases) { item in
-                    Button {
-                        navigate {
-                            destination = item
-                            if item == .history && draft.recordID == nil { select(appState.records.first) }
-                        }
-                    } label: {
-                        HStack(spacing: 13) {
-                            Image(systemName: item.symbol).font(.system(size: 18, weight: .regular)).frame(width: 23)
-                                .accessibilityHidden(true)
-                            Text(item.rawValue).font(FlowStyle.body.weight(destination == item ? .medium : .regular))
-                            Spacer()
-                            if item == .meetings && appState.isMeetingCapturing {
-                                Circle().fill(FlowStyle.recording).frame(width: 6, height: 6)
-                                    .accessibilityLabel("Recording")
-                            }
-                        }
-                        .padding(.horizontal, 15).padding(.vertical, 14)
-                        .contentShape(RoundedRectangle(cornerRadius: 11))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(destination == item ? FlowStyle.accent : FlowStyle.ink)
-                    .background(destination == item ? FlowStyle.selection : .clear, in: RoundedRectangle(cornerRadius: 11))
-                    .accessibilityAddTraits(destination == item ? .isSelected : [])
-                    .keyboardShortcut(item.shortcut, modifiers: .command)
-                    .help("\(item.rawValue) · ⌘\(item.shortcutLabel)")
-                }
-            }.padding(.horizontal, 16)
-            Spacer(minLength: 30)
-            if appState.isRecording || appState.isTranscribing {
-                FlowStatus(title: DictationPresentation(appState: appState).statusTitle,
-                           color: appState.isRecording ? FlowStyle.recording : FlowStyle.accent)
-                    .padding(.horizontal, 28).padding(.bottom, 20)
-            }
-            if UIPreview.isEnabled {
-                Text("UI PREVIEW · SAMPLE DATA").font(FlowStyle.small.weight(.medium)).tracking(0.5)
-                    .foregroundStyle(FlowStyle.muted).padding(.horizontal, 25).padding(.bottom, 16)
-            }
-            Divider()
-            SettingsLink {
-                Label("Settings", systemImage: "gearshape")
-                    .font(FlowStyle.body).frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 27).padding(.vertical, 25).contentShape(Rectangle())
-            }.buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 18).padding(.top, 8).padding(.bottom, 20)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isHeader)
         }
-        .frame(width: 210)
-        .frame(maxHeight: .infinity)
-        .flowSidebarBackground()
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                if appState.isRecording || appState.isTranscribing {
+                    FlowStatus(title: DictationPresentation(appState: appState).statusTitle,
+                               color: appState.isRecording ? FlowStyle.recording : FlowStyle.accent)
+                        .padding(.horizontal, 20).padding(.bottom, 20)
+                }
+                if UIPreview.isEnabled {
+                    Text("UI PREVIEW · SAMPLE DATA").font(FlowStyle.small.weight(.medium)).tracking(0.5)
+                        .foregroundStyle(FlowStyle.muted).padding(.horizontal, 18).padding(.bottom, 16)
+                }
+                Divider()
+                SettingsLink {
+                    Label("Settings", systemImage: "gearshape")
+                        .font(FlowStyle.body).frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20).padding(.vertical, 18).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+            }
+        }
+        .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 280)
+    }
+
+    /// Opens a screen from the sidebar or the View menu's ⌘1 – ⌘7.
+    private func show(_ item: FlowDestination) {
+        guard item != destination else { return }
+        navigate {
+            destination = item
+            if item == .history && draft.recordID == nil { select(appState.records.first) }
+        }
     }
 
     private func navigate(_ action: @escaping () -> Void) {

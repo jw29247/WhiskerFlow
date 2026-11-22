@@ -65,15 +65,19 @@ enum UIPreview {
     /// Settings window beside the main snapshot as `-settings.png`.
     static func writeSettingsSnapshotIfRequested() {
         guard settingsCategory != nil, let path = argument("--ui-snapshot=") else { return }
-        resizeWindowIfRequested { $0.title.hasSuffix("Settings") }
+        resizeWindowIfRequested(isSettingsWindow)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title.hasSuffix("Settings") }),
+            guard let window = NSApp.windows.first(where: { $0.isVisible && isSettingsWindow($0) }),
                   let view = window.contentView?.superview ?? window.contentView,
                   let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
             view.cacheDisplay(in: view.bounds, to: bitmap)
             try? bitmap.representation(using: .png, properties: [:])?
                 .write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-settings.png")))
         }
+    }
+    /// Settings with tabs is titled after the open tab, so match its identifier.
+    private static func isSettingsWindow(_ window: NSWindow) -> Bool {
+        window.title.hasSuffix("Settings") || window.identifier?.rawValue.contains("Settings") == true
     }
     /// `--ui-window-height=<points>` resizes the Settings or setup window before
     /// its snapshot; a height below the window's minimum shows that minimum.

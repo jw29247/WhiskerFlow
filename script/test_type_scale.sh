@@ -26,7 +26,6 @@ ALLOWED=(
   "Views/MeetingsView.swift:Image(systemName: \"record.circle.fill\").font(.system(size: 28))"
   "Views/CallPromptHUD.swift:.font(.system(size: 22)).foregroundStyle(FlowStyle.recording)"
   "Views/OnboardingSteps.swift:Image(systemName: symbol).font(.system(size: 20))"
-  "Views/ContentView.swift:Image(systemName: item.symbol).font(.system(size: 18, weight: .regular))"
   "Views/LeaderboardView.swift:.font(.system(size: 18))"
   "Views/MeetingRecordingReminderView.swift:.font(.system(size: 16)).foregroundStyle(copied ? FlowStyle.accent : FlowStyle.recording)"
   "Views/RecordingHUD.swift:.font(.system(size: 16, weight: .semibold))"
