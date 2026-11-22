@@ -25,6 +25,8 @@ actor ParakeetTDTv3Engine: Sendable {
     /// running, new decodes fail fast so the caller can fall back.
     private let decodeGate = ModelDecodeGate()
     private let preparationWait: TimeInterval
+    /// Waits out `preparationWait`; tests end it on demand.
+    private let preparationSleep: DeadlineSleep
     /// Dictionary biasing; see `ParakeetVocabularyBooster`.
     let booster = ParakeetVocabularyBooster()
 
@@ -39,6 +41,7 @@ actor ParakeetTDTv3Engine: Sendable {
 
     init(
         preparationWait: TimeInterval = DecodeTimeoutPolicy.modelPreparationWait,
+        preparationSleep: @escaping DeadlineSleep = systemDeadlineSleep,
         loadManager: @escaping @Sendable () async throws -> AsrManager = {
             let models = try await AsrModels.downloadAndLoad(
                 version: .v3, encoderPrecision: .int8,
@@ -50,6 +53,7 @@ actor ParakeetTDTv3Engine: Sendable {
         }
     ) {
         self.preparationWait = preparationWait
+        self.preparationSleep = preparationSleep
         self.loadManager = loadManager
     }
 
@@ -173,7 +177,7 @@ actor ParakeetTDTv3Engine: Sendable {
     private func preparedManager() async throws -> AsrManager {
         if manager == nil {
             do {
-                try await withAbandoningDeadline(seconds: preparationWait) { try await self.prepare() }
+                try await withAbandoningDeadline(seconds: preparationWait, sleep: preparationSleep) { try await self.prepare() }
             } catch AsyncTimeoutError.timedOut {
                 throw TranscriptionError.timedOut(seconds: Int(preparationWait))
             } catch is CancellationError {
