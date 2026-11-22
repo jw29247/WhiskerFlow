@@ -208,7 +208,7 @@ final class AppState {
     private var warmUpTask: Task<Void, Never>?
     let cleanup = CleanupService()
     private var meetingWarmUpTask: Task<Void, Never>?
-    private let pendingPersistWork = PendingWorkTracker()
+    let pendingPersistWork = PendingWorkTracker()
     /// An injected history outside the UI preview: a test. It never touches
     /// the user's meetings, Cleanup model or Atlas.
     private let isTestFixture: Bool
@@ -225,7 +225,7 @@ final class AppState {
     var latestDeliveryID: UUID?
     /// The shutdown-drain token each in-flight finish holds. Non-empty while a
     /// dictation is still finishing, which keeps background retries off the status.
-    private var finishWorkTokens: [UUID: UUID] = [:]
+    var finishWorkTokens: [UUID: UUID] = [:]
     /// Readable so tests can await a Retry All instead of polling.
     private(set) var retryAllTask: Task<Void, Never>?
     private var meetingStorageTask: Task<Void, Never>?
@@ -805,7 +805,7 @@ final class AppState {
             let token = pendingPersistWork.begin()
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                await self.finishRecording()
+                await self.dictation.finishRecording()
                 self.pendingPersistWork.end(token)
             }
         case .finishing, .idle:
@@ -1028,7 +1028,7 @@ final class AppState {
 
     /// Keeps an engine ready for the preferred microphone. A press that ends up
     /// on a fallback device simply builds its engine on demand.
-    private func prepareNextCapture() {
+    func prepareNextCapture() {
         guard !UIPreview.isEnabled, settings.legacySelectedDeviceID == nil,
               microphonePermission.authorizationState == .authorized,
               recordingCoordinator.phase == .idle else { return }
@@ -1632,7 +1632,7 @@ final class AppState {
                 } else if self.assistantShortcutActive {
                     self.assistantShortcutActive = false
                     self.recordingIntentActive = false
-                    Task { await self.finishRecording() }
+                    Task { await self.dictation.finishRecording() }
                 }
             }
             shortcut.start(); assistantHotkeyMonitors.append(shortcut)
@@ -1729,124 +1729,6 @@ final class AppState {
         } catch { assistant.message = "The bookmark could not be saved on this Mac." }
     }
 
-    func finishRecording(reason: CaptureStopReason = .userReleased) async {
-        if case .preparing = recordingCoordinator.phase {
-            status = .preparingMic
-            return
-        }
-        guard case .recording(let sessionID) = recordingCoordinator.phase,
-              recordingCoordinator.requestFinish(sessionID, reason: reason) else { return }
-        await finishRecording(sessionID: sessionID, reason: reason)
-    }
-
-    private func finishRecording(sessionID: UUID, reason: CaptureStopReason) async {
-        defer {
-            dictation.updateDictationActivity()
-            scheduleAfterDictationUpkeep()
-        }
-        dictationWarmUpTask?.cancel()
-        dictationWarmUpTask = nil
-        toggleLimitsTask?.cancel()
-        toggleLimitsTask = nil
-        toggleLimits = nil
-        let finishStarted = ProcessInfo.processInfo.systemUptime
-        lifecycleLogger.info("Finishing recording", metadata: ["event": "finish_started", "session": "\(sessionID)"])
-        defer { lifecycleLogger.info("Recording finish returned", metadata: ["event": "finish_returned", "session": "\(sessionID)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - finishStarted) * 1000)"]) }
-
-        // Registered for the whole finish, so a quit landing mid-finish waits for
-        // the transcript instead of racing the store write.
-        let workToken = pendingPersistWork.begin()
-        finishWorkTokens[sessionID] = workToken
-        defer {
-            finishWorkTokens[sessionID] = nil
-            pendingPersistWork.end(workToken)
-        }
-
-        isRecording = false
-        recordingStartedAt = nil
-        meetingCapture.dictationEnded()
-        mediaPauser.dictationEnded()
-        status = .transcribing
-        DiagnosticsService.breadcrumb(
-            category: "recording",
-            metadata: ["phase": "finishing", "stop_reason": reason.diagnosticName]
-        )
-
-        var configuration = activeRecordingConfiguration ?? makeTranscriptionConfiguration()
-        activeRecordingConfiguration = nil
-        let pasteTarget = pasteTargetApplication
-        pasteTargetApplication = nil
-        if let lookup = websiteLookup {
-            // Normally finished long ago; bounded by the reader's own budget.
-            websiteLookup = nil
-            configuration.writing = await assistant.resolveWritingStyle(lookup.value)
-            live.setTone(configuration.writing.tone)
-        }
-        if configuration.purpose == .dictation {
-            lastWritingStyle = DictationStyleReceipt(resolution: configuration.writing, appName: pasteTarget?.localizedName)
-        }
-        let result = live.finish(reason: reason)
-        lifecycleLogger.info("Capture stopped", metadata: ["event": "decode_returned", "session": "\(sessionID)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - finishStarted) * 1000)", "samples": "\(result.totalSampleCount)"])
-        _ = recordingCoordinator.didFinish(sessionID)
-
-        if configuration.playSounds { soundService.play(.recordingStopped) }
-        liveText = ""
-
-        // Transcribe the captured samples (includes the Apple Speech fallback).
-        if canUpdateLifecycleUI(for: sessionID) { status = .transcribing }
-        await transcribeCapturedSamples(
-            result.samples,
-            conversionFailures: result.conversionFailures,
-            capturedAudioURL: result.audioURL,
-            totalSampleCount: result.totalSampleCount,
-            stopReason: reason,
-            pasteTarget: pasteTarget,
-            configuration: configuration,
-            sessionID: sessionID
-        )
-
-        if reason == .deviceDisconnected, canUpdateLifecycleUI(for: sessionID) {
-            if CapturedAudioValidation.shouldDismissEmptyDeviceInterruption(
-                stopReason: reason,
-                totalSampleCount: result.totalSampleCount
-            ) {
-                // A device change can end the capture before its first
-                // usable buffer. It is a discarded capture, not a failed
-                // transcription; leave the next hotkey press immediately
-                // available and keep the interruption visible in diagnostics.
-                lifecycleLogger.info(
-                    "Capture discarded after microphone route interruption",
-                    metadata: [
-                        "event": "capture_discarded",
-                        "reason": "device_interruption",
-                        "conversion_failures": "\(result.conversionFailures)"
-                    ]
-                )
-                DiagnosticsService.breadcrumb(
-                    category: "recording",
-                    metadata: [
-                        "phase": "capture_discarded",
-                        "reason": "device_interruption"
-                    ]
-                )
-                status = .idle
-            } else if case .failure = status {
-                // Preserve the actionable transcription/storage failure.
-            } else {
-                status = .success("Microphone changed; partial transcript saved")
-            }
-        }
-
-        if result.storageFailed, canUpdateLifecycleUI(for: sessionID) {
-            // The spool stopped taking audio mid-recording (usually a full disk):
-            // whatever was delivered covers only the audio before that point, and
-            // an empty capture is a storage problem, not a microphone one.
-            status = .failure(result.totalSampleCount == 0
-                ? "Couldn't save the recording — free up disk space and try again"
-                : "Disk full: the recording stopped early and later speech is missing")
-        }
-    }
-
     #if DEBUG
     /// Tests only: runs a stopped capture through transcription and delivery the
     /// way `finishRecording` does, without a microphone.
@@ -1861,17 +1743,6 @@ final class AppState {
         )
     }
     #endif
-
-    /// Off the release-to-paste path: confirm the microphone grant the press
-    /// trusted, then ready the engine for the next press.
-    private func scheduleAfterDictationUpkeep() {
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 750_000_000)
-            guard let self, self.recordingCoordinator.phase == .idle else { return }
-            self.refreshMicrophonePermission()
-            self.prepareNextCapture()
-        }
-    }
 
     private func handleMicrophoneAuthorizationTransition(
         from previous: MicrophoneAuthorizationState
@@ -1890,7 +1761,7 @@ final class AppState {
 
     /// Persist captured audio for interrupted-decode recovery, then transcribe
     /// the saved file.
-    private func transcribeCapturedSamples(
+    func transcribeCapturedSamples(
         _ samples: [Float],
         conversionFailures: Int,
         capturedAudioURL: URL?,
@@ -2466,11 +2337,7 @@ final class AppState {
     }
 
     private func canUpdateLifecycleUI(for sessionID: UUID?) -> Bool {
-        guard recordingCoordinator.phase == .idle else { return false }
-        // A background retry (no session) must not take the status over from a
-        // dictation that is still transcribing or pasting after its release.
-        guard let sessionID else { return finishWorkTokens.isEmpty }
-        return latestRecordingSessionID == sessionID
+        dictation.canUpdateLifecycleUI(for: sessionID)
     }
 
     #if DEBUG
