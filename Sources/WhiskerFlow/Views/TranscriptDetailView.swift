@@ -90,7 +90,7 @@ struct TranscriptDetailView: View {
                     if let language = record.language { Text("Language: \(language)") }
                 }.font(.caption).foregroundStyle(FlowStyle.muted).padding(.top, 8)
             } label: {
-                Text("\(record.wordCount) words · Recording details").font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
+                Text("\(CountPhrase.of(record.wordCount, "word")) · Recording details").font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
             }.padding(.top, 18)
         }
         .padding(26)

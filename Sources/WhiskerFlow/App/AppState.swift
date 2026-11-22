@@ -1750,7 +1750,7 @@ final class AppState {
         guard isMeetingCapturing else { return }
         do {
             let bookmark = try meetingAssistant.addBookmark(label: nil)
-            assistant.message = "Bookmarked at \(Int(bookmark.elapsedMilliseconds / 1000)) seconds."
+            assistant.message = "Bookmarked at \(CountPhrase.of(Int(bookmark.elapsedMilliseconds / 1000), "second"))."
         } catch { assistant.message = "The bookmark could not be saved on this Mac." }
     }
 

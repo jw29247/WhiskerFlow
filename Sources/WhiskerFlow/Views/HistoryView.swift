@@ -110,7 +110,7 @@ struct HistoryView: View {
                 }
             }
             Divider()
-            Text("\(filtered.count.formatted()) of \(appState.records.count.formatted()) saved recordings")
+            Text("\(filtered.count.formatted()) of \(CountPhrase.of(appState.records.count, "saved recording"))")
                 .font(.system(size: 10)).foregroundStyle(FlowStyle.muted).padding(13)
         }
         .frame(width: 245)

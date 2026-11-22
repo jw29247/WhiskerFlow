@@ -318,7 +318,7 @@ final class MeetingAssistantController {
             if let summary {
                 detail = Self.recap(summary)
             } else if activity.windowDurationSeconds > 0 {
-                detail = "Microphone activity was estimated at \(Int(activity.ownMicActiveSeconds)) seconds in the final \(Int(activity.windowDurationSeconds)) seconds observed. This is an audio estimate, not a speaker assessment."
+                detail = "Microphone activity was estimated at \(CountPhrase.of(Int(activity.ownMicActiveSeconds), "second")) in the final \(CountPhrase.of(Int(activity.windowDurationSeconds), "second")) observed. This is an audio estimate, not a speaker assessment."
             } else {
                 detail = "No live activity estimate was retained; coaching was off, paused, or unavailable."
             }

@@ -69,7 +69,7 @@ struct InsightsView: View {
             let scale = max(speaking ?? 0, typing, 1)
             VStack(alignment: .leading, spacing: 14) {
                 SpeedBar(label: "You speak", value: speaking, scale: scale, color: FlowStyle.accent,
-                         caption: speaking == nil ? "Dictate a little more to measure" : "last \(min(summary.lifetimeDictations, InsightsSummary.speakingSampleLimit)) dictations")
+                         caption: speaking == nil ? "Dictate a little more to measure" : "last \(CountPhrase.of(min(summary.lifetimeDictations, InsightsSummary.speakingSampleLimit), "dictation"))")
                 HStack(alignment: .center, spacing: 12) {
                     SpeedBar(label: "You type", value: typing, scale: scale, color: FlowStyle.muted.opacity(0.55),
                              caption: "your setting")
@@ -338,7 +338,7 @@ private struct AppUsageRow: View {
                 HStack {
                     Text(identity.name).font(.system(size: 12)).lineLimit(1)
                     Spacer()
-                    Text("\(usage.words.formatted()) words").font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
+                    Text(CountPhrase.of(usage.words, "word")).font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
                         .monospacedDigit()
                 }
                 GeometryReader { geo in
@@ -348,9 +348,9 @@ private struct AppUsageRow: View {
                 .frame(height: 6)
             }
         }
-        .help("\(identity.name): \(usage.words.formatted()) words in \(usage.dictations.formatted()) dictations")
+        .help("\(identity.name): \(CountPhrase.of(usage.words, "word")) in \(CountPhrase.of(usage.dictations, "dictation"))")
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(identity.name), \(usage.words) words in \(usage.dictations) dictations")
+        .accessibilityLabel("\(identity.name), \(CountPhrase.of(usage.words, "word")) in \(CountPhrase.of(usage.dictations, "dictation"))")
     }
 }
 

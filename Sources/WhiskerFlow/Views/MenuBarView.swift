@@ -47,7 +47,7 @@ struct MenuBarView: View {
                     .tint(appState.isMeetingCapturing ? FlowStyle.recording : FlowStyle.accent)
             }
             if !appState.retryQueue.isEmpty {
-                Button("Retry \(appState.retryQueue.count) failed recordings") { appState.retryAllFailed() }
+                Button("Retry \(CountPhrase.of(appState.retryQueue.count, "failed recording"))") { appState.retryAllFailed() }
                     .font(.caption)
             }
             HStack {

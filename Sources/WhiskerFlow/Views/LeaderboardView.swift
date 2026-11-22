@@ -142,10 +142,10 @@ private struct LeaderboardRowView: View {
 
     private var secondary: String {
         var parts: [String] = []
-        if metric != .words { parts.append("\(entry.words.formatted()) words") }
+        if metric != .words { parts.append(CountPhrase.of(entry.words, "word")) }
         if metric != .timeSaved { parts.append("\(InsightsView.duration(Double(entry.timeSavedSeconds))) saved") }
         if metric != .streak, entry.currentStreakDays > 0 { parts.append("\(entry.currentStreakDays)-day streak") }
-        if metric == .streak, entry.longestStreakDays > entry.currentStreakDays { parts.append("best \(entry.longestStreakDays) days") }
+        if metric == .streak, entry.longestStreakDays > entry.currentStreakDays { parts.append("best \(CountPhrase.of(entry.longestStreakDays, "day"))") }
         if metric == .meetings {
             parts.append(InsightsView.duration(Double(entry.meetingSeconds)) + " recorded")
         } else if entry.meetings > 0 {
