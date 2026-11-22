@@ -727,10 +727,11 @@ struct OnboardingDoneStep: View {
                               detail: "Here’s everything you can do from the keyboard.")
             OnboardingCard {
                 shortcutRow(keys: appState.settings.hotkeyDisplayName, action: "Dictate", detail: presentation.gesture == "Hold" ? "Hold, speak, let go" : "Tap to start, tap to stop")
+                shortcutRow(keys: "⎋ Esc", action: "Discard the dictation", detail: "Press while dictating")
                 Divider()
                 shortcutRow(keys: "⌥⇧⌘E", action: "Voice edit a selection", detail: "Hold and say how to change it")
                 shortcutRow(keys: "⌥⇧⌘N", action: "Quick voice capture", detail: "Hold to save a note")
-                shortcutRow(keys: "⌥⇧⌘R", action: "Start or stop meeting recording", detail: "Press")
+                shortcutRow(keys: "⌥⇧⌘R", action: "Start or stop meeting recording", detail: "Press in any app")
                 shortcutRow(keys: "⌥⇧⌘B", action: "Bookmark the meeting", detail: "Press while recording")
                 Divider()
                 shortcutRow(keys: "⌘1 – ⌘5", action: "Switch screens", detail: "In the WhiskerFlow window")
