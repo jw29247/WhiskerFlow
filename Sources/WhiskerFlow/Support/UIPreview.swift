@@ -161,6 +161,7 @@ enum UIPreview {
             if mode != "empty" && mode != "setup" && onboardingStep == nil { addSampleInsights(to: state) }
             if mode == "error" { state.status = .failure("The microphone disconnected. Choose an available microphone in Settings.") }
             if mode == "recording" { state.isRecording = true; state.status = .recording; state.audioLevel = 0.16; state.liveText = "This is a preview of your words as you speak." }
+            if mode == "secure-input" { state.isShortcutPausedBySecureInput = true }
             if mode == "transcribing" { state.isTranscribing = true; state.status = .transcribing }
             if screen == "dictate-style" {
                 state.lastWritingStyle = DictationStyleReceipt(

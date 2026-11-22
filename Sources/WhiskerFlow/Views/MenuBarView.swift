@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
 struct MenuBarView: View {
@@ -22,6 +23,9 @@ struct MenuBarView: View {
                 Text("to dictate")
                 Spacer()
             }.font(.system(size: 13)).foregroundStyle(FlowStyle.muted)
+            if appState.isShortcutPausedBySecureInput {
+                SecureInputNotice()
+            }
             Divider()
             if let record = appState.latestTranscript {
                 HStack {
@@ -61,8 +65,20 @@ struct MenuBarView: View {
                 } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize()
             }
         }
+        .onAppear { appState.refreshSecureInputNotice() }
         .modifier(OnboardingWindow.Presenter(onboarding: appState.onboarding))
         .padding(21).frame(width: 350)
         .background(FlowStyle.canvas).foregroundStyle(FlowStyle.ink).tint(FlowStyle.accent)
+    }
+}
+
+/// Why the shortcut does nothing while another app has Secure Event Input on.
+struct SecureInputNotice: View {
+    var body: some View {
+        Label(SecureInputMonitor.notice, systemImage: "lock.fill")
+            .font(.callout)
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+            .help("Another app, such as a password field or a terminal with Secure Keyboard Entry, is hiding keystrokes from other apps. The shortcut works again when it turns Secure Input off.")
     }
 }

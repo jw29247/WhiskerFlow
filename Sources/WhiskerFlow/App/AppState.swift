@@ -122,6 +122,9 @@ final class AppState {
     var modelState: ModelState = .unloaded
     var hasAccessibilityPermission = false
     private(set) var hasGlobeKeyConflict = false
+    /// Another app's Secure Event Input is hiding the shortcut from WhiskerFlow.
+    var isShortcutPausedBySecureInput = false
+    private var secureInputMonitor: SecureInputMonitor?
     var devices: [AudioInputDescriptor] = []
     var lastError: String?
     var searchText = ""
@@ -675,6 +678,7 @@ final class AppState {
             reason: "Respond immediately to the dictation hotkey"
         )
         startHotkeyMonitor()
+        startSecureInputMonitor()
         prepareNextCapture()
         refreshMeetingStorageAvailability()
         meetingCapture.start()
@@ -722,6 +726,8 @@ final class AppState {
         assistantHotkeyMonitors.forEach { $0.stop() }
         assistantHotkeyMonitors = []
         hotkeyMonitor = nil
+        secureInputMonitor?.stop()
+        secureInputMonitor = nil
         if !globeKeyShortcutOverride.restore() {
             logger.error("Could not restore the macOS Globe-key action")
         }
@@ -1573,6 +1579,17 @@ final class AppState {
             self.bookmarkMeeting()
         }
         bookmark.start(); assistantHotkeyMonitors.append(bookmark)
+    }
+
+    private func startSecureInputMonitor() {
+        let monitor = SecureInputMonitor { [weak self] paused in self?.isShortcutPausedBySecureInput = paused }
+        monitor.start()
+        secureInputMonitor = monitor
+    }
+
+    /// Re-reads Secure Input when a view that shows its notice appears.
+    func refreshSecureInputNotice() {
+        secureInputMonitor?.refresh()
     }
 
     private func configureGlobeKeyShortcut() {
