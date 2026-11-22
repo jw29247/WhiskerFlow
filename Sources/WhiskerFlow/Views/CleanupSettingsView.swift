@@ -22,7 +22,7 @@ struct CleanupSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 if !CleanupService.supported {
                     Text("Cleanup needs an Apple silicon Mac with at least 8 GB of memory.")
-                        .font(.caption).foregroundStyle(.orange)
+                        .font(.caption).foregroundStyle(FlowStyle.warning)
                 }
             }
 
