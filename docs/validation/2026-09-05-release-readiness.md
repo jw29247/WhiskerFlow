@@ -1,5 +1,9 @@
 # Release readiness work in progress
 
+> **Names anonymised on 22 November 2026.** Real client names in this record
+> have been replaced with invented ones. Nothing else was changed and nothing
+> was re-run.
+
 The user requested continued repair and end-to-end verification on 5 September. WhiskerFlow must remain unmerged. The active goal finishes only when the candidate is release-ready; this document is an evidence ledger, not a passing release certificate.
 
 ## Deployment baseline

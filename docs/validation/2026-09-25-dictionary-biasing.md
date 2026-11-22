@@ -1,5 +1,12 @@
 # Dictionary: recogniser biasing validation (2026-09-25)
 
+> **Names anonymised on 22 November 2026.** This record originally used the
+> agency's real client and glossary names. They have been replaced with
+> invented ones. Every measurement here describes the original vocabulary and
+> was not re-run. Wherever an example or a "raw recogniser output" shows an
+> invented name, it is an illustration of the original result, not something
+> the recogniser was observed to produce.
+
 The Dictionary now feeds its Words and the written side of its Replacements to
 the recognisers. Each engine has its own switch under **Settings → Text →
 Recogniser hints**. Post-recognition replacement still runs afterwards in every
