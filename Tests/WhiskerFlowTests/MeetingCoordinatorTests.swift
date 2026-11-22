@@ -198,7 +198,7 @@ final class MeetingCoordinatorTests: XCTestCase {
         }
         let observations = MeetingDecodeObservations()
         let processingRoot = root.appendingPathComponent("processing")
-        let processor = MeetingLocalProcessor(processingRoot: processingRoot) { url, language in
+        let processor = MeetingLocalProcessor(processingRoot: processingRoot, audibleRetryUnitNanoseconds: 0) { url, language in
             let file = try AVAudioFile(forReading: url)
             let seconds = Double(file.length) / file.fileFormat.sampleRate
             let decodeIndex = await observations.record(seconds)
@@ -245,7 +245,7 @@ final class MeetingCoordinatorTests: XCTestCase {
                                          plaintext: Data(repeating: 0, count: 640_000))
             }
         }
-        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { url, language in
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0) { url, language in
             var segments = [TranscriptionSegment(text: "my update is ready", start: 10, end: 14)]
             if url.lastPathComponent.contains("-mixed-") {
                 segments.insert(TranscriptionSegment(text: "morning, how did it go", start: 1, end: 4), at: 0)
@@ -284,7 +284,7 @@ final class MeetingCoordinatorTests: XCTestCase {
         }
         let processingRoot = root.appendingPathComponent("processing")
         let calls = MeetingDecodeObservations()
-        let processor = MeetingLocalProcessor(processingRoot: processingRoot) { _, _ in
+        let processor = MeetingLocalProcessor(processingRoot: processingRoot, audibleRetryUnitNanoseconds: 0) { _, _ in
             await calls.record(0)
             if await calls.durations.count == 2 { throw CancellationError() }
             return TranscriptionResult(
@@ -324,7 +324,7 @@ final class MeetingCoordinatorTests: XCTestCase {
             )
         }
         let calls = MeetingDecodeObservations()
-        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { _, _ in
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0) { _, _ in
             switch await calls.record(0) {
             case 1:
                 return TranscriptionResult(
@@ -392,7 +392,7 @@ final class MeetingCoordinatorTests: XCTestCase {
             )
         }
         let processor = MeetingLocalProcessor(
-            processingRoot: root.appendingPathComponent("processing")
+            processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0
         ) { _, _ in
             throw TranscriptionError.emptyTranscript
         }
@@ -422,7 +422,7 @@ final class MeetingCoordinatorTests: XCTestCase {
             let samples = [Float](repeating: 0.1, count: 160000)
             _ = try store.writeChunk(sessionID: id, track: .mixed, sequence: sequence, startMs: Int64(sequence * 10000), endMs: Int64((sequence + 1) * 10000), plaintext: samples.withUnsafeBufferPointer { Data(buffer: $0) })
         }
-        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { url, _ in
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0) { url, _ in
             guard url.lastPathComponent.contains("-retry-") else { throw TranscriptionError.emptyTranscript }
             return TranscriptionResult(text: "Fixture speech", segments: [.init(text: "Fixture speech", start: 1, end: 2)])
         }
@@ -450,7 +450,7 @@ final class MeetingCoordinatorTests: XCTestCase {
             )
         }
         let attempts = MeetingDecodeObservations()
-        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { url, _ in
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0) { url, _ in
             let attempt = await attempts.record(0)
             if attempt <= 2 { throw TranscriptionError.emptyTranscript }
             return TranscriptionResult(
@@ -482,7 +482,7 @@ final class MeetingCoordinatorTests: XCTestCase {
                 plaintext: samples.withUnsafeBufferPointer { Data(buffer: $0) }
             )
         }
-        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { url, _ in
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0) { url, _ in
             guard url.lastPathComponent.contains("-subretry-") else {
                 throw TranscriptionError.emptyTranscript
             }

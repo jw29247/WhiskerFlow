@@ -10,7 +10,7 @@ final class MeetingLocalProcessorResilienceTests: XCTestCase {
         // The first chunk is hold music: audible, but Whisper never finds speech.
         let (store, id, root) = try fixture(tracks: [.mixed], chunks: 7, amplitude: 0.1)
         defer { try? FileManager.default.removeItem(at: root) }
-        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { url, _ in
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0) { url, _ in
             let name = url.lastPathComponent
             if name.contains("mixed-0") { throw TranscriptionError.emptyTranscript }
             return TranscriptionResult(text: "Speech", segments: [.init(text: "Speech", start: 15, end: 16)])
@@ -23,7 +23,7 @@ final class MeetingLocalProcessorResilienceTests: XCTestCase {
     func testMostlyUndecodableAudioStillFailsAndKeepsTheRecording() async throws {
         let (store, id, root) = try fixture(tracks: [.mixed], chunks: 3, amplitude: 0.1)
         defer { try? FileManager.default.removeItem(at: root) }
-        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { _, _ in
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0) { _, _ in
             throw TranscriptionError.emptyTranscript
         }
         do {
@@ -35,7 +35,7 @@ final class MeetingLocalProcessorResilienceTests: XCTestCase {
     func testSilentRecordingIsAnEmptyResultNotARetryableError() async throws {
         let (store, id, root) = try fixture(tracks: [.mixed, .microphone], chunks: 2, amplitude: 0)
         defer { try? FileManager.default.removeItem(at: root) }
-        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { _, _ in
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0) { _, _ in
             throw TranscriptionError.emptyTranscript
         }
         let result = try await processor.process(manifest: store.loadManifest(sessionID: id), store: store, language: "en")
@@ -45,7 +45,7 @@ final class MeetingLocalProcessorResilienceTests: XCTestCase {
     func testOneFailedMicrophoneWindowKeepsTheRestOfTheSelfEvidence() async throws {
         let (store, id, root) = try fixture(tracks: [.mixed, .microphone], chunks: 4, amplitude: 0.1)
         defer { try? FileManager.default.removeItem(at: root) }
-        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { url, _ in
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0) { url, _ in
             let name = url.lastPathComponent
             // The second microphone window is keyboard noise and never decodes.
             if name.contains("microphone-1") { throw TranscriptionError.emptyTranscript }
@@ -61,7 +61,7 @@ final class MeetingLocalProcessorResilienceTests: XCTestCase {
 
     func testSelfMatchToleratesPunctuationBoundariesAndBackchannel() async {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let processor = MeetingLocalProcessor(processingRoot: root) { _, _ in TranscriptionResult(text: "") }
+        let processor = MeetingLocalProcessor(processingRoot: root, audibleRetryUnitNanoseconds: 0) { _, _ in TranscriptionResult(text: "") }
         let mixed = TranscriptionSegment(text: "Yeah, so the plan is, we ship Friday. OK.", start: 10, end: 14)
         let mic = [
             TranscriptionSegment(text: "yeah so the plan is", start: 9.8, end: 12),
@@ -80,7 +80,7 @@ final class MeetingLocalProcessorResilienceTests: XCTestCase {
         let (store, id, root) = try fixture(tracks: [.mixed], chunks: 7, amplitude: 0.1)
         defer { try? FileManager.default.removeItem(at: root) }
         let decoded = Counter()
-        let interrupted = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { url, _ in
+        let interrupted = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0) { url, _ in
             if url.lastPathComponent.contains("mixed-2") { throw CancellationError() }
             await decoded.increment()
             return TranscriptionResult(text: "Window", segments: [.init(text: "Window \(url.lastPathComponent.contains("mixed-0") ? 0 : 1)", start: 21, end: 22)])
@@ -93,7 +93,7 @@ final class MeetingLocalProcessorResilienceTests: XCTestCase {
         XCTAssertEqual(decodedBefore, 2)
 
         let resumedDecodes = Counter()
-        let resumed = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing")) { url, _ in
+        let resumed = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0) { url, _ in
             XCTAssertTrue(url.lastPathComponent.contains("mixed-2"), "Completed windows must not be decoded again")
             await resumedDecodes.increment()
             return TranscriptionResult(text: "Final", segments: [.init(text: "Final window", start: 21, end: 22)])
@@ -109,7 +109,7 @@ final class MeetingLocalProcessorResilienceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let attempts = Counter()
         let processor = MeetingLocalProcessor(
-            processingRoot: root.appendingPathComponent("processing"),
+            processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0,
             transcribeMeeting: { _, _ in
                 await attempts.increment()
                 if await attempts.value == 1 { throw TranscriptionError.timedOut(seconds: 105) }
