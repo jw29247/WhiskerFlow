@@ -127,21 +127,50 @@ final class SharedVocabularyServiceTests: XCTestCase {
         XCTAssertEqual((body["args"] as? [String: Any])?.isEmpty, true)
     }
 
-    func testSuccessReplacesTheRulesAndCachesThemIgnoringUnknownFields() async throws {
-        try writeCache([("kleens", "Cleens")])
-        var value = glossary([("bperfect", "BPerfect")])
-        value["revision"] = 7
-        value["rules"] = [["find": "bperfect", "replaceWith": "BPerfect", "owner": "ops"]]
-        GlossaryStubProtocol.fallback = .init(status: 200, body: ["ok": true, "value": value])
+    func testANewInstallWithNoCacheHasAnEmptyGlossaryAndNoError() async {
+        token = nil
         let service = makeService()
-        XCTAssertEqual(service.rules.map(\.find), ["kleens"], "the cache loads before any fetch")
+        XCTAssertTrue(service.rules.isEmpty, "the app ships no glossary of its own")
+        XCTAssertEqual(service.status, .idle)
+
+        service.start()
+        await service.waitForCurrentFetch()
+        XCTAssertTrue(GlossaryStubProtocol.requests.isEmpty)
+        XCTAssertTrue(service.rules.isEmpty)
+        XCTAssertEqual(service.status, .idle, "signed out with nothing downloaded is not an error")
+        XCTAssertTrue(service.vocabulary.rules.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path))
+    }
+
+    func testTheFirstFetchFromAtlasPopulatesAndCachesTheGlossary() async throws {
+        GlossaryStubProtocol.fallback = .init(status: 200, body: ["ok": true, "value": glossary([("zorblat", "Zorblat")])])
+        let service = makeService()
+        XCTAssertTrue(service.rules.isEmpty)
 
         service.start()
         await service.waitForCurrentFetch()
 
-        XCTAssertEqual(service.rules.map(\.replaceWith), ["BPerfect"])
+        XCTAssertEqual(service.rules.map(\.replaceWith), ["Zorblat"])
         guard case .loaded(let count, _) = service.status, count == 1 else { return XCTFail("status \(service.status)") }
-        XCTAssertEqual(try cachedFinds(), ["bperfect"])
+        XCTAssertEqual(try cachedFinds(), ["zorblat"])
+        XCTAssertEqual(makeService().rules.map(\.find), ["zorblat"], "the next launch starts from the cached copy")
+    }
+
+    func testSuccessReplacesTheRulesAndCachesThemIgnoringUnknownFields() async throws {
+        try writeCache([("zorblat", "Zorblat")])
+        var value = glossary([("quindle", "Quindle")])
+        value["revision"] = 7
+        value["rules"] = [["find": "quindle", "replaceWith": "Quindle", "owner": "ops"]]
+        GlossaryStubProtocol.fallback = .init(status: 200, body: ["ok": true, "value": value])
+        let service = makeService()
+        XCTAssertEqual(service.rules.map(\.find), ["zorblat"], "the cache loads before any fetch")
+
+        service.start()
+        await service.waitForCurrentFetch()
+
+        XCTAssertEqual(service.rules.map(\.replaceWith), ["Quindle"])
+        guard case .loaded(let count, _) = service.status, count == 1 else { return XCTFail("status \(service.status)") }
+        XCTAssertEqual(try cachedFinds(), ["quindle"])
     }
 
     func testFailuresKeepTheCachedRules() async throws {
@@ -154,14 +183,14 @@ final class SharedVocabularyServiceTests: XCTestCase {
             ("invalid payload", .init(status: 200, body: ["ok": true, "value": ["rules": "nope"]])),
         ]
         for (name, reply) in failures {
-            try writeCache([("kleens", "Cleens")])
+            try writeCache([("zorblat", "Zorblat")])
             GlossaryStubProtocol.fallback = reply
             let service = makeService()
             service.start()
             await service.waitForCurrentFetch()
 
-            XCTAssertEqual(service.rules.map(\.find), ["kleens"], name)
-            XCTAssertEqual(try cachedFinds(), ["kleens"], "\(name) must not touch the cache")
+            XCTAssertEqual(service.rules.map(\.find), ["zorblat"], name)
+            XCTAssertEqual(try cachedFinds(), ["zorblat"], "\(name) must not touch the cache")
             guard case .failed = service.status else { return XCTFail("\(name): status \(service.status)") }
         }
     }
@@ -175,7 +204,7 @@ final class SharedVocabularyServiceTests: XCTestCase {
     }
 
     func testSignedOutMakesNoRequestAndKeepsTheCacheWithoutAnError() async throws {
-        try writeCache([("kleens", "Cleens")])
+        try writeCache([("zorblat", "Zorblat")])
         token = nil
         let service = makeService()
         service.start()
@@ -183,13 +212,13 @@ final class SharedVocabularyServiceTests: XCTestCase {
         await service.waitForCurrentFetch()
 
         XCTAssertTrue(GlossaryStubProtocol.requests.isEmpty)
-        XCTAssertEqual(service.rules.map(\.find), ["kleens"])
+        XCTAssertEqual(service.rules.map(\.find), ["zorblat"])
         guard case .loaded = service.status else { return XCTFail("status \(service.status)") }
     }
 
     func testSignInFetchesPromptlyAndSignOutStopsUsingTheToken() async {
         token = nil
-        GlossaryStubProtocol.fallback = .init(status: 200, body: ["ok": true, "value": glossary([("kleens", "Cleens")])])
+        GlossaryStubProtocol.fallback = .init(status: 200, body: ["ok": true, "value": glossary([("zorblat", "Zorblat")])])
         let service = makeService()
         service.start()
         XCTAssertTrue(GlossaryStubProtocol.requests.isEmpty)
@@ -198,7 +227,7 @@ final class SharedVocabularyServiceTests: XCTestCase {
         service.credentialsChanged()
         await service.waitForCurrentFetch()
         XCTAssertEqual(GlossaryStubProtocol.requests.count, 1)
-        XCTAssertEqual(service.rules.map(\.find), ["kleens"])
+        XCTAssertEqual(service.rules.map(\.find), ["zorblat"])
 
         service.credentialsChanged()
         XCTAssertEqual(GlossaryStubProtocol.requests.count, 1, "an unchanged token doesn't refetch")
@@ -208,14 +237,14 @@ final class SharedVocabularyServiceTests: XCTestCase {
         service.refresh()
         await service.waitForCurrentFetch()
         XCTAssertEqual(GlossaryStubProtocol.requests.count, 1, "signed out, nothing is requested")
-        XCTAssertEqual(service.rules.map(\.find), ["kleens"], "signing out keeps the last good rules")
+        XCTAssertEqual(service.rules.map(\.find), ["zorblat"], "signing out keeps the last good rules")
     }
 
     func testASupersededFetchNeverCommits() async throws {
         GlossaryStubProtocol.replies[Self.firstToken] = .init(
-            status: 200, body: ["ok": true, "value": glossary([("kleens", "Cleens")])], delay: 0.3)
+            status: 200, body: ["ok": true, "value": glossary([("zorblat", "Zorblat")])], delay: 0.3)
         GlossaryStubProtocol.replies[Self.secondToken] = .init(
-            status: 200, body: ["ok": true, "value": glossary([("bperfect", "BPerfect")])])
+            status: 200, body: ["ok": true, "value": glossary([("quindle", "Quindle")])])
         let service = makeService()
         service.start()
         // Let the slow first request reach Atlas before a reconnect supersedes it.
@@ -230,8 +259,8 @@ final class SharedVocabularyServiceTests: XCTestCase {
 
         XCTAssertEqual(GlossaryStubProtocol.requests.compactMap { $0.value(forHTTPHeaderField: "Authorization") },
                        ["Bearer \(Self.firstToken)", "Bearer \(Self.secondToken)"])
-        XCTAssertEqual(service.rules.map(\.find), ["bperfect"])
-        XCTAssertEqual(try cachedFinds(), ["bperfect"])
+        XCTAssertEqual(service.rules.map(\.find), ["quindle"])
+        XCTAssertEqual(try cachedFinds(), ["quindle"])
     }
 
     func testExplicitSignOutDeletesTheDownloadedGlossaryAndStopsRefreshing() async throws {
@@ -246,7 +275,9 @@ final class SharedVocabularyServiceTests: XCTestCase {
         service.signOut()
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path), "The client glossary is not kept on this Mac")
-        XCTAssertFalse(service.rules.map(\.find).contains("acme"))
+        XCTAssertTrue(service.rules.isEmpty, "Signed out, the glossary is empty, as on a new install")
+        XCTAssertEqual(service.status, .idle)
+        XCTAssertTrue(makeService().rules.isEmpty, "Nothing comes back on the next launch")
         XCTAssertFalse(service.isRefreshingPeriodically)
         let sent = GlossaryStubProtocol.requests.count
         service.refresh()
