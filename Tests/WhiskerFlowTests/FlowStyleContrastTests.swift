@@ -24,6 +24,19 @@ final class FlowStyleContrastTests: XCTestCase {
         }
     }
 
+    /// `FlowPrimaryButtonStyle`: its label on the normal and destructive
+    /// fills, at rest and pressed (the fill darkened by 15% black).
+    func testPrimaryButtonLabelReachesAA() {
+        for (variant, fill) in [("primary", Palette.accent), ("destructive", Palette.recording)] {
+            for (appearance, label, colour) in [("light", Palette.onAccent.light, fill.light),
+                                                ("dark", Palette.onAccent.dark, fill.dark)] {
+                assertAA(label, on: colour, "\(variant) button, \(appearance)")
+                assertAA(label, on: darkened(colour, by: FlowPrimaryButtonStyle.pressedShade),
+                         "\(variant) button pressed, \(appearance)")
+            }
+        }
+    }
+
     func testContrastFormulaMatchesKnownValues() {
         XCTAssertEqual(Self.contrast(0x000000, 0xFFFFFF), 21, accuracy: 0.01)
         XCTAssertEqual(Self.contrast(0x777777, 0xFFFFFF), 4.48, accuracy: 0.01)
@@ -33,6 +46,13 @@ final class FlowStyleContrastTests: XCTestCase {
                           file: StaticString = #filePath, line: UInt = #line) {
         let ratio = Self.contrast(text, background)
         XCTAssertGreaterThanOrEqual(ratio, 4.5, String(format: "%@: %.2f:1", label, ratio), file: file, line: line)
+    }
+
+    private func darkened(_ hex: UInt32, by amount: Double) -> UInt32 {
+        [16, 8, 0].reduce(0) { result, shift in
+            let channel = Double((hex >> UInt32(shift)) & 255) * (1 - amount)
+            return result | (UInt32(channel.rounded()) << UInt32(shift))
+        }
     }
 
     static func contrast(_ first: UInt32, _ second: UInt32) -> Double {

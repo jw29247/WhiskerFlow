@@ -125,6 +125,9 @@ struct FlowStatus: View {
 }
 
 struct FlowPrimaryButtonStyle: ButtonStyle {
+    /// Pressed darkens the fill rather than fading the button: fading took
+    /// the light-mode label below 4.5:1.
+    static let pressedShade = 0.15
     var destructive = false
     @Environment(\.isEnabled) private var isEnabled
 
@@ -132,10 +135,10 @@ struct FlowPrimaryButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: 13, weight: .medium))
             .padding(.horizontal, 15).padding(.vertical, 10)
-            .foregroundStyle(Color.white)
-            .background(destructive ? FlowStyle.recording : Color(red: 0.21, green: 0.36, blue: 0.88),
-                        in: RoundedRectangle(cornerRadius: 8))
-            .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.4)
+            .foregroundStyle(FlowStyle.onAccent)
+            .background(RoundedRectangle(cornerRadius: 8).fill(destructive ? FlowStyle.recording : FlowStyle.accent)
+                .overlay(RoundedRectangle(cornerRadius: 8).fill(.black.opacity(configuration.isPressed ? Self.pressedShade : 0))))
+            .opacity(isEnabled ? 1 : 0.4)
     }
 }
 
