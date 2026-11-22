@@ -76,6 +76,10 @@ struct MeetingsView: View {
                                 }
                             }
                         }.padding(22).background(FlowStyle.surface, in: RoundedRectangle(cornerRadius: 12))
+                        if appState.isRecordingReminderVisible {
+                            MeetingRecordingReminderView(appState: appState).padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(FlowStyle.selection, in: RoundedRectangle(cornerRadius: 10))
+                        }
                         if let sessionID = appState.activeMeetingSessionID {
                             MeetingNotepadView(appState: appState, sessionID: sessionID)
                         }
@@ -268,6 +272,13 @@ struct MeetingSetupView: View {
             Toggle("Ask to record when a call starts", isOn: Binding(
                 get: { appState.settings.askToRecordCalls }, set: { appState.setAskToRecordCalls($0) }))
             Text("Works with Zoom, Microsoft Teams, Slack huddles and Webex, and with Google Meet, Teams, Zoom and Webex in Chrome, Safari, Edge, Arc, Brave, Firefox and other browsers. WhiskerFlow notices an app using the microphone and reads its window titles through Accessibility, on this Mac. Nothing to install. A detected call is recorded only if you choose Record. Automatic recording of scheduled meetings is a separate setting.")
+                .font(.caption).foregroundStyle(FlowStyle.muted)
+        }
+        Section("Recording notice") {
+            TextField("Recording notice", text: $appState.settings.meetingRecordingNotice,
+                      prompt: Text(MeetingRecordingNotice.defaultText), axis: .vertical)
+                .lineLimit(3...6).labelsHidden()
+            Text("When a recording starts, WhiskerFlow reminds you to tell the other participants and offers to copy this notice for the meeting chat. Leave it empty to use the wording shown.")
                 .font(.caption).foregroundStyle(FlowStyle.muted)
         }
         Section("Transcripts on this Mac") {
