@@ -25,7 +25,9 @@ fi
 cmp "$ROOT_DIR/Sources/WhiskerFlow/Resources/CleanupNotices.txt" \
   "$(resource_bundle_file "$APP_BUNDLE/Contents/Resources/WhiskerFlow_WhiskerFlow.bundle" CleanupNotices.txt)"
 # The glossary is downloaded from Atlas; the app must not ship a copy.
-if find "$APP_BUNDLE" -name shared-vocabulary.json | grep -q .; then
+# Not `find … | grep -q`: under pipefail a second match can kill `find` with
+# SIGPIPE, which would read as "none found".
+if [[ -n "$(find "$APP_BUNDLE" -name shared-vocabulary.json -print -quit)" ]]; then
   echo "FAIL: the app bundle contains a copy of the shared glossary" >&2
   exit 1
 fi
