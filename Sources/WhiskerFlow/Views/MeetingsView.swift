@@ -25,7 +25,7 @@ struct MeetingsView: View {
         .sheet(isPresented: $showSetup) {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    Text("Meeting setup").font(.system(size: 24, weight: .semibold, design: .rounded))
+                    Text("Meeting setup").font(FlowStyle.heading)
                     Spacer()
                     Button("Done") { showSetup = false }.keyboardShortcut(.cancelAction)
                 }.padding(26)
@@ -41,7 +41,7 @@ struct MeetingsView: View {
         return VStack(spacing: 0) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Meetings").font(.system(size: 28, weight: .semibold, design: .rounded))
+                    Text("Meetings").font(FlowStyle.title)
                     FlowStatus(title: appState.isAtlasPaired ? "Connected to Atlas" : "Atlas isn’t connected",
                                color: appState.isAtlasPaired ? FlowStyle.success : FlowStyle.muted)
                 }
@@ -71,7 +71,7 @@ struct MeetingsView: View {
                             }
                             Spacer()
                             VStack(alignment: .trailing, spacing: 10) {
-                                Text("RECORDING").font(.system(size: 10, weight: .semibold)).tracking(1).foregroundStyle(FlowStyle.recording)
+                                Text("RECORDING").font(FlowStyle.small.weight(.semibold)).tracking(1).foregroundStyle(FlowStyle.recording)
                                 if let sessionID = appState.activeMeetingSessionID {
                                     Button("Open meeting") { openMeetingID = sessionID }
                                 }
@@ -105,9 +105,9 @@ struct MeetingsView: View {
                         VStack(alignment: .leading, spacing: 18) {
                             Image(systemName: "calendar.badge.plus").font(.system(size: 32, weight: .light)).foregroundStyle(FlowStyle.accent)
                                 .accessibilityHidden(true)
-                            Text("Be in the conversation.").font(.system(size: 28, weight: .semibold, design: .rounded))
+                            Text("Be in the conversation.").font(FlowStyle.title)
                             Text("Connect Atlas to see your meetings here and save their recordings and transcripts to your workspace.")
-                                .font(.system(size: 14)).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
+                                .font(FlowStyle.body).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: 440, alignment: .leading)
                             Button("Connect Atlas") { showSetup = true }.buttonStyle(FlowPrimaryButtonStyle())
                             Text("Dictation works without an Atlas account.").font(.caption).foregroundStyle(FlowStyle.muted)
@@ -121,7 +121,7 @@ struct MeetingsView: View {
                             }.font(.callout).padding(16).background(FlowStyle.selection, in: RoundedRectangle(cornerRadius: 10))
                         }
                         HStack {
-                            Text("Upcoming · next 7 days").font(.system(size: 13, weight: .medium))
+                            Text("Upcoming · next 7 days").font(FlowStyle.callout.weight(.medium))
                             Spacer()
                             Button { appState.refreshMeetingSchedule() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                                 .buttonStyle(.plain).foregroundStyle(FlowStyle.accent)
@@ -143,7 +143,7 @@ struct MeetingsView: View {
                                         meetingRow(meeting, previous: true, startDisabled: startDisabled, needsSetup: needsSetup)
                                     }
                                 }.padding(.top, 16)
-                            }.font(.system(size: 13, weight: .medium))
+                            }.font(FlowStyle.callout.weight(.medium))
                         }
                     }
                     if appState.isAtlasPaired || appState.isMeetingCapturing {
@@ -172,7 +172,7 @@ struct MeetingsView: View {
                 Text(appState.settings.meetingModeEnabled ? "Automatic recording is on" : "Automatic recording is off")
                 Spacer()
                 Button("Manage") { showSetup = true }.buttonStyle(.plain).foregroundStyle(FlowStyle.accent)
-            }.font(.system(size: 12)).foregroundStyle(FlowStyle.muted).padding(.horizontal, 32).padding(.vertical, 21)
+            }.font(FlowStyle.caption).foregroundStyle(FlowStyle.muted).padding(.horizontal, 32).padding(.vertical, 21)
         }
         .task {
             // Free space changes slowly; poll only while this screen is visible.
@@ -188,16 +188,16 @@ struct MeetingsView: View {
         HStack(spacing: 16) {
             let start = Date(timeIntervalSince1970: Double(meeting.startMs) / 1000)
             VStack(spacing: 2) {
-                Text(start, format: .dateTime.month(.abbreviated)).font(.system(size: 9, weight: .semibold)).textCase(.uppercase)
-                Text(start, format: .dateTime.day()).font(.system(size: 23, weight: .medium, design: .rounded))
+                Text(start, format: .dateTime.month(.abbreviated)).font(FlowStyle.small.weight(.semibold)).textCase(.uppercase)
+                Text(start, format: .dateTime.day()).font(FlowStyle.heading.weight(.medium))
             }.foregroundStyle(FlowStyle.muted).frame(width: 42)
             VStack(alignment: .leading, spacing: 7) {
-                Text(meeting.title).font(.system(size: 14, weight: .medium)).lineLimit(2)
+                Text(meeting.title).font(FlowStyle.body.weight(.medium)).lineLimit(2)
                 HStack(spacing: 4) {
                     Text(start, format: .dateTime.hour().minute())
                     Text("–")
                     Text(Date(timeIntervalSince1970: Double(meeting.endMs) / 1000), format: .dateTime.hour().minute())
-                }.font(.system(size: 12)).foregroundStyle(FlowStyle.muted)
+                }.font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
             }
             Spacer()
             if previous {
