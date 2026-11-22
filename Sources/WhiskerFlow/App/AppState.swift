@@ -42,6 +42,11 @@ extension AppStatus {
         guard case .success(let message) = self else { return nil }
         return message
     }
+
+    var hudFailureMessage: String? {
+        guard case .failure(let message) = self else { return nil }
+        return message
+    }
 }
 
 enum ModelState: Equatable {
@@ -404,7 +409,8 @@ final class AppState {
         FloatingHUDPresentation.current(
             isRecording: isRecording,
             isTranscribing: isTranscribing,
-            successMessage: status.hudNotificationMessage
+            successMessage: status.hudNotificationMessage,
+            failureMessage: status.hudFailureMessage
         )
     }
 

@@ -15,6 +15,12 @@ struct RecordingHUDView: View {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(FlowStyle.ink)
+                    // A failure reason can run long: a fixed width (not a
+                    // maximum, which the fixed-size panel would measure as one
+                    // line) lets it wrap and the panel grow to fit.
+                    .lineLimit(isFailure ? 3 : nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: isFailure ? 320 : nil, alignment: .leading)
                 if presentation == .recording, !appState.liveText.isEmpty {
                     // Live transcript, most-recent words kept visible.
                     Text(appState.liveText)
@@ -56,7 +62,7 @@ struct RecordingHUDView: View {
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(FlowStyle.surface)
-                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(FlowStyle.line))
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(isFailure ? FlowStyle.danger : FlowStyle.line))
         )
         .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
         .fixedSize()
@@ -79,11 +85,17 @@ struct RecordingHUDView: View {
         appState.hudPresentation
     }
 
+    private var isFailure: Bool {
+        if case .failure = presentation { return true }
+        return false
+    }
+
     private var iconName: String {
         switch presentation {
         case .recording: return "waveform"
         case .transcribing: return "ellipsis"
         case .notification: return "checkmark.circle.fill"
+        case .failure: return "exclamationmark.triangle.fill"
         case .hidden: return "ellipsis"
         }
     }
@@ -92,6 +104,7 @@ struct RecordingHUDView: View {
         switch presentation {
         case .recording: return FlowStyle.recording
         case .notification: return .green
+        case .failure: return FlowStyle.danger
         case .transcribing, .hidden: return FlowStyle.accent
         }
     }
@@ -100,7 +113,7 @@ struct RecordingHUDView: View {
         switch presentation {
         case .recording: return "Listening…"
         case .transcribing: return "Transcribing…"
-        case .notification(let message): return message
+        case .notification(let message), .failure(let message): return message
         case .hidden: return appState.statusMessage
         }
     }
@@ -157,11 +170,11 @@ final class RecordingHUDController {
         switch appState.hudPresentation {
         case .recording, .transcribing:
             show()
-        case .notification:
+        case .notification, .failure:
             // The hide is scheduled from inside the show task: cancelling that
             // task here would leave a panel that was already ordered out hidden,
             // and the message never shown.
-            show(thenHideAfter: Self.notificationDuration)
+            show(thenHideAfter: appState.hudPresentation.displayDuration)
         case .hidden:
             scheduleHide()
         }
@@ -191,7 +204,7 @@ final class RecordingHUDController {
         return panel
     }
 
-    private static let notificationDuration: TimeInterval = 1.1
+    private static let notificationDuration = FloatingHUDPresentation.notificationDuration
 
     private func show(thenHideAfter hideDelay: TimeInterval? = nil) {
         hideWorkItem?.cancel()

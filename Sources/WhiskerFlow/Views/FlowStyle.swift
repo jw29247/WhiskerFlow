@@ -11,6 +11,9 @@ enum FlowStyle {
     static let line = adaptive(light: 0xDDE3ED, dark: 0x343D4F)
     static let selection = adaptive(light: 0xE6ECFB, dark: 0x2C395C)
     static let recording = adaptive(light: 0xC94352, dark: 0xFF8590)
+    /// Something went wrong and needs the user. Warmer than `recording`, so a
+    /// failure is never mistaken for a live microphone.
+    static let danger = adaptive(light: 0xC2410C, dark: 0xFFA06E)
 
     private static func adaptive(light: UInt32, dark: UInt32) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
