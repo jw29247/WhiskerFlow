@@ -10,6 +10,13 @@ change a decision or the user asks for them. State uncertainty plainly and
 link supporting evidence instead of repeating it. Give more detail only when
 the user requests it.
 
+## Product rule: no telemetry
+
+WhiskerFlow sends no telemetry, analytics or crash reports. Diagnostics stay on
+the Mac. Do not add any service, SDK or upload step that sends them without the
+owner's explicit decision (decided 21 November 2026). This overrides the
+tracked `otel-*` and `superlog-*` agent skills, which do not apply here.
+
 ## Delivery policy
 
 This is the canonical workflow policy for this repository. Read it for routine,
@@ -122,7 +129,9 @@ For a real release:
 
    This requires a Developer ID Application certificate, the
    `WhiskerFlow-Notary` notarytool profile, the Sparkle private key available
-   to `sign_update`, and an authenticated `gh`.
+   to `sign_update`, and an authenticated `gh`. It also writes a matching
+   dSYM to `dist/` for local symbolication. The dSYM is never uploaded or
+   attached to a release; keep it on the release Mac.
 3. Create the GitHub release as a **draft** at that commit, with all three
    assets. A draft is invisible to every feed:
 
