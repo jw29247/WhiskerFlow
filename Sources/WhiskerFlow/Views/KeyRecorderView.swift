@@ -30,7 +30,7 @@ struct KeyRecorderView: View {
                         .foregroundStyle(isRecording ? .secondary : .primary)
                     Spacer()
                     Image(systemName: isRecording ? "record.circle" : "pencil")
-                        .foregroundStyle(isRecording ? .red : .secondary)
+                        .foregroundStyle(isRecording ? FlowStyle.recording : .secondary)
                         .accessibilityHidden(true)
                 }
                 .contentShape(Rectangle())
@@ -40,7 +40,7 @@ struct KeyRecorderView: View {
             if isRecording && showHint {
                 Text("Add a modifier (⌘/⌥/⌃/⇧) or use a function key.")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(FlowStyle.warning)
             }
         }
         .onDisappear(perform: stopRecording)

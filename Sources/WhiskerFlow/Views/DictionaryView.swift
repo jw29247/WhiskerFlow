@@ -32,7 +32,7 @@ struct DictionaryView: View {
                     .font(.callout).foregroundStyle(FlowStyle.muted)
             }
             if let error = appState.dictionary.errorMessage {
-                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange).font(.callout)
+                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(FlowStyle.danger).font(.callout)
             }
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(FlowStyle.muted)

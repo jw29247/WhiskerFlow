@@ -89,7 +89,7 @@ struct HistoryView: View {
                                         Text(record.createdAt, format: .dateTime.month(.abbreviated).day().hour().minute())
                                         Spacer(minLength: 2)
                                         if record.status.isFailed {
-                                            Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                                            Image(systemName: "exclamationmark.circle").foregroundStyle(FlowStyle.danger)
                                                 .accessibilityLabel("Failed")
                                         }
                                         if record.status.isInProgress { ProgressView().controlSize(.mini) }

@@ -57,7 +57,7 @@ struct WhiskerFlowApp: App {
                 Button("Quick voice capture · hold ⌥⇧⌘N") { appState.assistant.capturePurpose = .quickCapture }
                 Button("Bookmark meeting · ⌥⇧⌘B") { appState.bookmarkMeeting() }.disabled(!appState.isMeetingCapturing)
                 Button("Toggle Meeting Capture") {
-                    appState.toggleMeetingCapture()
+                    appState.toggleMeetingCaptureFromMenu()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option, .shift])
             }
@@ -71,12 +71,15 @@ struct WhiskerFlowApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
+        .defaultSize(width: 660, height: 640)
         .defaultPosition(.center)
 
         Settings {
             SettingsView(appState: appState, updaterService: updaterService)
                 .preferredColorScheme(UIPreview.colorScheme)
         }
+        // The window's size, title bar included: the content is 650 high.
+        .defaultSize(width: 760, height: 678)
 
         WhiskerFlowMenuBarScene(appState: appState, updaterService: updaterService)
     }

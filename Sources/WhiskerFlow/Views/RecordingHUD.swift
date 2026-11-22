@@ -64,9 +64,18 @@ struct RecordingHUDView: View {
                 .fill(FlowStyle.surface)
                 .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(isFailure ? FlowStyle.danger : FlowStyle.line))
         )
-        .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
+        .shadow(color: .black.opacity(0.35), radius: Self.shadowRadius, y: Self.shadowOffset)
+        // The panel is sized to this view: leave transparent room for the
+        // shadow so the panel edge doesn't clip it.
+        .padding(Self.shadowInsets)
         .fixedSize()
     }
+
+    static let shadowRadius: CGFloat = 16
+    static let shadowOffset: CGFloat = 6
+    /// The shadow's extent beyond the card on each side, offset included.
+    static let shadowInsets = EdgeInsets(top: max(0, shadowRadius - shadowOffset), leading: shadowRadius,
+                                         bottom: shadowRadius + shadowOffset, trailing: shadowRadius)
 
     private var icon: some View {
         Image(systemName: iconName)
@@ -103,7 +112,7 @@ struct RecordingHUDView: View {
     private var iconTint: Color {
         switch presentation {
         case .recording: return FlowStyle.recording
-        case .notification: return .green
+        case .notification: return FlowStyle.success
         case .failure: return FlowStyle.danger
         case .transcribing, .hidden: return FlowStyle.accent
         }
@@ -127,7 +136,7 @@ struct RecordingHUDView: View {
     }
 
     private var signalWarningTint: Color {
-        appState.signalQuality == .clipping ? .orange : .yellow
+        FlowStyle.warning
     }
 
     private var elapsedString: String {
@@ -246,8 +255,10 @@ final class RecordingHUDController {
         let size = panel.contentView?.fittingSize ?? NSSize(width: 260, height: 56)
         panel.setContentSize(size)
         let frame = screen.visibleFrame
-        let x = frame.midX - size.width / 2
-        let y = frame.minY + 90
+        // Place the card, not the panel's transparent shadow margin.
+        let insets = RecordingHUDView.shadowInsets
+        let x = frame.midX - size.width / 2 - (insets.leading - insets.trailing) / 2
+        let y = frame.minY + 90 - insets.bottom
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 }

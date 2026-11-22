@@ -63,7 +63,7 @@ struct LeaderboardView: View {
             Label("Shared with colleagues in Atlas: your name and daily counts. Never any text.", systemImage: "lock")
             Spacer()
             if let message = leaderboard.errorMessage, leaderboard.board != nil {
-                Text(message).foregroundStyle(.orange)
+                Text(message).foregroundStyle(FlowStyle.danger)
             } else if let updated = leaderboard.updatedAt {
                 Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
             }

@@ -80,7 +80,7 @@ struct SecureInputNotice: View {
     var body: some View {
         Label(SecureInputMonitor.notice, systemImage: "lock.fill")
             .font(.callout)
-            .foregroundStyle(.orange)
+            .foregroundStyle(FlowStyle.warning)
             .fixedSize(horizontal: false, vertical: true)
             .help("Another app, such as a password field or a terminal with Secure Keyboard Entry, is hiding keystrokes from other apps. The shortcut works again when it turns Secure Input off.")
     }

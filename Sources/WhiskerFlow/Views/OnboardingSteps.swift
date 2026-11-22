@@ -255,7 +255,7 @@ struct OnboardingLevelBars: View {
                 ForEach(levels.indices, id: \.self) { index in
                     let level = CGFloat(levels[index])
                     Capsule()
-                        .fill(levels[index] >= threshold ? (heard ? Color.green : FlowStyle.accent) : FlowStyle.accent.opacity(0.35))
+                        .fill(levels[index] >= threshold ? (heard ? FlowStyle.success : FlowStyle.accent) : FlowStyle.accent.opacity(0.35))
                         .frame(height: max(4, level * geometry.size.height))
                 }
             }
@@ -332,7 +332,7 @@ struct OnboardingShortcutStep: View {
             if settings.activeHotkeyCombo == HotkeyTrigger.fn.presetCombo, let explanation = globeUsage.conflictExplanation {
                 OnboardingCard {
                     Label("Your 🌐 key already does something", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange).font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(FlowStyle.warning).font(.system(size: 13, weight: .medium))
                     Text(explanation).font(.caption).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
                     Button("Open Keyboard Settings") { SystemSettingsLink.open(SystemSettingsLink.keyboard) }
                 }
@@ -342,7 +342,7 @@ struct OnboardingShortcutStep: View {
                 HStack(spacing: 16) {
                     FlowKeycap(title: settings.hotkeyDisplayName, compact: false)
                         .scaleEffect(isPressed && !reduceMotion ? 0.94 : 1)
-                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(isPressed || passed ? Color.green : .clear, lineWidth: 2))
+                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(isPressed || passed ? FlowStyle.success : .clear, lineWidth: 2))
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: isPressed)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(passed ? "Your shortcut works." : (isPressed ? "Got it. Now let go." : "Press your shortcut now."))
@@ -352,7 +352,7 @@ struct OnboardingShortcutStep: View {
                     }
                     Spacer()
                     if passed {
-                        Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(.green)
+                        Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(FlowStyle.success)
                             .accessibilityHidden(true)
                     }
                 }
@@ -486,9 +486,9 @@ struct OnboardingModelStep: View {
                 }
                 ProgressView(value: progressValue)
                     .progressViewStyle(.linear)
-                    .tint(appState.modelState == .ready ? .green : FlowStyle.accent)
+                    .tint(appState.modelState == .ready ? FlowStyle.success : FlowStyle.accent)
                 HStack {
-                    Text(statusText).font(.callout).foregroundStyle(appState.modelState.isFailure ? .orange : FlowStyle.muted)
+                    Text(statusText).font(.callout).foregroundStyle(appState.modelState.isFailure ? FlowStyle.danger : FlowStyle.muted)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     if appState.modelState == .preparing, appState.modelDownload.tracker != nil {
@@ -496,7 +496,7 @@ struct OnboardingModelStep: View {
                             .font(.callout.monospacedDigit()).foregroundStyle(FlowStyle.muted)
                     }
                     if appState.modelState == .ready {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(FlowStyle.success)
                             .accessibilityLabel("Ready")
                     }
                 }
@@ -665,7 +665,7 @@ struct OnboardingExtrasStep: View {
                 }
                 Text("Your agency workspace. Connecting unlocks meeting recordings and transcripts, the Assistant, and each client’s vocabulary, so names and jargon come out right.")
                     .font(.caption).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
-                if let error = appState.atlasSignInError { Text(error).font(.caption).foregroundStyle(.orange) }
+                if let error = appState.atlasSignInError { Text(error).font(.caption).foregroundStyle(FlowStyle.danger) }
                 if paired {
                     HStack {
                         Picker("Active client", selection: Binding(get: { assistant.saved.selectedClient ?? "" }, set: { reference in
@@ -735,10 +735,11 @@ struct OnboardingDoneStep: View {
                               detail: "Here’s everything you can do from the keyboard.")
             OnboardingCard {
                 shortcutRow(keys: appState.settings.hotkeyDisplayName, action: "Dictate", detail: presentation.gesture == "Hold" ? "Hold, speak, let go" : "Tap to start, tap to stop")
+                shortcutRow(keys: "⎋ Esc", action: "Discard the dictation", detail: "Press while dictating")
                 Divider()
                 shortcutRow(keys: "⌥⇧⌘E", action: "Voice edit a selection", detail: "Hold and say how to change it")
                 shortcutRow(keys: "⌥⇧⌘N", action: "Quick voice capture", detail: "Hold to save a note")
-                shortcutRow(keys: "⌥⇧⌘R", action: "Start or stop meeting recording", detail: "Press")
+                shortcutRow(keys: "⌥⇧⌘R", action: "Start or stop meeting recording", detail: "Press in any app")
                 shortcutRow(keys: "⌥⇧⌘B", action: "Bookmark the meeting", detail: "Press while recording")
                 Divider()
                 shortcutRow(keys: "⌘1 – ⌘5", action: "Switch screens", detail: "In the WhiskerFlow window")
