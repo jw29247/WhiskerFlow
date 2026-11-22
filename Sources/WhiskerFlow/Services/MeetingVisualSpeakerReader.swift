@@ -15,7 +15,7 @@ struct MeetingVisualFrame: @unchecked Sendable {
 /// No pixels or participant names enter logs, disk or network.
 enum MeetingVisualSpeakerReader {
   /// Per-request ScreenCaptureKit budget. Window enumeration alone can take
-  /// several hundred milliseconds on a base M1 or Intel Mac.
+  /// several hundred milliseconds on a base M1 Mac.
   static let requestTimeoutSeconds: Double = 1.0
   /// A cached window is re-enumerated after this long so a hidden, minimised
   /// or replaced window is not captured indefinitely.

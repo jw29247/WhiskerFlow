@@ -138,7 +138,7 @@ struct MeetingAccessibilityReadResult: Sendable {
 }
 
 enum MeetingAccessibilityReader {
-    /// Wall-clock budget for one read, sized for a busy base M1 or Intel Mac
+    /// Wall-clock budget for one read, sized for a busy base M1 Mac
     /// whose Chrome answers AX IPC slowly and whose utility work may run on
     /// efficiency cores, not for the development machine.
     static let readBudgetSeconds: TimeInterval = 2.0

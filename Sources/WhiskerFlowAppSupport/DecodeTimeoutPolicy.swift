@@ -4,25 +4,14 @@ import Foundation
 /// and ignores cancellation, so callers abandon it once its budget is spent.
 public enum DecodeTimeoutPolicy {
     /// Budgets below are tuned for a 16 GB+ Apple Silicon Mac. A base 8 GB
-    /// machine swaps with several models resident, and Intel (or Rosetta) runs
-    /// Core ML without the Neural Engine, so both get proportionally longer
-    /// before a slow-but-healthy decode is abandoned as wedged.
+    /// machine swaps with several models resident, so it gets proportionally
+    /// longer before a slow-but-healthy decode is abandoned as wedged.
     public static let hardwareScale: Double = hardwareScale(
-        physicalMemoryBytes: ProcessInfo.processInfo.physicalMemory,
-        isAppleSilicon: isNativeAppleSilicon
+        physicalMemoryBytes: ProcessInfo.processInfo.physicalMemory
     )
 
-    public static func hardwareScale(physicalMemoryBytes: UInt64, isAppleSilicon: Bool) -> Double {
-        guard isAppleSilicon else { return 3 }
-        return physicalMemoryBytes < 12 * 1_024 * 1_024 * 1_024 ? 2 : 1
-    }
-
-    private static var isNativeAppleSilicon: Bool {
-        #if arch(arm64)
-        return true
-        #else
-        return false
-        #endif
+    public static func hardwareScale(physicalMemoryBytes: UInt64) -> Double {
+        physicalMemoryBytes < 12 * 1_024 * 1_024 * 1_024 ? 2 : 1
     }
 
     /// Hard ceiling, also used when the audio duration is unknown.
