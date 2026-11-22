@@ -29,7 +29,7 @@ final class ToggleAutoStopDeliveryTests: XCTestCase {
     }
 
     @MainActor
-    private func makeHarness(delivery: DeliveryMode = .pasteAtCursor,
+    private func makeHarness(delivery: DeliveryMode = .pasteAtCursor, retention: HistoryRetention = .defaultValue,
                              recognizer: @escaping @Sendable () throws -> String) throws -> Harness {
         let name = "WhiskerFlow.toggle-auto-stop-tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
@@ -38,6 +38,7 @@ final class ToggleAutoStopDeliveryTests: XCTestCase {
         settings.allowAppleFallback = false
         settings.cleanupEnabled = false
         settings.delivery = delivery
+        settings.historyRetention = retention
         settings.playSounds = false
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -89,6 +90,23 @@ final class ToggleAutoStopDeliveryTests: XCTestCase {
         XCTAssertEqual(harness.paste.copies.count, 1)
         XCTAssertEqual(harness.state.status,
                        .success("Stopped after 30 minutes. Your text is in History and on the clipboard."))
+    }
+
+    /// "Don't save history" prunes the transcript as soon as it is written, so
+    /// the clipboard is the only place the text can go.
+    @MainActor
+    func testWithHistoryOffTheTextGoesToTheClipboardInstead() async throws {
+        let harness = try makeHarness(retention: .off) { "Ideas for the workshop." }
+        defer { harness.cleanUp() }
+        await harness.state.completeCaptureForTesting(samples: resident, totalSampleCount: 16_000 * 75,
+                                                      audioURL: harness.audio, stopReason: .autoStopped(.silence))
+
+        XCTAssertTrue(harness.state.records.isEmpty, "History is off, so nothing is kept")
+        XCTAssertTrue(harness.paste.pastes.isEmpty, "An automatic stop must never paste")
+        XCTAssertEqual(harness.paste.copies, ["Ideas for the workshop."])
+        let message = "Stopped after a minute of silence. Your text is on the clipboard."
+        XCTAssertEqual(harness.state.status, .success(message))
+        XCTAssertEqual(harness.state.autoStopNotice, AutoStopNotice(message: message, recordID: nil))
     }
 
     @MainActor

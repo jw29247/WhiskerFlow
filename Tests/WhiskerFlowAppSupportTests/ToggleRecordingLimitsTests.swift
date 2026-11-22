@@ -70,6 +70,8 @@ final class ToggleRecordingLimitsTests: XCTestCase {
                        "Stopped after a minute of silence. Your text is in History.")
         XCTAssertEqual(ToggleAutoStop.silence.savedMessage(copiedToClipboard: true),
                        "Stopped after a minute of silence. Your text is in History and on the clipboard.")
+        XCTAssertEqual(ToggleAutoStop.silence.savedMessage(inHistory: false, copiedToClipboard: true),
+                       "Stopped after a minute of silence. Your text is on the clipboard.")
         XCTAssertEqual(ToggleAutoStop.maximumLength.savedMessage(copiedToClipboard: false),
                        "Stopped after 30 minutes. Your text is in History.")
         XCTAssertEqual(ToggleAutoStop.noSpeech.nothingSaidMessage,

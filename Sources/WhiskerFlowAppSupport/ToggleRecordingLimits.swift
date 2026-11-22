@@ -10,9 +10,16 @@ public enum ToggleAutoStop: String, Equatable, Sendable {
     /// The recording reached its maximum length.
     case maximumLength = "maximum_length"
 
-    /// Shown in the HUD and on the Dictate screen once the text is saved.
-    public func savedMessage(copiedToClipboard: Bool) -> String {
-        let saved = copiedToClipboard ? "Your text is in History and on the clipboard." : "Your text is in History."
+    /// Shown in the HUD and on the Dictate screen: where the text went. It is
+    /// only "in History" when History kept it; otherwise the clipboard is the
+    /// one place it still is.
+    public func savedMessage(inHistory: Bool = true, copiedToClipboard: Bool) -> String {
+        let saved: String
+        switch (inHistory, copiedToClipboard) {
+        case (true, true): saved = "Your text is in History and on the clipboard."
+        case (true, false): saved = "Your text is in History."
+        case (false, _): saved = "Your text is on the clipboard."
+        }
         return "\(stoppedAfter) \(saved)"
     }
 

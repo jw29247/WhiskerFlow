@@ -2492,19 +2492,19 @@ final class AppState {
     }
 
     /// A toggle recording that stopped itself: never pasted, since nobody may be
-    /// at the keyboard. "Copy only" still copies, as it always does.
+    /// at the keyboard. "Copy only" still copies, as it always does. When History
+    /// did not keep the text ("Don't save history", or the save failed), the
+    /// clipboard is the only way back to it, so it is copied there instead of
+    /// being lost.
     private func deliverAutoStopped(_ text: String, autoStop: ToggleAutoStop, configuration: TranscriptionJobConfiguration,
                                     recordID: UUID?, mayUpdateUI: Bool) {
-        let copies = configuration.delivery == .copyOnly
+        let savedID = recordID.flatMap { id in records.contains { $0.id == id } ? id : nil }
+        let copies = configuration.delivery == .copyOnly || savedID == nil
         if copies { pasteService.copy(text) }
         guard mayUpdateUI else { return }
-        guard recordID != nil else {
-            status = .failure("Could not save transcript")
-            return
-        }
-        let message = autoStop.savedMessage(copiedToClipboard: copies)
+        let message = autoStop.savedMessage(inHistory: savedID != nil, copiedToClipboard: copies)
         status = .success(message)
-        autoStopNotice = AutoStopNotice(message: message, recordID: recordID)
+        autoStopNotice = AutoStopNotice(message: message, recordID: savedID)
     }
 
     func retryFailedPaste() async {
