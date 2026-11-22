@@ -132,6 +132,7 @@ final class AppState {
     private(set) var hasGlobeKeyConflict = false
     /// Another app's Secure Event Input is hiding the shortcut from WhiskerFlow.
     var isShortcutPausedBySecureInput = false
+    private var secureInputHeldElsewhere = false
     private var secureInputMonitor: SecureInputMonitor?
     var devices: [AudioInputDescriptor] = []
     var lastError: String?
@@ -1770,14 +1771,14 @@ final class AppState {
         }
         shortcuts.onChange = { [weak self, weak shortcuts] in
             self?.hotkeyMonitor?.setRegistered(shortcuts?.isRegistered(.dictation) ?? false)
+            self?.updateSecureInputNotice()
         }
-        recordingCoordinator.onPhaseChange = { [weak self] phase in
-            guard phase.isDiscardable else {
-                self?.registeredShortcuts?.setDiscardWindowOpen(false)
-                return
-            }
-            // Registering Esc waits one main-queue turn so it never delays
-            // opening the microphone; the phase is read again by then.
+        recordingCoordinator.onPhaseChange = { [weak self] _ in
+            // Registering or removing Esc waits one main-queue turn, so the
+            // system call never sits between a key event and the microphone
+            // opening or the text being pasted. The phase is read again by
+            // then. An Esc pressed in that one turn after a dictation ends is
+            // swallowed and discards nothing.
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else { return }
@@ -1800,9 +1801,21 @@ final class AppState {
     }
 
     private func startSecureInputMonitor() {
-        let monitor = SecureInputMonitor { [weak self] paused in self?.isShortcutPausedBySecureInput = paused }
+        let monitor = SecureInputMonitor { [weak self] held in
+            self?.secureInputHeldElsewhere = held
+            self?.updateSecureInputNotice()
+        }
         monitor.start()
         secureInputMonitor = monitor
+    }
+
+    /// Secure Input hides key events from other apps' monitors, so it pauses a
+    /// shortcut WhiskerFlow only observes (fn/Globe, or one the system would
+    /// not register). A registered hot key is matched by the system itself and
+    /// keeps working, so the notice would be wrong for it.
+    private func updateSecureInputNotice() {
+        let paused = secureInputHeldElsewhere && !(registeredShortcuts?.isRegistered(.dictation) ?? false)
+        if isShortcutPausedBySecureInput != paused { isShortcutPausedBySecureInput = paused }
     }
 
     /// Re-reads Secure Input when a view that shows its notice appears.
