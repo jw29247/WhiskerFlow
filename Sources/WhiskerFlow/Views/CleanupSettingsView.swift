@@ -51,7 +51,11 @@ struct CleanupSettingsView: View {
                 LabeledContent("Last transcript", value: appState.cleanup.lastRun)
                 if appState.cleanup.downloading {
                     ProgressView(value: appState.cleanup.downloadProgress)
+                    Text(downloadedAmount(appState.cleanup.downloadProgress))
+                        .font(.caption).foregroundStyle(.secondary)
                     Button("Cancel download") { appState.cleanup.cancelDownload() }
+                    Text("Cancelling deletes what has downloaded. If the connection drops or you quit, the download carries on from where it stopped next time.")
+                        .font(.caption).foregroundStyle(.secondary)
                 } else if !appState.cleanup.installed(model) {
                     Text("The model is provided under the Apache 2.0 licence and downloads from Hugging Face. Cleanup processes your text on this Mac.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -59,15 +63,25 @@ struct CleanupSettingsView: View {
                         Link("Model licence", destination: URL(string: "https://huggingface.co/google/gemma-4-E2B-it/blob/main/LICENSE")!)
                         Link("About Gemma 4", destination: URL(string: "https://huggingface.co/google/gemma-4-E2B-it")!)
                     }
-                    Button("Download \(model.name)") {
-                        appState.cleanup.download(model) {
-                            appState.settings.cleanupEnabled = true
-                            appState.configureCleanup()
-                        }
-                    }.disabled(!CleanupService.supported)
+                    interruptedDownload
+                    HStack {
+                        Button(appState.cleanup.resumableFraction > 0 ? "Resume download" : "Download \(model.name)") {
+                            appState.cleanup.download(model) {
+                                appState.settings.cleanupEnabled = true
+                                appState.configureCleanup()
+                            }
+                        }.disabled(!CleanupService.supported)
+                        discardInterruptedDownload
+                    }
                 } else {
-                    Button("Download model again") { appState.cleanup.download(model) {} }
-                        .disabled(appState.cleanup.running)
+                    // A second download of an installed model can be interrupted too.
+                    interruptedDownload
+                    HStack {
+                        Button(appState.cleanup.resumableFraction > 0 ? "Resume download" : "Download model again") {
+                            appState.cleanup.download(model) {}
+                        }.disabled(appState.cleanup.running)
+                        discardInterruptedDownload
+                    }
                 }
                 Text("Warms up when Cleanup is enabled and when you start dictating, then sleeps after \(Int(model.idleSeconds)) seconds without use. Releases idle model memory sooner when your Mac is busy. If Cleanup is unavailable or takes too long, dictation uses the original transcript.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -97,5 +111,27 @@ struct CleanupSettingsView: View {
                 }
             }
         }.formStyle(.grouped)
+    }
+
+    /// How much of an interrupted download is on disk.
+    @ViewBuilder private var interruptedDownload: some View {
+        if appState.cleanup.resumableFraction > 0 {
+            ProgressView(value: appState.cleanup.resumableFraction)
+            Text(downloadedAmount(appState.cleanup.resumableFraction) + ". Resuming carries on from there.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var discardInterruptedDownload: some View {
+        if appState.cleanup.resumableFraction > 0 {
+            Button("Cancel download") { appState.cleanup.discardPartialDownload(model) }
+        }
+    }
+
+    /// "1.19 GB of 2.84 GB downloaded"
+    private func downloadedAmount(_ fraction: Double) -> String {
+        let done = Int64((fraction * Double(model.byteCount)).rounded())
+        return ByteCountFormatter.string(fromByteCount: done, countStyle: .file) + " of "
+            + ByteCountFormatter.string(fromByteCount: model.byteCount, countStyle: .file) + " downloaded"
     }
 }
