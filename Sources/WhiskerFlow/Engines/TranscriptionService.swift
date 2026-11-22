@@ -100,7 +100,6 @@ actor TranscriptionService {
     kind: TranscriptionEngineKind,
     language: String?,
     allowAppleFallback: Bool,
-    capturedSamples: [Float]? = nil,
     hints: RecognizerHints = .none
   ) async throws -> TranscriptionOutcome {
     let request = TranscriptionRequest(
@@ -112,21 +111,6 @@ actor TranscriptionService {
     do {
       if let recognizerOverride {
         return await TranscriptionOutcome(result: try recognizerOverride(request, kind), engine: kind)
-      }
-      if kind == .parakeetTDTv3, let capturedSamples {
-        do {
-          let result = try await parakeetTDTv3.transcribe(
-            samples: capturedSamples, language: language, hints: hints)
-          return TranscriptionOutcome(result: result, engine: kind)
-        } catch {
-          if Task.isCancelled { throw error }
-          // A deadline or a still-busy model would fail the file decode the same
-          // way after another full wait; go straight to the Apple fallback.
-          if case TranscriptionError.timedOut = error { throw error }
-          if await parakeetTDTv3.isDecodeWedged { throw error }
-          // Audio and a retryable record are already durable. Retain the file
-          // decoder and Apple fallback if the direct sample path fails.
-        }
       }
       let result = try await primaryTranscribe(request, kind: kind)
       return TranscriptionOutcome(result: result, engine: kind)

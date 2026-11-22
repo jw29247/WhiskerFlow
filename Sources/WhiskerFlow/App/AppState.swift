@@ -2328,8 +2328,8 @@ final class AppState {
         records = store.records
     }
 
-    /// Persist captured audio for interrupted-decode recovery, then let Parakeet
-    /// use the existing samples without reading and converting the WAV again.
+    /// Persist captured audio for interrupted-decode recovery, then transcribe
+    /// the saved file.
     private func transcribeCapturedSamples(
         _ samples: [Float],
         conversionFailures: Int,
@@ -2436,8 +2436,7 @@ final class AppState {
             record,
             pasteTarget: pasteTarget,
             configuration: configuration,
-            sessionID: sessionID,
-            capturedSamples: nil
+            sessionID: sessionID
         )
     }
 
@@ -2450,8 +2449,7 @@ final class AppState {
         _ record: TranscriptRecord,
         pasteTarget: NSRunningApplication?,
         configuration: TranscriptionJobConfiguration,
-        sessionID: UUID?,
-        capturedSamples: [Float]? = nil
+        sessionID: UUID?
     ) async {
         guard !activeTranscriptionIDs.contains(record.id) else { return }
         let isRetry = sessionID == nil
@@ -2498,7 +2496,6 @@ final class AppState {
                         kind: configuration.engine,
                         language: configuration.language,
                         allowAppleFallback: configuration.allowAppleFallback,
-                        capturedSamples: capturedSamples,
                         hints: configuration.hints
                     )
                 }
@@ -2960,7 +2957,8 @@ final class AppState {
         let engineBudget: Double
         switch engine {
         case .parakeetTDTv3:
-            // The captured-samples decode can fail over to the file decode.
+            // Sized for two decodes, from when a captured-samples decode could
+            // fail over to the file decode; kept so the backstop is unchanged.
             engineBudget = DecodeTimeoutPolicy.modelPreparationWait
                 + 2 * (queuedDecode + DecodeTimeoutPolicy.longFormTimeout(forAudioSeconds: seconds))
         case .appleSpeech:
