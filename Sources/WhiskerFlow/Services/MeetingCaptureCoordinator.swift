@@ -111,6 +111,10 @@ final class MeetingCaptureCoordinator {
   private var heartbeatTask: Task<Void, Never>?
   private var lastFailureCode: String?
   private var didStart = false
+  /// Bumped by `signOut()`. An Atlas request captures it before its await and
+  /// keeps its response only if it hasn't changed, so a reply that lands
+  /// after sign-out never writes the old account's data back.
+  private var signOutGeneration = 0
 
   private(set) var status: MeetingMenuBarStatus = .uncovered
   private(set) var statusDetail = "Pair a healthy Mac with Atlas to cover meetings."
@@ -223,6 +227,7 @@ final class MeetingCaptureCoordinator {
   /// schedule poll, heartbeats, upload retries and call prompts, and forgets
   /// the schedule from Atlas.
   func signOut() {
+    signOutGeneration &+= 1
     stopMonitoring()
     stopTask?.cancel()
     stopTask = nil
@@ -368,9 +373,11 @@ final class MeetingCaptureCoordinator {
     guard let entry = library.entry(sessionID),
           AtlasDeviceMeetingReference.isValid(entry.atlasMeetingReference),
           let reference = entry.atlasMeetingReference,
+          case let generation = signOutGeneration,
           let client = await atlasClient() else { return false }
     do {
-      guard let insights = try await client.meetingInsights(meetingReference: reference) else { return false }
+      guard let insights = try await client.meetingInsights(meetingReference: reference),
+            generation == signOutGeneration else { return false }
       library.setInsights(sessionID, insights)
       return true
     } catch {

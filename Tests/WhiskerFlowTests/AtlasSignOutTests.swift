@@ -58,6 +58,74 @@ private final class MemoryKeychain: @unchecked Sendable {
     }
 }
 
+/// Holds one request open until the test releases it, so a sign-out can
+/// happen while it is in flight. No sleeps: the test waits for the request
+/// to start, then resumes it.
+final class HeldReply<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reply: CheckedContinuation<Value, Never>?
+    private var startedWaiter: CheckedContinuation<Void, Never>?
+    private var started = false
+
+    /// Called by the stub: suspends until `release`.
+    func hold() async -> Value {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            reply = continuation
+            started = true
+            let waiter = startedWaiter
+            startedWaiter = nil
+            lock.unlock()
+            waiter?.resume()
+        }
+    }
+
+    func untilStarted() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if started {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                startedWaiter = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func release(_ value: Value) {
+        lock.lock()
+        let reply = reply
+        self.reply = nil
+        lock.unlock()
+        reply?.resume(returning: value)
+    }
+}
+
+/// A meeting Atlas client whose schedule and summary requests wait for the test.
+private final class HeldMeetingAtlasStub: MeetingAtlasClient, @unchecked Sendable {
+    let heldSchedule = HeldReply<[AtlasCaptureScheduleIntent]>()
+    let heldInsights = HeldReply<AtlasMeetingInsights?>()
+
+    func schedule(fromMs: Int64, toMs: Int64) async throws -> [AtlasCaptureScheduleIntent] { await heldSchedule.hold() }
+    func meetingInsights(meetingReference: String) async throws -> AtlasMeetingInsights? { await heldInsights.hold() }
+    func heartbeat(appVersion: String, permissionState: [String: String], diskState: String, captureState: String, lastFailureReason: String?) async throws {}
+    func createMeeting(captureSessionID: UUID, title: String, occurredAtMs: Int64, eventID: String?) async throws -> MeetingAtlasCreatedMeeting {
+        throw URLError(.notConnectedToInternet)
+    }
+    func prepareRecording(meetingID: String, captureSessionID: UUID, trackChunkCounts: [MeetingAudioTrack: Int], sourceManifestHash: String?, playbackChunkCount: Int?) async throws -> String {
+        throw URLError(.notConnectedToInternet)
+    }
+    func uploadChunk(artifactID: String, descriptor: MeetingRecordingChunkDescriptor, body: Data) async throws {}
+    func uploadPlaybackChunk(artifactID: String, descriptor: MeetingRecordingChunkDescriptor, body: Data) async throws {}
+    func completePlayback(artifactID: String) async throws {}
+    func completeRecording(artifactID: String, durationMs: Int64, trackChunkCounts: [MeetingAudioTrack: Int], hasSourceGap: Bool, missingTracks: [MeetingAudioTrack], canonicalChecksum: String?, sourceManifestHash: String?, modelVersion: String?) async throws -> MeetingAtlasRecordingCompletion {
+        throw URLError(.notConnectedToInternet)
+    }
+    func appendSegments(meetingID: String, turns: [MeetingSpeakerTurn]) async throws {}
+    func finalize(meetingID: String, artifactID: String, transcriptionState: String, status: String) async throws {}
+}
+
 @MainActor
 final class AtlasSignOutTests: XCTestCase {
     private static let firstToken = "twnt_first_device_token_0001"
@@ -254,6 +322,42 @@ final class AtlasSignOutTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "leaderboardReportsFrom"), today.key,
                        "Earlier days are never sent to the next account")
         XCTAssertFalse(controller.meetingTally.days.isEmpty, "This Mac's own meeting count stays")
+    }
+
+    private func heldCoordinator(_ client: HeldMeetingAtlasStub, defaults: UserDefaults) -> (MeetingCaptureCoordinator, AppSettings) {
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MemoryKeychain(token: Self.firstToken).store(service: "AtlasSignOutTests"))
+        settings.askToRecordCalls = false
+        let coordinator = MeetingCaptureCoordinator(
+            settings: settings,
+            microphonePermission: MicrophonePermissionController(provider: AVCaptureMicrophoneAuthorizationProvider()),
+            transcription: TranscriptionService(),
+            store: EncryptedMeetingChunkStore(rootURL: temporaryRoot(), keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))),
+            clientProvider: { client },
+            library: .ephemeral(),
+            assistant: MeetingAssistantController(rootURL: temporaryRoot()),
+            diskStateReader: { "ready" }
+        )
+        return (coordinator, settings)
+    }
+
+    func testAMeetingSummaryThatArrivesAfterSignOutIsDropped() async {
+        let client = HeldMeetingAtlasStub()
+        let (coordinator, _) = heldCoordinator(client, defaults: makeDefaults())
+        let sessionID = UUID()
+        coordinator.library.beginRecording(sessionID: sessionID, title: "Design review", startedAt: Date(), calendarEventID: nil)
+        coordinator.library.markDelivered(sessionID, atlasMeetingID: "meeting",
+                                          atlasMeetingReference: "wm1_" + String(repeating: "a", count: 43), bookmarks: nil)
+        let refresh = Task { await coordinator.refreshAtlasInsights(sessionID: sessionID) }
+        await client.heldInsights.untilStarted()
+
+        // What `AppState.signOutOfAtlas()` does to the coordinator and library.
+        coordinator.signOut()
+        coordinator.library.removeAtlasInsights()
+        client.heldInsights.release(AtlasMeetingInsights(notesStatus: "suggested", summary: "The old account's summary", fetchedAt: Date()))
+
+        let saved = await refresh.value
+        XCTAssertFalse(saved)
+        XCTAssertNil(coordinator.library.entry(sessionID)?.atlasInsights, "The earlier sign-in's summary is not restored")
     }
 
     func testMeetingCaptureStopsWhileSignedOutAndResumesAfterSignIn() async throws {
