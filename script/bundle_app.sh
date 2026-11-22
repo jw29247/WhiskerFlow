@@ -66,10 +66,6 @@ if [[ -n "$BUNDLE_NAME_OVERRIDE" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleName $BUNDLE_NAME_OVERRIDE" \
     "$APP_BUNDLE/Contents/Info.plist"
 fi
-if [[ -n "${WHISKERFLOW_SENTRY_DSN:-}" ]]; then
-  /usr/libexec/PlistBuddy -c "Set :WhiskerFlowSentryDSN $WHISKERFLOW_SENTRY_DSN" \
-    "$APP_BUNDLE/Contents/Info.plist"
-fi
 printf "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 
 if [[ -f "$ROOT_DIR/Resources/AppIcon.icns" ]]; then
