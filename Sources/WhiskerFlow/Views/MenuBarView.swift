@@ -57,12 +57,15 @@ struct MenuBarView: View {
                 }.buttonStyle(FlowPrimaryButtonStyle())
                 Spacer()
                 SettingsLink { Image(systemName: "gearshape") }.help("Settings")
+                    .accessibilityLabel("Settings")
                 Menu {
                     CheckForUpdatesButton(updaterService: updaterService)
                     RunSetupAgainButton(appState: appState)
                     Divider()
                     Button("Quit WhiskerFlow") { NSApplication.shared.terminate(nil) }.keyboardShortcut("q")
                 } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize()
+                    .accessibilityLabel("More actions")
+                    .help("More actions")
             }
         }
         .onAppear { appState.refreshSecureInputNotice() }

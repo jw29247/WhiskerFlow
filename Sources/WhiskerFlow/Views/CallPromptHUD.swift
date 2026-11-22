@@ -89,6 +89,7 @@ struct CallPromptView: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "record.circle")
                 .font(.system(size: 22)).foregroundStyle(FlowStyle.recording)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("\(prompt.call.platform.displayName) call detected").font(.system(size: 12, weight: .medium))
@@ -96,6 +97,7 @@ struct CallPromptView: View {
                     Spacer()
                     Button { appState.declineCallPrompt() } label: { Image(systemName: "xmark") }
                         .buttonStyle(.plain).foregroundStyle(FlowStyle.muted).accessibilityLabel("Not now")
+                        .help("Not now")
                 }
                 if prompt.intent != nil {
                     Text(prompt.title).font(.system(size: 14, weight: .semibold)).lineLimit(2)
