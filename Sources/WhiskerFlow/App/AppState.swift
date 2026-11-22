@@ -215,17 +215,11 @@ final class AppState {
     private var hasStarted = false
     var recordingIntentActive = false
     var pasteTargetApplication: NSRunningApplication?
-    /// The browser-tab read for the current recording. Accessibility IPC can be
-    /// slow, so it runs beside the recording and is applied at formatting time.
-    var websiteLookup: Task<AppContext, Never>?
     /// How the latest dictation was written, shown on the Dictate screen.
     var lastWritingStyle: DictationStyleReceipt?
     private var activeTranscriptionIDs: Set<UUID> = []
     var latestRecordingSessionID: UUID?
     var latestDeliveryID: UUID?
-    /// The shutdown-drain token each in-flight finish holds. Non-empty while a
-    /// dictation is still finishing, which keeps background retries off the status.
-    var finishWorkTokens: [UUID: UUID] = [:]
     /// Readable so tests can await a Retry All instead of polling.
     private(set) var retryAllTask: Task<Void, Never>?
     private var meetingStorageTask: Task<Void, Never>?
@@ -234,24 +228,12 @@ final class AppState {
     /// prompt; see `refreshAtlasAccountCache()`.
     private var atlasTokenAvailable = false
     private var atlasAccountIdentity: String?
-    var activeRecordingConfiguration: TranscriptionJobConfiguration?
-    /// Whether the most recent recording streamed live (vs. file-based capture).
-    var signalAssessor = AudioSignalAssessor()
-    /// Toggle recordings only. The level callback just sets the flag; a
-    /// once-a-second check reads it (see `startToggleLimits`).
-    @ObservationIgnored var toggleLimits: ToggleRecordingLimits?
-    @ObservationIgnored var toggleSpeechHeard = false
-    @ObservationIgnored var toggleLimitsTask: Task<Void, Never>?
     /// Why the latest toggle recording stopped by itself, for the Dictate screen.
     var autoStopNotice: AutoStopNotice?
     /// Keeps App Nap off while the hotkey is armed. A menu-bar utility with no
     /// visible window is otherwise napped: its queues are throttled and its
     /// priority lowered, which delays the first hotkey press after idle.
     private var hotkeyReadinessActivity: NSObjectProtocol?
-    /// Held from hotkey press until the transcript is delivered, so timers and
-    /// I/O on the capture, decode and paste path are not coalesced.
-    var dictationActivity: NSObjectProtocol?
-    var dictationWarmUpTask: Task<Void, Never>?
     var isSigningInToAtlas = false
     var atlasSignInError: String?
     var atlasSignInConfirmation: String?
@@ -397,15 +379,7 @@ final class AppState {
         }
         automaticCorrections.onValidated = { [weak self] edit, approved in self?.applyValidatedCorrections(edit, approved: approved) }
         automaticCorrections.configure(enabled: self.settings.cleanupEnabled && self.settings.rememberCorrections)
-        live.onLevel = { [weak self] level, peak in
-            guard let self else { return }
-            audioLevel = level
-            guard isRecording else { return }
-            signalAssessor.ingest(level: level, peak: peak)
-            if toggleLimits != nil, level >= ToggleRecordingLimits.speechLevel { toggleSpeechHeard = true }
-            // Per-buffer writes would re-run the HUD's show/layout on every buffer.
-            if signalQuality != signalAssessor.quality { signalQuality = signalAssessor.quality }
-        }
+        dictation.observeLevels()
         live.onPartial = { [weak self] text in self?.liveText = text }
         if store == nil && !UIPreview.isEnabled {
             ParakeetTDTv3Engine.downloadProgress.setHandler { [weak self] fraction, startsNew, compiling in
@@ -2341,17 +2315,10 @@ final class AppState {
     }
 
     #if DEBUG
-    /// Tests only: stands in for a live dictation without a microphone. It is
-    /// recording, or (`finishing`) released and still transcribing or pasting.
+    /// Tests only: stands in for a live dictation without a microphone; see
+    /// `DictationLifecycle.holdLiveDictationForTesting(finishing:)`.
     func holdLiveDictationForTesting(finishing: Bool) {
-        if finishing {
-            let sessionID = UUID()
-            latestRecordingSessionID = sessionID
-            finishWorkTokens[sessionID] = UUID()
-        } else if let sessionID = recordingCoordinator.requestStart() {
-            latestRecordingSessionID = sessionID
-            _ = recordingCoordinator.didStart(sessionID)
-        }
+        dictation.holdLiveDictationForTesting(finishing: finishing)
     }
     #endif
 

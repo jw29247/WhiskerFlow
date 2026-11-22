@@ -23,6 +23,24 @@ final class DictationLifecycle {
         label: "agency.thatworks.WhiskerFlow.AppState"
     )
     private let lifecycleLogger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
+    /// The browser-tab read for the current recording. Accessibility IPC can be
+    /// slow, so it runs beside the recording and is applied at formatting time.
+    private var websiteLookup: Task<AppContext, Never>?
+    /// The shutdown-drain token each in-flight finish holds. Non-empty while a
+    /// dictation is still finishing, which keeps background retries off the status.
+    private var finishWorkTokens: [UUID: UUID] = [:]
+    private var activeRecordingConfiguration: AppState.TranscriptionJobConfiguration?
+    /// Whether the most recent recording streamed live (vs. file-based capture).
+    private var signalAssessor = AudioSignalAssessor()
+    /// Toggle recordings only. The level callback just sets the flag; a
+    /// once-a-second check reads it (see `startToggleLimits`).
+    private var toggleLimits: ToggleRecordingLimits?
+    private var toggleSpeechHeard = false
+    private var toggleLimitsTask: Task<Void, Never>?
+    /// Held from hotkey press until the transcript is delivered, so timers and
+    /// I/O on the capture, decode and paste path are not coalesced.
+    private var dictationActivity: NSObjectProtocol?
+    private var dictationWarmUpTask: Task<Void, Never>?
     /// Neural Engine state decays within seconds; re-warm during long holds.
     private static let dictationWarmUpInterval: UInt64 = 4_000_000_000
 
@@ -85,6 +103,11 @@ final class DictationLifecycle {
         set { app.lastError = newValue }
     }
 
+    private var audioLevel: Float {
+        get { app.audioLevel }
+        set { app.audioLevel = newValue }
+    }
+
     private var autoStopNotice: AutoStopNotice? {
         get { app.autoStopNotice }
         set { app.autoStopNotice = newValue }
@@ -110,11 +133,6 @@ final class DictationLifecycle {
         set { app.pasteTargetApplication = newValue }
     }
 
-    private var websiteLookup: Task<AppContext, Never>? {
-        get { app.websiteLookup }
-        set { app.websiteLookup = newValue }
-    }
-
     private var latestRecordingSessionID: UUID? {
         get { app.latestRecordingSessionID }
         set { app.latestRecordingSessionID = newValue }
@@ -125,41 +143,6 @@ final class DictationLifecycle {
         set { app.latestDeliveryID = newValue }
     }
 
-    private var activeRecordingConfiguration: AppState.TranscriptionJobConfiguration? {
-        get { app.activeRecordingConfiguration }
-        set { app.activeRecordingConfiguration = newValue }
-    }
-
-    private var signalAssessor: AudioSignalAssessor {
-        get { app.signalAssessor }
-        set { app.signalAssessor = newValue }
-    }
-
-    private var toggleLimits: ToggleRecordingLimits? {
-        get { app.toggleLimits }
-        set { app.toggleLimits = newValue }
-    }
-
-    private var toggleSpeechHeard: Bool {
-        get { app.toggleSpeechHeard }
-        set { app.toggleSpeechHeard = newValue }
-    }
-
-    private var toggleLimitsTask: Task<Void, Never>? {
-        get { app.toggleLimitsTask }
-        set { app.toggleLimitsTask = newValue }
-    }
-
-    private var dictationActivity: NSObjectProtocol? {
-        get { app.dictationActivity }
-        set { app.dictationActivity = newValue }
-    }
-
-    private var dictationWarmUpTask: Task<Void, Never>? {
-        get { app.dictationWarmUpTask }
-        set { app.dictationWarmUpTask = newValue }
-    }
-
     private func refreshDevices() { app.refreshDevices() }
 
     private func makeTranscriptionConfiguration() -> AppState.TranscriptionJobConfiguration {
@@ -167,11 +150,6 @@ final class DictationLifecycle {
     }
 
     private var pendingPersistWork: PendingWorkTracker { app.pendingPersistWork }
-
-    private var finishWorkTokens: [UUID: UUID] {
-        get { app.finishWorkTokens }
-        set { app.finishWorkTokens = newValue }
-    }
 
     private var lastWritingStyle: DictationStyleReceipt? {
         get { app.lastWritingStyle }
@@ -202,6 +180,19 @@ final class DictationLifecycle {
     }
 
     // MARK: - Begin
+
+    /// Set once, from `AppState.init`: the capture's level callback.
+    func observeLevels() {
+        live.onLevel = { [weak self] level, peak in
+            guard let self else { return }
+            audioLevel = level
+            guard isRecording else { return }
+            signalAssessor.ingest(level: level, peak: peak)
+            if toggleLimits != nil, level >= ToggleRecordingLimits.speechLevel { toggleSpeechHeard = true }
+            // Per-buffer writes would re-run the HUD's show/layout on every buffer.
+            if signalQuality != signalAssessor.quality { signalQuality = signalAssessor.quality }
+        }
+    }
 
     func handleDictationKey(_ pressed: Bool) {
         switch settings.recordingMode {
@@ -681,4 +672,19 @@ final class DictationLifecycle {
         guard let sessionID else { return finishWorkTokens.isEmpty }
         return latestRecordingSessionID == sessionID
     }
+
+    #if DEBUG
+    /// Tests only: stands in for a live dictation without a microphone. It is
+    /// recording, or (`finishing`) released and still transcribing or pasting.
+    func holdLiveDictationForTesting(finishing: Bool) {
+        if finishing {
+            let sessionID = UUID()
+            latestRecordingSessionID = sessionID
+            finishWorkTokens[sessionID] = UUID()
+        } else if let sessionID = recordingCoordinator.requestStart() {
+            latestRecordingSessionID = sessionID
+            _ = recordingCoordinator.didStart(sessionID)
+        }
+    }
+    #endif
 }
