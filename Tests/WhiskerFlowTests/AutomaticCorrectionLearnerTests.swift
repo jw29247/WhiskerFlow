@@ -2,33 +2,71 @@ import XCTest
 import WhiskerFlowCore
 @testable import WhiskerFlow
 
+/// Stands in for the model: each assessment is held until the test releases
+/// it, like a model call that ignores cancellation, so no test depends on
+/// how long a real call or a sleep takes.
+@MainActor
+private final class HeldAssessments {
+    private(set) var edits: [CorrectionEdit] = []
+    private var held: [CheckedContinuation<Void, Never>] = []
+    private var entryWaiter: (count: Int, continuation: CheckedContinuation<Void, Never>)?
+
+    func assess(_ edit: CorrectionEdit) async -> [VocabularyCorrection] {
+        edits.append(edit)
+        if let waiter = entryWaiter, edits.count >= waiter.count {
+            entryWaiter = nil
+            waiter.continuation.resume()
+        }
+        await withCheckedContinuation { held.append($0) }
+        return edit.candidates
+    }
+
+    /// Returns once `count` assessments have started.
+    func untilStarted(_ count: Int) async {
+        guard edits.count < count else { return }
+        await withCheckedContinuation { entryWaiter = (count, $0) }
+    }
+
+    func releaseAll() {
+        let waiting = held
+        held = []
+        waiting.forEach { $0.resume() }
+    }
+}
+
 @MainActor
 final class AutomaticCorrectionLearnerTests: XCTestCase {
     func testDictationPreemptsAssessmentAndOnlyLatestEditIsLearned() async throws {
         let learner = AutomaticCorrectionLearner(debounce: .zero)
-        var calls = 0
+        let model = HeldAssessments()
         var learned: [VocabularyCorrection] = []
-        learner.assess = { edit in
-            calls += 1
-            try await Task.sleep(for: .milliseconds(80))
-            return edit.candidates
-        }
+        learner.assess = { await model.assess($0) }
         learner.onValidated = { _, approved in learned += approved }
         learner.configure(enabled: true)
         let session = UUID()
         learner.enqueue(original: "Ask zorbit about it.", edited: "Ask Zorb about it.", sessionID: session, application: "Test")
-        try await wait { calls == 1 }
+        await model.untilStarted(1)
+
+        // A dictation starts while the model is still assessing the first edit.
         learner.setBusy(true)
+        let preempted = try XCTUnwrap(learner.task)
         learner.enqueue(original: "Ask zorbit about it.", edited: "Ask Zorblet about it.", sessionID: session, application: "Test")
-        try await Task.sleep(for: .milliseconds(100))
+        // The pre-empted call returns late; its answer must not be used.
+        model.releaseAll()
+        await preempted.value
         XCTAssertTrue(learned.isEmpty)
+        XCTAssertNil(learner.task, "nothing is assessed while dictating")
+
         learner.setBusy(false)
-        try await wait { learned.count == 1 }
-        XCTAssertEqual(learned.first?.replaceWith, "Zorblet")
+        await model.untilStarted(2)
+        XCTAssertEqual(model.edits.last?.edited, "Ask Zorblet about it.")
+        model.releaseAll()
+        await learner.task?.value
+        XCTAssertEqual(learned.map(\.replaceWith), ["Zorblet"])
         learner.stop()
     }
 
-    func testUnavailableModelDoesNotLearnOrRetryUntilResumed() async throws {
+    func testUnavailableModelDoesNotLearnOrRetryUntilResumed() async {
         let learner = AutomaticCorrectionLearner(debounce: .zero)
         var calls = 0
         var learned = false
@@ -36,34 +74,28 @@ final class AutomaticCorrectionLearnerTests: XCTestCase {
         learner.onValidated = { _, _ in learned = true }
         learner.configure(enabled: true)
         learner.enqueue(original: "Ask zorbit about it.", edited: "Ask Zorblet about it.", sessionID: UUID(), application: "Test")
-        try await wait { calls == 1 }
-        try await Task.sleep(for: .milliseconds(80))
+        await learner.task?.value
         XCTAssertEqual(calls, 1)
         XCTAssertFalse(learned)
+        XCTAssertNil(learner.task, "no retry is scheduled")
         learner.resume()
-        try await wait { calls == 2 }
+        await learner.task?.value
+        XCTAssertEqual(calls, 2)
         learner.configure(enabled: false)
         learner.resume()
-        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertNil(learner.task, "a disabled learner starts nothing")
         XCTAssertEqual(calls, 2)
     }
 
     func testClassifierCannotInventCorrections() async {
         let learner = AutomaticCorrectionLearner(debounce: .zero)
-        let done = expectation(description: "validated")
+        var validated: [[VocabularyCorrection]] = []
         learner.assess = { _ in [.init(find: "invented", replaceWith: "Unrelated")] }
-        learner.onValidated = { _, approved in XCTAssertTrue(approved.isEmpty); done.fulfill() }
+        learner.onValidated = { _, approved in validated.append(approved) }
         learner.configure(enabled: true)
         learner.enqueue(original: "Ask zorbit about it.", edited: "Ask Zorblet about it.", sessionID: UUID(), application: "Test")
-        await fulfillment(of: [done], timeout: 1)
+        await learner.task?.value
+        XCTAssertEqual(validated, [[]])
         learner.stop()
-    }
-
-    private func wait(_ condition: () -> Bool) async throws {
-        for _ in 0..<100 {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        XCTFail("Expected queue transition did not occur")
     }
 }

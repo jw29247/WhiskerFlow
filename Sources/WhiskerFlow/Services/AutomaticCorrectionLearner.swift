@@ -15,7 +15,8 @@ final class AutomaticCorrectionLearner {
     var assess: (CorrectionEdit) async throws -> [VocabularyCorrection] = { _ in [] }
     var onValidated: (Pending, [VocabularyCorrection]) -> Void = { _, _ in }
     private var pending: [Pending] = []
-    private var task: Task<Void, Never>?
+    /// The assessment under way; readable so tests can await it instead of sleeping.
+    private(set) var task: Task<Void, Never>?
     private var activeSession: UUID?
     private var busy = false
     private var enabled = false
