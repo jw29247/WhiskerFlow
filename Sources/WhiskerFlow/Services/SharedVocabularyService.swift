@@ -8,7 +8,9 @@ import WhiskerFlowCore
 ///
 /// The glossary is read-only and the payload is the same JSON shape as a local
 /// `Vocabulary` (`{ "rules": [ { "find": …, "replaceWith": … } ] }`). The last
-/// good copy is cached to disk so it keeps working offline and while signed out.
+/// good copy is cached to disk so it keeps working offline or when the token
+/// can't be read for a moment. It names clients, so an explicit sign-out
+/// deletes it (`signOut()`).
 /// The request is authorised by the Atlas device token and carries no
 /// arguments, so no transcript or user data is sent. Signed out, nothing is
 /// requested; any failure keeps the last good rules.
@@ -42,6 +44,7 @@ final class SharedVocabularyService {
     @ObservationIgnored private var periodicTask: Task<Void, Never>?
 
     var vocabulary: Vocabulary { Vocabulary(rules: rules) }
+    var isRefreshingPeriodically: Bool { periodicTask != nil }
 
     /// `client` returns nil while signed out. It is read at the start of every
     /// fetch, so it always reflects the current token.
@@ -78,6 +81,30 @@ final class SharedVocabularyService {
     func credentialsChanged() {
         guard isStarted, client()?.token != fetchedToken else { return }
         startFetch()
+    }
+
+    /// Sign-out. Stops refreshing, drops any fetch in flight and deletes the
+    /// copy downloaded from Atlas, leaving the glossary bundled with the app,
+    /// as on an install that has never signed in. A sign-in fetches again
+    /// through `credentialsChanged()`; restart the cadence with
+    /// `startPeriodicRefresh`.
+    func signOut() {
+        generation &+= 1
+        fetchTask?.cancel()
+        fetchTask = nil
+        periodicTask?.cancel()
+        periodicTask = nil
+        fetchedToken = nil
+        do {
+            try FileManager.default.removeItem(at: cacheURL)
+        } catch CocoaError.fileNoSuchFile {
+            // Nothing was downloaded.
+        } catch {
+            DiagnosticsService.capture(error: error, category: "storage", code: String((error as NSError).code))
+        }
+        rules = []
+        status = .idle
+        loadInitialVocabulary()
     }
 
     /// Re-fetch on a slow cadence. The first fetch comes from `start`, so this

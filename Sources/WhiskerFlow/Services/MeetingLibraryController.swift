@@ -323,6 +323,14 @@ final class MeetingLibraryController {
         update(sessionID) { $0.atlasInsights = insights }
     }
 
+    /// Sign-out: drops the meeting summaries fetched from Atlas. Transcripts,
+    /// notes and bookmarks made on this Mac stay.
+    func removeAtlasInsights() {
+        for entry in entries where entry.atlasInsights != nil {
+            update(entry.sessionID) { $0.atlasInsights = nil }
+        }
+    }
+
     /// Writes this meeting's current copy after every write queued before it,
     /// and reports whether it reached the disk. Background writes only report
     /// failures through `storageError`; callers that are about to delete the

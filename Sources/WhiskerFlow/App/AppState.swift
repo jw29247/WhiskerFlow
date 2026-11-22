@@ -260,6 +260,8 @@ final class AppState {
     var isSigningInToAtlas = false
     var atlasSignInError: String?
     var atlasSignInConfirmation: String?
+    /// Why the last sign-out didn't happen.
+    var atlasSignOutError: String?
 
     init(
         settings: AppSettings? = nil,
@@ -287,6 +289,7 @@ final class AppState {
         self.insights = insightsStore ?? (store == nil && !UIPreview.isEnabled ? .defaultStore() : .temporaryStore())
         self.microphonePermission = resolvedMicrophonePermission
         self.transcription = transcription
+        let atlasTokenStore = resolvedSettings.atlasTokenStore
         self.meetingCapture = MeetingCaptureCoordinator(
             settings: resolvedSettings,
             microphonePermission: resolvedMicrophonePermission,
@@ -294,7 +297,9 @@ final class AppState {
             // Tests and the UI preview must never read or write the user's meetings.
             library: store == nil && !UIPreview.isEnabled ? .production() : .ephemeral(),
             assistant: store == nil && !UIPreview.isEnabled ? nil : MeetingAssistantController(
-                rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("WhiskerFlowAssistant-\(UUID().uuidString)"))
+                rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("WhiskerFlowAssistant-\(UUID().uuidString)")),
+            // The same Keychain item as the settings, so a sign-out reaches both.
+            tokenReader: { atlasTokenStore.read() }
         )
         let insights = self.insights
         // Tests and the UI preview never report to Atlas.
@@ -312,7 +317,9 @@ final class AppState {
             guard reportsUsage, !resolvedSettings.atlasDeviceToken.isEmpty,
                   let url = URL(string: resolvedSettings.atlasBaseURL), url.scheme == "https" else { return nil }
             return GlossaryAtlasClient(baseURL: url, token: resolvedSettings.atlasDeviceToken)
-        })
+        }, cacheURL: reportsUsage ? SharedVocabularyService.defaultCacheURL
+            // Sign-out deletes this file: tests and the preview keep their own.
+            : FileManager.default.temporaryDirectory.appendingPathComponent("WhiskerFlowGlossary-\(UUID().uuidString).json"))
         self.live = LiveDictationSession(transcription: transcription)
         enforcesAtlasSignIn = reportsUsage
         var defaultPasteService = PasteService()
@@ -339,6 +346,9 @@ final class AppState {
         refreshAtlasAccountCache()
         assistant.accountIdentityProvider = { [weak self] in self?.atlasAccountIdentity }
         meetingCapture.assistant.accountIdentityProvider = assistant.accountIdentityProvider
+        // After an explicit sign-out only: a token that merely can't be read
+        // (locked Keychain, busy securityd) must not cost the user a meeting.
+        meetingCapture.requiresSignIn = { [weak self] in self?.settings.signedOutOfAtlas ?? false }
         meetingCapture.library.onRecordingFinished = { [weak self] startedAt, durationMs in
             self?.leaderboard.recordMeeting(startedAt: startedAt, durationMs: durationMs)
         }
@@ -350,6 +360,9 @@ final class AppState {
         }
         meetingCapture.assistant.bookmarkSync = { [weak self] request in
             guard let self else { throw AssistantError.message("Assistant is unavailable.") }
+            guard !self.earlierSignInMeetings.contains(request.localSessionID) else {
+                throw AssistantError.message("Recorded under an earlier Atlas sign-in, so this stays on this Mac.")
+            }
             var args: [String: Any] = ["requestId": request.requestID.uuidString, "meetingReference": request.meetingReference,
                                        "offsetMs": request.elapsedMilliseconds]
             if let label = request.label { args["label"] = label }
@@ -588,8 +601,8 @@ final class AppState {
   var previousMeetings: [AtlasCaptureScheduleIntent] { UIPreview.isEnabled ? UIPreview.meetings.filter { $0.existingMeetingID != nil } : meetingCapture.previousMeetingIntents }
 
     /// Production builds need an Atlas sign-in before anything else works.
-    /// Tests and the UI preview don't.
-    @ObservationIgnored private var enforcesAtlasSignIn = false
+    /// Tests and the UI preview don't, unless a test turns it on.
+    @ObservationIgnored var enforcesAtlasSignIn = false
     /// Bumped when a dictation press needs sign-in, to bring the window up.
     private(set) var atlasSignInRequests = 0
 
@@ -620,10 +633,13 @@ final class AppState {
         // A sign-in or reconnect fetches the glossary now; a sign-out stops using the old token.
         sharedVocabulary.credentialsChanged()
         // A failed Keychain read (locked keychain, re-signed build, busy securityd)
-        // looks exactly like "no token", and the app has no sign-out. Keep the last
-        // known account so a transient failure cannot wipe the assistant's
-        // per-account state; a real account change always arrives with a new token.
+        // looks exactly like "no token". Keep the last known account so a transient
+        // failure cannot wipe the assistant's per-account state. Only an explicit
+        // sign-out (`signOutOfAtlas()`) clears it, and a real account change always
+        // arrives with a new token.
         guard !token.isEmpty else { return }
+        // A token is a sign-in, however it got here.
+        if settings.signedOutOfAtlas { settings.signedOutOfAtlas = false }
         let identity = Self.accountIdentity(forToken: token)
         if atlasAccountIdentity != identity { atlasAccountIdentity = identity }
     }
@@ -1152,16 +1168,104 @@ final class AppState {
       defer { isSigningInToAtlas = false }
       do {
         let token = try await atlasAuthSession.connect()
-        settings.atlasDeviceToken = token
-        refreshMeetingConfiguration()
-        atlasSignInConfirmation = "Connected to Atlas. Meeting Mode is ready."
-        if case .failure = status { status = .idle }
+        completeAtlasSignIn(token: token)
         Task { await self.leaderboard.refresh() }
       } catch {
         atlasSignInError = error.localizedDescription
       }
     }
   }
+
+    /// Stores a token Atlas returned and starts what needs it.
+    func completeAtlasSignIn(token: String) {
+        settings.atlasDeviceToken = token
+        settings.signedOutOfAtlas = false
+        refreshMeetingConfiguration()
+        resumeAtlasWork()
+        atlasSignOutError = nil
+        atlasSignInConfirmation = "Connected to Atlas. Meeting Mode is ready."
+        if case .failure = status { status = .idle }
+    }
+
+    /// Restarts the account-bound work `signOutOfAtlas()` stopped. Before
+    /// `start()` there is nothing to restart: it starts everything itself.
+    private func resumeAtlasWork() {
+        guard hasStarted, isAtlasPaired else { return }
+        sharedVocabulary.startPeriodicRefresh()
+        leaderboard.startPeriodicReporting()
+        meetingCapture.resumeAfterSignIn()
+    }
+
+    // MARK: - Atlas sign-out
+
+    private var earlierSignInMeetings: AtlasEarlierSignInMeetings {
+        AtlasEarlierSignInMeetings(defaults: settings.userDefaults)
+    }
+
+    /// Whether meeting recording is unavailable because of an explicit sign-out.
+    var meetingRecordingRequiresSignIn: Bool { meetingCapture.requiresSignIn() }
+
+    /// Why signing out has to wait, or nil when it can go ahead.
+    var atlasSignOutBlocker: String? {
+        if UIPreview.isEnabled {
+            switch UIPreview.mode {
+            case "sign-out-blocked": return AtlasSignOut.blocker(recording: false, unsentRecordings: 2)
+            case "sign-out-checking": return AtlasSignOut.blocker(recording: false, unsentRecordings: 0, recordingCheck: .checking)
+            case "sign-out-check-failed": return AtlasSignOut.blocker(recording: false, unsentRecordings: 0, recordingCheck: .failed)
+            default: return nil
+            }
+        }
+        return meetingCapture.signOutBlocker
+    }
+
+    /// Meeting notes and bookmarks saved on this Mac that Atlas doesn't have.
+    var unsyncedMeetingItemCount: Int {
+        meetingLibrary.entries.reduce(0) { $0 + $1.notes.filter { $0.syncState != .synced }.count }
+            + meetingAssistant.bookmarks.filter { $0.syncState != .synced }.count
+    }
+
+    var atlasSignOutConfirmation: String {
+        AtlasSignOut.confirmation(unsyncedMeetingItems: unsyncedMeetingItemCount)
+    }
+
+    /// Signs out of Atlas after the user confirmed. Removes the device token
+    /// and everything on this Mac that came from the account, stops the work
+    /// that used it and returns to the sign-in window. Local work (history,
+    /// dictionary, Insights, settings, meeting transcripts and notes, drafts)
+    /// stays. Atlas has no tool to revoke a device token, so the token stays
+    /// valid in Atlas until it is removed there.
+    @discardableResult
+    func signOutOfAtlas() -> Bool {
+        guard !UIPreview.isEnabled, !isSigningInToAtlas else { return false }
+        if let blocker = atlasSignOutBlocker {
+            atlasSignOutError = blocker
+            return false
+        }
+        // Every meeting on this Mac so far belongs to this connection.
+        let meetings = meetingLibrary.entries.map(\.sessionID) + meetingAssistant.bookmarks.map(\.sessionID)
+        do {
+            try settings.removeAtlasDeviceToken()
+        } catch {
+            logger.error("Atlas sign-out could not delete the token", metadata: ["error": "\(error)"])
+            atlasSignOutError = "WhiskerFlow couldn’t remove the Atlas connection from the Keychain, so you’re still signed in. Try again."
+            return false
+        }
+        earlierSignInMeetings.add(meetings)
+        settings.signedOutOfAtlas = true
+        atlasTokenAvailable = false
+        atlasAccountIdentity = nil
+        atlasSignOutError = nil
+        atlasSignInError = nil
+        atlasSignInConfirmation = nil
+        settings.removeCachedMeetingSchedule()
+        sharedVocabulary.signOut()
+        leaderboard.signOut()
+        meetingCapture.signOut()
+        meetingLibrary.removeAtlasInsights()
+        assistant.signOut()
+        lifecycleLogger.notice("Signed out of Atlas", metadata: ["event": "atlas_signed_out"])
+        return true
+    }
 
     func requestSpeechPermission() async -> Bool {
         guard !UIPreview.isEnabled else { return false }
@@ -1550,6 +1654,9 @@ final class AppState {
             let shortcut = HotkeyMonitor(combo: combo) { [weak self] pressed in
                 guard let self, self.settings.activeHotkeyCombo != combo else { return }
                 if pressed {
+                    // Signed out, the press only opens the sign-in window; the
+                    // Assistant must not adopt a missing account.
+                    guard !self.requiresAtlasSignIn else { Task { await self.beginRecording() }; return }
                     guard !self.isRecording, !self.isTranscribing, !self.assistant.busy,
                           !self.isMeetingCapturing, self.recordingCoordinator.phase == .idle,
                           self.assistant.synchronizeAccount() else { return }

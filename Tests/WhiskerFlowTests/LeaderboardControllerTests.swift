@@ -133,4 +133,22 @@ final class LeaderboardControllerTests: XCTestCase {
         board.recordMeeting(startedAt: start, durationMs: 600_000)
         XCTAssertEqual(board.meetingTally.days.values.first?.seconds, 2_400)
     }
+
+    func testNoReportAfterASignOutIncludesADayBeforeIt() async {
+        let board = controller(days: [day(3), day(1), day(0)])
+        // Reported up to today under the first sign-in.
+        let first = await board.report()
+        XCTAssertTrue(first)
+        board.signOut()
+        LeaderboardStubProtocol.requests = []
+
+        // The next sign-in reports twice on the same day: the second report
+        // starts from the day before `reportedThrough`, which is yesterday.
+        let second = await board.report()
+        let third = await board.report()
+        XCTAssertTrue(second && third)
+
+        XCTAssertEqual(sentDays, [[today.key], [today.key]], "Yesterday's use belongs to the earlier sign-in")
+        XCTAssertEqual(defaults.string(forKey: "leaderboardReportsFrom"), today.key, "The boundary is stored")
+    }
 }
