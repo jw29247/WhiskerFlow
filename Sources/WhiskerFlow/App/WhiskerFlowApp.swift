@@ -57,7 +57,7 @@ struct WhiskerFlowApp: App {
                 Button("Quick voice capture · hold ⌥⇧⌘N") { appState.assistant.capturePurpose = .quickCapture }
                 Button("Bookmark meeting · ⌥⇧⌘B") { appState.bookmarkMeeting() }.disabled(!appState.isMeetingCapturing)
                 Button("Toggle Meeting Capture") {
-                    appState.toggleMeetingCapture()
+                    appState.toggleMeetingCaptureFromMenu()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option, .shift])
             }

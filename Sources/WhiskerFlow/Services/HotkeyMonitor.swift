@@ -17,6 +17,11 @@ final class HotkeyMonitor {
     var onDiscardKey: (() -> Void)?
     private var matcher: HotkeyMatcher
     private var isSuspended = false
+    /// While the system consumes this shortcut as a registered hot key, its
+    /// key presses come only from `handleRegisteredHotKey`, so a press is never
+    /// counted twice. Modifier changes are still observed: a required modifier
+    /// going up remains a release signal.
+    private var isRegistered = false
     private var flagsLocalMonitor: Any?
     private var flagsGlobalMonitor: Any?
     private var keyLocalMonitor: Any?
@@ -40,6 +45,24 @@ final class HotkeyMonitor {
         guard suspended != isSuspended else { return }
         isSuspended = suspended
         if suspended { emitIfChanged(matcher.reset()) }
+    }
+
+    /// Hand this shortcut's key presses to (or take them back from) its
+    /// registered hot key. The matcher and any press in progress carry over.
+    func setRegistered(_ registered: Bool) {
+        isRegistered = registered
+    }
+
+    /// A pressed or released event of this shortcut's registered hot key.
+    /// `eventTime` is the key press's time since boot, for `elapsed_ms`.
+    func handleRegisteredHotKey(pressed: Bool, eventTime: TimeInterval) {
+        guard isRegistered, !isSuspended, let pressed = matcher.handleRegisteredHotKey(pressed: pressed) else { return }
+        logger.info("Configured hotkey transition received", metadata: [
+            "event": "hotkey_transition", "event_source": "registered", "pressed": "\(pressed)",
+            "app_active": "\(NSApp?.isActive ?? false)",
+            "elapsed_ms": "\(max(0, ProcessInfo.processInfo.systemUptime - eventTime) * 1000)"
+        ])
+        onChange(pressed)
     }
 
     func start() {
@@ -119,16 +142,19 @@ final class HotkeyMonitor {
         emitIfChanged(matcher.handleFlags(keyCode: event.keyCode, modifiers: modifiers), event: event, source: source)
     }
 
-    private func handleKey(_ event: NSEvent, source: String) {
+    /// Internal, not private, so tests can feed a synthetic event.
+    func handleKey(_ event: NSEvent, source: String) {
         guard !isSuspended else { return }
         let modifiers = KeyModifiers(rawValue: UInt(event.modifierFlags.rawValue))
         let isKeyDown = event.type == .keyDown
-        emitIfChanged(matcher.handleKey(
-            keyCode: event.keyCode,
-            modifiers: modifiers,
-            isKeyDown: isKeyDown,
-            isRepeat: event.isARepeat
-        ), event: event, source: source)
+        if !isRegistered {
+            emitIfChanged(matcher.handleKey(
+                keyCode: event.keyCode,
+                modifiers: modifiers,
+                isKeyDown: isKeyDown,
+                isRepeat: event.isARepeat
+            ), event: event, source: source)
+        }
         if let onDiscardKey, HotkeyMatcher.isDiscardPress(
             keyCode: event.keyCode, modifiers: modifiers, isKeyDown: isKeyDown, isRepeat: event.isARepeat
         ) {
