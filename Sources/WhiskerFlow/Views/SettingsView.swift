@@ -44,7 +44,7 @@ struct SettingsView: View {
                 }
                 if let error = appState.settings.persistenceError {
                     Label(error, systemImage: "exclamationmark.triangle").font(.caption)
-                        .foregroundStyle(.orange).padding(20)
+                        .foregroundStyle(FlowStyle.danger).padding(20)
                 }
             }.frame(maxWidth: .infinity).background(FlowStyle.canvas)
         }
@@ -70,7 +70,7 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                     if appState.hasGlobeKeyConflict {
                         Label("macOS still has a competing Fn action. Set “Press 🌐 key to” to Do Nothing.", systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption).foregroundStyle(.orange)
+                            .font(.caption).foregroundStyle(FlowStyle.warning)
                         Button("Open Keyboard Settings") { SystemSettingsLink.open(SystemSettingsLink.keyboard) }
                     }
                 }
@@ -238,9 +238,9 @@ struct SettingsView: View {
         case .preparing:
             Label("Preparing \(appState.settings.engine.displayName)…", systemImage: "arrow.down.circle")
         case .ready:
-            Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(FlowStyle.success)
         case .failed(let message):
-            Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+            Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(FlowStyle.danger)
         }
     }
 
@@ -304,7 +304,7 @@ private struct LaunchAtLoginRow: View {
         if controller.requiresApproval {
             HStack {
                 Label("Needs your approval in Login Items before it takes effect.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(FlowStyle.warning)
                 Spacer()
                 Button("Open Login Items") { controller.openLoginItemsSettings() }
                     .controlSize(.small)
@@ -312,7 +312,7 @@ private struct LaunchAtLoginRow: View {
         }
         if let failure = controller.failure {
             Label(failure, systemImage: "exclamationmark.triangle.fill")
-                .font(.caption).foregroundStyle(.orange)
+                .font(.caption).foregroundStyle(FlowStyle.danger)
         }
     }
 }

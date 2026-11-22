@@ -38,8 +38,9 @@ struct DictationPresentation {
 
     var statusColor: Color {
         if appState.isRecording { return FlowStyle.recording }
-        if needsSetup || failure != nil { return .orange }
-        return appState.modelState == .ready ? .green : FlowStyle.accent
+        if failure != nil { return FlowStyle.danger }
+        if needsSetup { return FlowStyle.warning }
+        return appState.modelState == .ready ? FlowStyle.success : FlowStyle.accent
     }
 
     var gesture: String { appState.settings.recordingMode == .holdToTalk ? "Hold" : "Press" }

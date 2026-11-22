@@ -103,7 +103,7 @@ struct RecordingHUDView: View {
     private var iconTint: Color {
         switch presentation {
         case .recording: return FlowStyle.recording
-        case .notification: return .green
+        case .notification: return FlowStyle.success
         case .failure: return FlowStyle.danger
         case .transcribing, .hidden: return FlowStyle.accent
         }
@@ -127,7 +127,7 @@ struct RecordingHUDView: View {
     }
 
     private var signalWarningTint: Color {
-        appState.signalQuality == .clipping ? .orange : .yellow
+        FlowStyle.warning
     }
 
     private var elapsedString: String {

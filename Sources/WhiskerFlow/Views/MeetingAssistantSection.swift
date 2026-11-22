@@ -31,7 +31,7 @@ if appState.assistant.saved.pendingJob != nil {
 if let result = appState.assistant.coachResult {
     VStack(alignment: .leading, spacing: 14) {
         Text(result.title).font(.headline)
-        if result.phase == "postmeeting", result.incomplete { Text("The transcript is incomplete. Treat this as a limited review.").font(.caption).foregroundStyle(.orange) }
+        if result.phase == "postmeeting", result.incomplete { Text("The transcript is incomplete. Treat this as a limited review.").font(.caption).foregroundStyle(FlowStyle.warning) }
         ForEach(Array(result.suggestions.enumerated()), id: \.offset) { _, suggestion in
             VStack(alignment: .leading, spacing: 6) {
                 Text(suggestion.text).textSelection(.enabled)

@@ -97,7 +97,7 @@ struct MeetingCoachView: View {
             if !controller.isActive, controller.latestFinalizedMeetingReference != nil {
                 Button("Review latest meeting") { Task { await requestReview() } }
             }
-            if let error = controller.storageError { Text(error).font(.callout).foregroundStyle(.orange) }
+            if let error = controller.storageError { Text(error).font(.callout).foregroundStyle(FlowStyle.danger) }
             if !controller.bookmarks.isEmpty {
                 DisclosureGroup("Saved bookmarks (\(controller.bookmarks.count))") {
                     ScrollView {

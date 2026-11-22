@@ -3,21 +3,47 @@ import SwiftUI
 
 /// The shared visual language for the window, popover, setup and recording HUD.
 enum FlowStyle {
-    static let accent = adaptive(light: 0x365FE8, dark: 0x88A4FF)
-    static let ink = adaptive(light: 0x17243A, dark: 0xE9EDF7)
-    static let muted = adaptive(light: 0x637087, dark: 0xA7B2C6)
-    static let canvas = adaptive(light: 0xF5F7FA, dark: 0x191D27)
-    static let surface = adaptive(light: 0xFFFFFF, dark: 0x232936)
-    static let line = adaptive(light: 0xDDE3ED, dark: 0x343D4F)
-    static let selection = adaptive(light: 0xE6ECFB, dark: 0x2C395C)
-    static let recording = adaptive(light: 0xC94352, dark: 0xFF8590)
+    static let accent = adaptive(Palette.accent)
+    static let ink = adaptive(Palette.ink)
+    static let muted = adaptive(Palette.muted)
+    static let canvas = adaptive(Palette.canvas)
+    static let surface = adaptive(Palette.surface)
+    static let line = adaptive(Palette.line)
+    static let selection = adaptive(Palette.selection)
+    /// The microphone is live.
+    static let recording = adaptive(Palette.recording)
     /// Something went wrong and needs the user. Warmer than `recording`, so a
     /// failure is never mistaken for a live microphone.
-    static let danger = adaptive(light: 0xC2410C, dark: 0xFFA06E)
+    static let danger = adaptive(Palette.danger)
+    /// A caution or a missing permission: worth attention, nothing has failed.
+    static let warning = adaptive(Palette.warning)
+    /// Done or granted.
+    static let success = adaptive(Palette.success)
+    /// Text and icons on an `accent` or `recording` fill.
+    static let onAccent = adaptive(Palette.onAccent)
 
-    private static func adaptive(light: UInt32, dark: UInt32) -> Color {
+    /// The sRGB values behind each token. Every text token reaches 4.5:1 on
+    /// `canvas`, `surface` and `selection` in both appearances; the contrast
+    /// test checks it.
+    enum Palette {
+        typealias Pair = (light: UInt32, dark: UInt32)
+        static let accent: Pair = (0x335DE8, 0x88A4FF)
+        static let ink: Pair = (0x17243A, 0xE9EDF7)
+        static let muted: Pair = (0x5E6B81, 0xA7B2C6)
+        static let canvas: Pair = (0xF5F7FA, 0x191D27)
+        static let surface: Pair = (0xFFFFFF, 0x232936)
+        static let line: Pair = (0xDDE3ED, 0x343D4F)
+        static let selection: Pair = (0xE6ECFB, 0x2C395C)
+        static let recording: Pair = (0xC03747, 0xFF8590)
+        static let danger: Pair = (0xBD3F0C, 0xFFA06E)
+        static let warning: Pair = (0x906000, 0xE3B341)
+        static let success: Pair = (0x147A3A, 0x4ADE80)
+        static let onAccent: Pair = (0xFFFFFF, 0x101522)
+    }
+
+    private static func adaptive(_ pair: Palette.Pair) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
-            let hex = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+            let hex = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? pair.dark : pair.light
             return NSColor(srgbRed: Double((hex >> 16) & 255) / 255,
                            green: Double((hex >> 8) & 255) / 255,
                            blue: Double(hex & 255) / 255, alpha: 1)
@@ -86,7 +112,7 @@ struct FlowKeycap: View {
 
 struct FlowStatus: View {
     let title: String
-    var color: Color = .green
+    var color: Color = FlowStyle.success
 
     var body: some View {
         HStack(spacing: 7) {
@@ -99,6 +125,9 @@ struct FlowStatus: View {
 }
 
 struct FlowPrimaryButtonStyle: ButtonStyle {
+    /// Pressed darkens the fill rather than fading the button: fading took
+    /// the light-mode label below 4.5:1.
+    static let pressedShade = 0.15
     var destructive = false
     @Environment(\.isEnabled) private var isEnabled
 
@@ -106,10 +135,10 @@ struct FlowPrimaryButtonStyle: ButtonStyle {
         configuration.label
             .font(.system(size: 13, weight: .medium))
             .padding(.horizontal, 15).padding(.vertical, 10)
-            .foregroundStyle(Color.white)
-            .background(destructive ? FlowStyle.recording : Color(red: 0.21, green: 0.36, blue: 0.88),
-                        in: RoundedRectangle(cornerRadius: 8))
-            .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.4)
+            .foregroundStyle(FlowStyle.onAccent)
+            .background(RoundedRectangle(cornerRadius: 8).fill(destructive ? FlowStyle.recording : FlowStyle.accent)
+                .overlay(RoundedRectangle(cornerRadius: 8).fill(.black.opacity(configuration.isPressed ? Self.pressedShade : 0))))
+            .opacity(isEnabled ? 1 : 0.4)
     }
 }
 

@@ -21,12 +21,12 @@ struct MeetingCoachLiveMetrics: View {
                 if controller.currentTurnSeconds >= 20 {
                     Label("Your turn \(MeetingCoachView.duration(controller.currentTurnSeconds))", systemImage: "person.wave.2")
                         .foregroundStyle(controller.currentTurnSeconds >= MeetingMonologueTracker.alertAfterSeconds
-                                         ? Color.orange : FlowStyle.ink)
+                                         ? FlowStyle.warning : FlowStyle.ink)
                 }
                 if let wpm = controller.wordsPerMinute {
                     let band = MeetingPaceBand.band(wordsPerMinute: wpm)
                     Label("\(Int(wpm.rounded())) wpm · \(band.label)", systemImage: "speedometer")
-                        .foregroundStyle(band == .comfortable ? FlowStyle.ink : Color.orange)
+                        .foregroundStyle(band == .comfortable ? FlowStyle.ink : FlowStyle.warning)
                 }
             }.font(.caption).labelStyle(.titleAndIcon)
         }
@@ -46,7 +46,7 @@ struct MeetingTalkShareBar: View {
             }.font(.system(size: compact ? 11 : 12, weight: .medium)).monospacedDigit()
             GeometryReader { proxy in
                 HStack(spacing: 2) {
-                    Capsule().fill(share > 0.65 ? Color.orange : FlowStyle.accent)
+                    Capsule().fill(share > 0.65 ? FlowStyle.warning : FlowStyle.accent)
                         .frame(width: max(4, proxy.size.width * share))
                     Capsule().fill(FlowStyle.line)
                 }

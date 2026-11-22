@@ -47,7 +47,7 @@ struct DictationView: View {
                                 .buttonStyle(FlowPrimaryButtonStyle())
                         } else if let failure = presentation.failure {
                             VStack(spacing: 10) {
-                                Text(failure).font(.callout).foregroundStyle(.orange).multilineTextAlignment(.center)
+                                Text(failure).font(.callout).foregroundStyle(FlowStyle.danger).multilineTextAlignment(.center)
                                 HStack {
                                     Button("Check setup", action: openSetup)
                                     Button("Reload transcription") { appState.warmUpEngine() }

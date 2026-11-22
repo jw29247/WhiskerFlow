@@ -30,7 +30,7 @@ struct AtlasSignInGate: View {
             .buttonStyle(.borderedProminent)
             .disabled(appState.isSigningInToAtlas)
             if let error = appState.atlasSignInError {
-                Text(error).font(.caption).foregroundStyle(.orange)
+                Text(error).font(.caption).foregroundStyle(FlowStyle.danger)
             }
             Label("The leaderboard shows your name and daily counts (words, time saved, streak, meetings) to colleagues. Never any text.",
                   systemImage: "trophy")

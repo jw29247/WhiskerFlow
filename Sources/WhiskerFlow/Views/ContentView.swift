@@ -39,7 +39,7 @@ struct ContentView: View {
                             .font(.callout).fixedSize(horizontal: false, vertical: true)
                         Spacer()
                         Button("Dismiss") { appState.status = .idle }.buttonStyle(.plain)
-                    }.foregroundStyle(FlowStyle.ink).padding(15).background(Color.orange.opacity(0.12))
+                    }.foregroundStyle(FlowStyle.ink).padding(15).background(FlowStyle.danger.opacity(0.12))
                 }
                 if let notice = appState.dictionaryNotice {
                     HStack(spacing: 12) {

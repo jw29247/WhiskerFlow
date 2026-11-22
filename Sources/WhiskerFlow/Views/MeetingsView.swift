@@ -43,7 +43,7 @@ struct MeetingsView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Meetings").font(.system(size: 28, weight: .semibold, design: .rounded))
                     FlowStatus(title: appState.isAtlasPaired ? "Connected to Atlas" : "Atlas isn’t connected",
-                               color: appState.isAtlasPaired ? .green : FlowStyle.muted)
+                               color: appState.isAtlasPaired ? FlowStyle.success : FlowStyle.muted)
                 }
                 Spacer()
                 if appState.isMeetingCapturing {
@@ -231,7 +231,7 @@ struct MeetingSetupView: View {
                 }
             }
             Text("atlas.thatworks.agency").font(.caption).foregroundStyle(FlowStyle.muted)
-            if let error = appState.atlasSignInError { Text(error).font(.caption).foregroundStyle(.orange) }
+            if let error = appState.atlasSignInError { Text(error).font(.caption).foregroundStyle(FlowStyle.danger) }
             if confirmingSignOut && appState.isAtlasPaired {
                 AtlasSignOutConfirmation(appState: appState, isPresented: $confirmingSignOut)
             }
@@ -240,13 +240,13 @@ struct MeetingSetupView: View {
             HStack {
                 Label("Microphone", systemImage: "mic")
                 Spacer()
-                if appState.hasMicrophonePermission { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+                if appState.hasMicrophonePermission { Image(systemName: "checkmark.circle.fill").foregroundStyle(FlowStyle.success) }
                 else { Button("Enable") { Task { await appState.requestMicrophonePermission() }; SystemSettingsLink.open(SystemSettingsLink.microphone) } }
             }
             HStack {
                 Label("Mac audio", systemImage: "speaker.wave.2")
                 Spacer()
-                if appState.hasScreenRecordingPermission { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+                if appState.hasScreenRecordingPermission { Image(systemName: "checkmark.circle.fill").foregroundStyle(FlowStyle.success) }
                 else {
                     Button("Enable") {
                         appState.requestScreenRecordingPermission()

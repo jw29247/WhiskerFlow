@@ -24,7 +24,7 @@ struct AssistantDraftRow: View {
             if editing {
                 TextField("Draft title", text: $title).textFieldStyle(.roundedBorder)
                 TextField("Draft text", text: $text, axis: .vertical).lineLimit(3...10).textFieldStyle(.roundedBorder)
-                if let error { Text(error).font(.caption).foregroundStyle(.orange) }
+                if let error { Text(error).font(.caption).foregroundStyle(FlowStyle.danger) }
                 HStack {
                     Button("Save changes") {
                         if save(title, text) { editing = false; error = nil }

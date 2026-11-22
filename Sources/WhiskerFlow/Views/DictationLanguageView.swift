@@ -77,7 +77,7 @@ struct DictationLanguageControls: View {
     private func status(_ symbol: String, _ text: String, ok: Bool?) -> some View {
         Label(text, systemImage: symbol)
             .font(.caption)
-            .foregroundStyle(ok == true ? Color.green : ok == false ? Color.orange : Color.secondary)
+            .foregroundStyle(ok == true ? FlowStyle.success : ok == false ? FlowStyle.warning : Color.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }
 
