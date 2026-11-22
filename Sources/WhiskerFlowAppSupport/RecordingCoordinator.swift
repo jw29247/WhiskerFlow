@@ -104,6 +104,36 @@ public final class RecordingCoordinator {
         return true
     }
 
+    /// What `requestDiscard()` stopped, so the caller knows whether a live
+    /// capture has to be torn down.
+    public enum Discard: Equatable, Sendable {
+        /// The microphone was still opening; the session is already over, and
+        /// the start in flight sees a stale token and backs out.
+        case preparing(UUID)
+        /// The microphone is live; the caller stops it without transcribing,
+        /// then completes the session with `didFinish`.
+        case recording(UUID)
+    }
+
+    /// Ends the dictation being prepared or recorded without transcribing it.
+    /// Returns `nil` when nothing is being recorded, including while a finished
+    /// recording is being transcribed.
+    @discardableResult
+    public func requestDiscard() -> Discard? {
+        switch phase {
+        case .preparing(let sessionID):
+            stopReason = .cancelled
+            phase = .idle
+            return .preparing(sessionID)
+        case .recording(let sessionID):
+            stopReason = .cancelled
+            phase = .finishing(sessionID)
+            return .recording(sessionID)
+        case .finishing, .idle:
+            return nil
+        }
+    }
+
     /// Recover from a stuck phase when no session token is trustworthy any more
     /// (e.g. a wedged decode that never reported back).
     @discardableResult

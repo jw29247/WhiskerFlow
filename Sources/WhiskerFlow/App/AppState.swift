@@ -1488,6 +1488,42 @@ final class AppState {
         }
     }
 
+    /// Esc while a dictation is being prepared or recorded throws it away:
+    /// nothing is transcribed, pasted or stored, the microphone is released and
+    /// paused media resumes. Meeting recordings are separate and never touched.
+    /// Returns whether a dictation was discarded.
+    @discardableResult
+    func discardDictation() -> Bool {
+        guard let discard = recordingCoordinator.requestDiscard() else { return false }
+        recordingIntentActive = false
+        assistantShortcutActive = false
+        dictationWarmUpTask?.cancel()
+        dictationWarmUpTask = nil
+        websiteLookup?.cancel()
+        websiteLookup = nil
+        pasteTargetApplication = nil
+        liveText = ""
+        if case .recording(let sessionID) = discard {
+            // While the microphone was still opening, the start in flight sees
+            // its stale session, closes the capture and resumes media itself.
+            let captured = live.finish(reason: .cancelled)
+            discardCapturedAudio(captured.audioURL)
+            activeRecordingConfiguration = nil
+            isRecording = false
+            recordingStartedAt = nil
+            meetingCapture.dictationEnded()
+            mediaPauser.dictationEnded()
+            _ = recordingCoordinator.didFinish(sessionID)
+            if settings.playSounds { soundService.play(.recordingStopped) }
+        }
+        lifecycleLogger.info("Capture discarded by the user", metadata: [
+            "event": "capture_discarded", "reason": "user_cancelled"
+        ])
+        updateDictationActivity()
+        status = .success("Recording discarded")
+        return true
+    }
+
     /// Remembers where the dictation goes and asks it for its text fields now,
     /// so an Electron destination has built them by the time the text lands.
     private func capturePasteTarget() {
@@ -1507,6 +1543,7 @@ final class AppState {
         let monitor = HotkeyMonitor(combo: settings.activeHotkeyCombo) { [weak self] pressed in
             self?.handleDictationKey(pressed)
         }
+        monitor.onDiscardKey = { [weak self] in self?.discardDictation() }
         monitor.start()
         hotkeyMonitor = monitor
         for (combo, purpose) in [(Self.selectionShortcut, AssistantController.CapturePurpose.selectionInstruction),

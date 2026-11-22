@@ -72,6 +72,21 @@ public struct HotkeyMatcher {
         return transition(to: false)
     }
 
+    /// The virtual key code of Escape.
+    public static let escapeKeyCode: UInt16 = 53
+
+    /// Whether a key event is the press that discards a dictation in progress:
+    /// Escape going down on its own, not a repeat and with no ⌃⌥⇧⌘ held, so
+    /// a shortcut such as ⌥Esc in another app never discards anything.
+    public static func isDiscardPress(
+        keyCode: UInt16,
+        modifiers: KeyModifiers,
+        isKeyDown: Bool,
+        isRepeat: Bool
+    ) -> Bool {
+        keyCode == escapeKeyCode && isKeyDown && !isRepeat && modifiers.intersection(.comboMask).isEmpty
+    }
+
     /// The shared flag stays set while the mirror key (e.g. Left ⌘) is down, so
     /// prefer the side-specific device bit for the recorded key when present.
     /// Events without device bits (some remappers) fall back to the shared flag.

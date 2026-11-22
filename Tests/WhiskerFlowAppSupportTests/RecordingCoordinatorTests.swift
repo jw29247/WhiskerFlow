@@ -126,4 +126,47 @@ final class RecordingCoordinatorTests: XCTestCase {
             XCTAssertEqual(coordinator.phase, .idle)
         }
     }
+
+    // MARK: - Discard (Esc)
+
+    func testDiscardWhileRecordingFinishesWithoutATranscriptAndAllowsTheNextDictation() {
+        let coordinator = RecordingCoordinator()
+        let session = coordinator.requestStart()!
+        XCTAssertTrue(coordinator.didStart(session))
+        XCTAssertEqual(coordinator.requestDiscard(), .recording(session))
+        XCTAssertEqual(coordinator.phase, .finishing(session))
+        XCTAssertEqual(coordinator.stopReason, .cancelled)
+        // A key release arriving after Esc must not start a normal finish.
+        XCTAssertFalse(coordinator.requestFinish(session))
+        XCTAssertTrue(coordinator.didFinish(session))
+        XCTAssertEqual(coordinator.phase, .idle)
+
+        let next = coordinator.requestStart()!
+        XCTAssertTrue(coordinator.didStart(next))
+        XCTAssertTrue(coordinator.requestFinish(next))
+        XCTAssertEqual(coordinator.stopReason, .userReleased)
+        XCTAssertTrue(coordinator.didFinish(next))
+    }
+
+    func testDiscardWhilePreparingEndsTheSessionSoTheStartInFlightBacksOut() {
+        let coordinator = RecordingCoordinator()
+        let session = coordinator.requestStart()!
+        XCTAssertEqual(coordinator.requestDiscard(), .preparing(session))
+        XCTAssertEqual(coordinator.phase, .idle)
+        XCTAssertFalse(coordinator.didStart(session), "The microphone that finishes opening must see a stale session")
+        XCTAssertNotNil(coordinator.requestStart())
+    }
+
+    func testDiscardDoesNothingWhenIdleOrTranscribing() {
+        let coordinator = RecordingCoordinator()
+        XCTAssertNil(coordinator.requestDiscard())
+        XCTAssertEqual(coordinator.phase, .idle)
+
+        let session = coordinator.requestStart()!
+        XCTAssertTrue(coordinator.didStart(session))
+        XCTAssertTrue(coordinator.requestFinish(session))
+        XCTAssertNil(coordinator.requestDiscard(), "A finished recording being transcribed is not discarded")
+        XCTAssertEqual(coordinator.phase, .finishing(session))
+        XCTAssertEqual(coordinator.stopReason, .userReleased)
+    }
 }
