@@ -87,6 +87,10 @@ final class AutomaticCorrectionLearnerTests: XCTestCase {
         XCTAssertEqual(calls, 2)
     }
 
+    func testEditsSettleForTwoSecondsBeforeAssessment() {
+        XCTAssertEqual(AutomaticCorrectionLearner().debounce, .seconds(2))
+    }
+
     func testClassifierCannotInventCorrections() async {
         let learner = AutomaticCorrectionLearner(debounce: .zero)
         var validated: [[VocabularyCorrection]] = []

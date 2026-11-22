@@ -20,7 +20,8 @@ final class AutomaticCorrectionLearner {
     private var activeSession: UUID?
     private var busy = false
     private var enabled = false
-    private let debounce: Duration
+    /// How long an edit settles before it is assessed. Tests set it to zero.
+    var debounce: Duration
 
     init(debounce: Duration = .seconds(2)) { self.debounce = debounce }
 
