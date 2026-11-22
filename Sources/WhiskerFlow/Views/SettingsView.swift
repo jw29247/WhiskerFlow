@@ -139,6 +139,7 @@ struct SettingsView: View {
             Section("Performance diagnostics") {
                 Text("WhiskerFlow records delays, resource usage and error codes on this Mac only, in ~/Library/Logs/WhiskerFlow, without audio or transcript text. These diagnostics are never sent anywhere.")
                     .font(.caption).foregroundStyle(.secondary)
+                Link("Privacy", destination: PrivacyPage.url).foregroundStyle(FlowStyle.accent)
             }
 
             Section("Updates") {

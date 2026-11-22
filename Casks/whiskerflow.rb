@@ -4,7 +4,7 @@ cask "whiskerflow" do
 
   url "https://github.com/jw29247/WhiskerFlow/releases/download/v#{version}/WhiskerFlow-#{version}.dmg"
   name "WhiskerFlow"
-  desc "On-device push-to-talk dictation for macOS"
+  desc "That Works internal push-to-talk dictation (requires an Atlas account)"
   homepage "https://github.com/jw29247/WhiskerFlow"
 
   depends_on macos: :tahoe
@@ -14,6 +14,10 @@ cask "whiskerflow" do
   app "WhiskerFlow.app"
 
   caveats <<~EOS
+    WhiskerFlow is That Works' internal tool. Sign in with a That Works Atlas
+    account before it will dictate. Privacy:
+    https://github.com/jw29247/WhiskerFlow/blob/main/PRIVACY.md
+
     WhiskerFlow needs Microphone and Accessibility permissions to record and
     paste at your cursor. Grant them in System Settings > Privacy & Security.
 
