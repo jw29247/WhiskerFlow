@@ -71,7 +71,11 @@ final class CleanupService {
         status = next.map { CleanupWorker.isInstalled($0) ? "Ready on next dictation" : "Download needed" } ?? "Off"
     }
 
-    func installed(_ model: CleanupModel) -> Bool { CleanupWorker.isInstalled(model) }
+    func installed(_ model: CleanupModel) -> Bool {
+        // `--ui-state=cleanup-missing` previews Settings before the download.
+        if UIPreview.mode == "cleanup-missing" { return false }
+        return CleanupWorker.isInstalled(model)
+    }
 
     func prewarm(_ model: CleanupModel, foreground: Bool = false) {
         guard configuredModel == model, warmTask == nil, !running, canRun(model), installed(model) else { return }

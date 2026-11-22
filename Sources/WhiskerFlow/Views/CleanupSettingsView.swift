@@ -9,11 +9,22 @@ struct CleanupSettingsView: View {
 
     private let model = CleanupModel.gemma4E2B
 
+    /// Why the Cleanup switch can't be turned on, shown beside it. An
+    /// unsupported Mac has its own line further down.
+    static func switchUnavailableReason(supported: Bool, installed: Bool, enabled: Bool, downloading: Bool) -> String? {
+        guard supported, !installed, !enabled else { return nil }
+        return downloading ? "Available when the model below has downloaded" : "Download the model below first"
+    }
+
     var body: some View {
         Form {
             Section("Cleanup") {
                 Toggle("Clean up dictation", isOn: $appState.settings.cleanupEnabled)
                     .disabled(!CleanupService.supported || (!appState.cleanup.installed(model) && !appState.settings.cleanupEnabled))
+                if let reason = Self.switchUnavailableReason(supported: CleanupService.supported, installed: appState.cleanup.installed(model),
+                                                             enabled: appState.settings.cleanupEnabled, downloading: appState.cleanup.downloading) {
+                    Text(reason).font(.caption).foregroundStyle(.secondary)
+                }
                 Text("Corrects recognition mistakes, spelling and grammar into British English, removes hesitations and resolves spoken self-corrections while keeping your meaning. Runs entirely on this Mac after transcription. The original stays in History when history is enabled.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Cleanup is a preview. Check names, numbers and corrections before sending important text. Literal writing style and voice editing instructions skip Cleanup.")
