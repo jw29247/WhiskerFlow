@@ -97,7 +97,7 @@ private struct LeaderboardRowView: View {
             }
             Spacer()
             Text(primary)
-                .font(FlowStyle.subheading).monospacedDigit()
+                .font(FlowStyle.lead.weight(.semibold)).fontDesign(.rounded).monospacedDigit()
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .background(entry.isYou ? FlowStyle.selection : FlowStyle.surface, in: RoundedRectangle(cornerRadius: 10))

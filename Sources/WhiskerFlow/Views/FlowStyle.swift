@@ -51,8 +51,11 @@ enum FlowStyle {
     static let title = font(TypeScale.title)
     /// Screen and detail titles: History, Insights, Leaderboard, a Settings category, a transcript.
     static let heading = font(TypeScale.heading)
-    /// Sidebar and popover names, card numbers, and large lines read at a glance.
+    /// Sidebar names, card numbers, and large lines read at a glance.
     static let subheading = font(TypeScale.subheading)
+    /// Text read and edited at length (a transcript), and the name or figure
+    /// that leads a compact panel or row.
+    static let lead = font(TypeScale.lead)
     /// Reading text: transcripts, list item titles, descriptions under a heading.
     static let body = font(TypeScale.body)
     /// Supporting text, section labels and controls.
@@ -70,11 +73,12 @@ enum FlowStyle {
         static let title: Style = (28, .semibold, .rounded)
         static let heading: Style = (24, .semibold, .rounded)
         static let subheading: Style = (20, .semibold, .rounded)
+        static let lead: Style = (16, .regular, .default)
         static let body: Style = (14, .regular, .default)
         static let callout: Style = (13, .regular, .default)
         static let caption: Style = (12, .regular, .default)
         static let small: Style = (11, .regular, .default)
-        static let all = [display, title, heading, subheading, body, callout, caption, small]
+        static let all = [display, title, heading, subheading, lead, body, callout, caption, small]
     }
 
     private static func font(_ style: TypeScale.Style) -> Font {

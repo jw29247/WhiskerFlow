@@ -38,7 +38,7 @@ struct TranscriptDetailView: View {
             }
             if record.status == .transcribed {
                 TextEditor(text: $draft.text)
-                    .font(FlowStyle.body)
+                    .font(FlowStyle.lead)
                     .lineSpacing(7)
                     .scrollContentBackground(.hidden)
                     .padding(13)
