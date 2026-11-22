@@ -251,11 +251,7 @@ final class AtlasSignOutTests: XCTestCase {
         XCTAssertFalse(controller.isReportingPeriodically)
         XCTAssertNil(controller.board)
         let today = LocalDay(now, calendar: calendar)
-        XCTAssertEqual(defaults.string(forKey: "leaderboardReportedThrough"), today.adding(days: 1).key)
-        let days = [today.adding(days: -3), today.adding(days: -1), today].map {
-            LeaderboardDay(day: $0, words: 10, dictations: 1, speakingSeconds: 5, timeSavedSeconds: 10, meetings: 0, meetingSeconds: 0)
-        }
-        XCTAssertEqual(LeaderboardReport.daysToSend(days, reportedThrough: today.adding(days: 1), today: today).map(\.day), [today],
+        XCTAssertEqual(defaults.string(forKey: "leaderboardReportsFrom"), today.key,
                        "Earlier days are never sent to the next account")
         XCTAssertFalse(controller.meetingTally.days.isEmpty, "This Mac's own meeting count stays")
     }

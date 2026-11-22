@@ -50,6 +50,14 @@ final class LeaderboardController {
         set { defaults.set(newValue?.key, forKey: Keys.reportedThrough) }
     }
 
+    /// The first day any report may include, set by `signOut()`. Unlike
+    /// `reportedThrough`, which every report advances, it never moves on, so
+    /// days from before a sign-out are never sent to a later sign-in.
+    private var reportsFrom: LocalDay? {
+        get { defaults.string(forKey: Keys.reportsFrom).flatMap(LocalDay.init(key:)) }
+        set { defaults.set(newValue?.key, forKey: Keys.reportsFrom) }
+    }
+
     // MARK: - Meetings
 
     /// Counts a finished meeting recording towards its day.
@@ -94,7 +102,9 @@ final class LeaderboardController {
             guard let self, let client = self.client() else { return false }
             let generation = self.accountGeneration
             let today = self.today
+            let boundary = self.reportsFrom
             let days = LeaderboardReport.daysToSend(self.usageDays(self.meetingTally), reportedThrough: self.reportedThrough, today: today)
+                .filter { day in boundary.map { day.day >= $0 } ?? true }
             do {
                 for start in stride(from: 0, to: days.count, by: LeaderboardReport.maximumDaysPerRequest) {
                     let end = min(start + LeaderboardReport.maximumDaysPerRequest, days.count)
@@ -137,10 +147,11 @@ final class LeaderboardController {
         }
     }
 
-    /// Sign-out: stops reporting and forgets the board. Earlier days not yet
-    /// reported stay unreported; the next sign-in reports from today, whose
-    /// total can include use from before the sign-out. The meeting tally is
-    /// this Mac's own count and stays.
+    /// Sign-out: stops reporting and forgets the board. From now on no report
+    /// includes a day before today, so earlier days not yet reported stay
+    /// unreported and are never sent to a later sign-in. Today's total is
+    /// whole-day usage and can include use from before the sign-out; that is
+    /// accepted. The meeting tally is this Mac's own count and stays.
     func signOut() {
         accountGeneration &+= 1
         periodic?.cancel()
@@ -151,7 +162,7 @@ final class LeaderboardController {
         errorMessage = nil
         updatedAt = nil
         isLoading = false
-        reportedThrough = today.adding(days: 1)
+        reportsFrom = today
     }
 
     #if DEBUG
@@ -164,6 +175,7 @@ final class LeaderboardController {
 
     private enum Keys {
         static let reportedThrough = "leaderboardReportedThrough"
+        static let reportsFrom = "leaderboardReportsFrom"
         static let meetingTally = "leaderboardMeetingTally"
         static let meetingsSeeded = "leaderboardMeetingsSeeded"
     }
