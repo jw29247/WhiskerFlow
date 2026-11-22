@@ -300,7 +300,8 @@ struct OnboardingPracticeStep: View {
             }
             .frame(height: 78)
             .background(FlowStyle.surface, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(fieldFocused ? FlowStyle.accent : FlowStyle.line, lineWidth: 1))
+            .overlay(RoundedRectangle(cornerRadius: 10)
+                .stroke(fieldFocused && readiness.canPractise ? FlowStyle.accent : FlowStyle.line, lineWidth: 1))
             .opacity(readiness.canPractise ? 1 : 0.6)
 
             if let result = results[prompt] {
@@ -337,8 +338,8 @@ struct OnboardingPracticeStep: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Your shortcut").font(FlowStyle.callout.weight(.medium))
                     Text(appState.settings.recordingMode == .holdToTalk
-                         ? "Hold it to talk, then let go to paste. It works in every app."
-                         : "Press it to start, then press again to paste. It works in every app.")
+                         ? "Hold to talk, let go to paste. Works in any app."
+                         : "Press to start, press again to paste. Works in any app.")
                         .font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
