@@ -293,7 +293,7 @@ leaderboard counts) stays in Atlas. Ask That Works about it.
   use and error codes, tagged with an installation identifier kept on your
   Mac, go to Superlog through a relay hosted on Railway. Crash, hang and error
   reports go to Sentry. Neither includes audio or transcript text. The next
-  release removes both.
+  release removes both and deletes the stored installation identifier.
 - **2.1.1 and earlier** download the shared glossary from this public GitHub
   repository, not from Atlas.
 - **2.0.0 to 2.1.0** switched automatic meeting recording on without asking.

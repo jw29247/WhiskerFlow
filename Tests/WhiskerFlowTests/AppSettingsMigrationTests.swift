@@ -179,4 +179,13 @@ final class AppSettingsMigrationTests: XCTestCase {
             XCTAssertEqual(settings(defaults, name).formatting.language, "de")
         }
     }
+
+    /// Builds up to 2.1.1 stored a persistent ID to tag diagnostics sent off the Mac.
+    func testStoredInstallationIDIsDeletedAtLaunch() {
+        withDefaults { defaults, name in
+            defaults.set(UUID().uuidString, forKey: "diagnostics.installationID")
+            _ = settings(defaults, name)
+            XCTAssertNil(defaults.object(forKey: "diagnostics.installationID"))
+        }
+    }
 }

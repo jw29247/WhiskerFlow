@@ -55,7 +55,5 @@
 	<string>SbsHwrrXtfgDoJaOa+GfIroSpUjyMn+Z9+Odq1qGj/Y=</string>
 	<key>SUScheduledCheckInterval</key>
 	<integer>86400</integer>
-	<key>WhiskerFlowSentryDSN</key>
-	<string></string>
 </dict>
 </plist>

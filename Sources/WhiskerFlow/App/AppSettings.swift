@@ -269,6 +269,9 @@ final class AppSettings {
         // hang CoreAudio. Drop its setting and the hang record it kept.
         defaults.removeObject(forKey: Keys.ignoreSpeakerAudio)
         defaults.removeObject(forKey: Keys.voiceProcessingHungInputs)
+        // Diagnostics no longer leave the Mac, so the persistent installation
+        // ID that tagged them is no longer read. Delete what old builds stored.
+        defaults.removeObject(forKey: Keys.diagnosticsInstallationID)
     }
 
     static let atlasProductionURL = "https://atlas.thatworks.agency"
@@ -411,6 +414,8 @@ final class AppSettings {
         static let translateToEnglish = "translateToEnglish"
         static let ignoreSpeakerAudio = "ignoreSpeakerAudio"
         static let voiceProcessingHungInputs = "voiceProcessingHungInputs"
+        /// Written by builds up to 2.1.1 to tag diagnostics sent off the Mac.
+        static let diagnosticsInstallationID = "diagnostics.installationID"
         static let delivery = "delivery"
         static let playSounds = "playSounds"
         static let allowAppleFallback = "allowAppleFallback"
