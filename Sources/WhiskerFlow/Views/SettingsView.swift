@@ -12,12 +12,12 @@ struct SettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 7) {
-                Text("Settings").font(.system(size: 21, weight: .semibold, design: .rounded))
+                Text("Settings").font(FlowStyle.subheading)
                     .padding(.horizontal, 12).padding(.top, 24).padding(.bottom, 24)
                 ForEach(SettingsCategory.allCases) { item in
                     Button { category = item } label: {
                         Label(item.rawValue, systemImage: item.symbol)
-                            .font(.system(size: 13)).frame(maxWidth: .infinity, alignment: .leading)
+                            .font(FlowStyle.callout).frame(maxWidth: .infinity, alignment: .leading)
                             .padding(12).contentShape(RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
@@ -29,7 +29,7 @@ struct SettingsView: View {
             }.padding(.horizontal, 12).frame(width: 155).flowSidebarBackground()
             Divider()
             VStack(alignment: .leading, spacing: 0) {
-                Text(category.rawValue).font(.system(size: 25, weight: .semibold, design: .rounded))
+                Text(category.rawValue).font(FlowStyle.heading)
                     .padding(.horizontal, 25).padding(.top, 25).padding(.bottom, 5)
                 Group {
                     switch category {

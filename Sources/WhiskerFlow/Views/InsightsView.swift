@@ -13,7 +13,7 @@ struct InsightsView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Insights").font(.system(size: 24, weight: .semibold, design: .rounded))
+                Text("Insights").font(FlowStyle.heading)
                 Spacer()
                 Button { confirmReset = true } label: { Label("Reset", systemImage: "arrow.counterclockwise") }
                     .disabled(summary.isEmpty)
@@ -44,7 +44,7 @@ struct InsightsView: View {
                         }
                         Label("Insights are counts only — no transcript text — and stay on this Mac. Daily totals go to the team leaderboard.",
                               systemImage: "lock")
-                            .font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
+                            .font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
                     }
                     .padding(28)
                     .frame(maxWidth: 900, alignment: .leading)
@@ -82,10 +82,10 @@ struct InsightsView: View {
                 }
                 Divider()
                 HStack(alignment: .firstTextBaseline) {
-                    Text("Time saved").font(.system(size: 12)).foregroundStyle(FlowStyle.muted)
+                    Text("Time saved").font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
                     Spacer()
                     Text(Self.duration(summary.timeSavedSeconds))
-                        .font(.system(size: 20, weight: .semibold, design: .rounded)).monospacedDigit()
+                        .font(FlowStyle.subheading).monospacedDigit()
                 }
                 .help("Lifetime words at your typing speed, minus the same words at your speaking speed")
             }
@@ -99,17 +99,17 @@ struct InsightsView: View {
                     Image(systemName: "flame.fill").foregroundStyle(summary.currentStreak > 0 ? FlowStyle.accent : FlowStyle.muted)
                         .accessibilityHidden(true)
                     Text(summary.currentStreak.formatted())
-                        .font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
+                        .font(FlowStyle.display).monospacedDigit()
                     Text(summary.currentStreak == 1 ? "day" : "days").foregroundStyle(FlowStyle.muted)
                 }
                 .accessibilityElement(children: .combine)
-                Text("Current streak").font(.system(size: 12)).foregroundStyle(FlowStyle.muted)
+                Text("Current streak").font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
                 Divider()
                 HStack {
-                    Text("Longest").font(.system(size: 12)).foregroundStyle(FlowStyle.muted)
+                    Text("Longest").font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
                     Spacer()
                     Text(summary.longestStreak == 1 ? "1 day" : "\(summary.longestStreak.formatted()) days")
-                        .font(.system(size: 13, weight: .medium)).monospacedDigit()
+                        .font(FlowStyle.callout.weight(.medium)).monospacedDigit()
                 }
             }
         }
@@ -136,7 +136,7 @@ struct InsightsView: View {
         InsightCard(title: "Corrections applied") {
             VStack(alignment: .leading, spacing: 14) {
                 Text(summary.correctionsApplied.formatted())
-                    .font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .font(FlowStyle.display).monospacedDigit()
                 VStack(spacing: 8) {
                     correctionRow("Vocabulary replacements", summary.vocabularyReplacements)
                     correctionRow("Spoken self-corrections", summary.selfCorrections)
@@ -147,9 +147,9 @@ struct InsightsView: View {
 
     private func correctionRow(_ title: String, _ value: Int) -> some View {
         HStack {
-            Text(title).font(.system(size: 12)).foregroundStyle(FlowStyle.muted)
+            Text(title).font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
             Spacer()
-            Text(value.formatted()).font(.system(size: 13, weight: .medium)).monospacedDigit()
+            Text(value.formatted()).font(FlowStyle.callout.weight(.medium)).monospacedDigit()
         }
         .accessibilityElement(children: .combine)
     }
@@ -176,7 +176,7 @@ private struct InsightCard<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(title).font(.system(size: 13, weight: .medium))
+            Text(title).font(FlowStyle.callout.weight(.medium))
             content
         }
         .padding(20)
@@ -193,10 +193,10 @@ private struct InsightTile: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 12)).foregroundStyle(FlowStyle.muted)
-            Text(value).font(.system(size: 30, weight: .semibold, design: .rounded)).monospacedDigit()
+            Text(title).font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
+            Text(value).font(FlowStyle.title).monospacedDigit()
                 .lineLimit(1).minimumScaleFactor(0.6)
-            Text(detail).font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
+            Text(detail).font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -216,10 +216,10 @@ private struct SpeedBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text(label).font(.system(size: 12)).foregroundStyle(FlowStyle.muted)
+                Text(label).font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
                 Spacer()
                 Text(value.map { "\(Int($0.rounded())) wpm" } ?? "—")
-                    .font(.system(size: 15, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .font(FlowStyle.body.weight(.semibold)).fontDesign(.rounded).monospacedDigit()
             }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -230,7 +230,7 @@ private struct SpeedBar: View {
                 }
             }
             .frame(height: 8)
-            Text(caption).font(.system(size: 10)).foregroundStyle(FlowStyle.muted)
+            Text(caption).font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(label): \(value.map { "\(Int($0.rounded())) words per minute" } ?? "not measured yet")")
@@ -253,7 +253,7 @@ private struct ActivityHeatmapView: View {
                 VStack(alignment: .leading, spacing: spacing) {
                     ForEach(Array(heatmap.weekdays.enumerated()), id: \.offset) { row, weekday in
                         HStack(spacing: spacing) {
-                            Text(Self.weekdayName(weekday)).font(.system(size: 10)).foregroundStyle(FlowStyle.muted)
+                            Text(Self.weekdayName(weekday)).font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
                                 .frame(width: labelWidth, alignment: .leading)
                             ForEach(0..<24, id: \.self) { hour in
                                 let count = heatmap.counts[row][hour]
@@ -268,7 +268,7 @@ private struct ActivityHeatmapView: View {
                         Spacer().frame(width: labelWidth)
                         ForEach(0..<24, id: \.self) { hour in
                             Text(hour % 6 == 0 ? Self.hourName(hour) : "")
-                                .font(.system(size: 9)).foregroundStyle(FlowStyle.muted)
+                                .font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
                                 .fixedSize()
                                 .frame(width: cell, alignment: .leading)
                         }
@@ -278,12 +278,12 @@ private struct ActivityHeatmapView: View {
             .frame(height: 7 * 20 + 7 * spacing + 16)
             HStack(spacing: 4) {
                 Spacer()
-                Text("Less").font(.system(size: 10)).foregroundStyle(FlowStyle.muted)
+                Text("Less").font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
                 RoundedRectangle(cornerRadius: 2).fill(FlowStyle.line.opacity(0.45)).frame(width: 10, height: 10)
                 ForEach(Self.steps, id: \.self) { step in
                     RoundedRectangle(cornerRadius: 2).fill(FlowStyle.accent.opacity(step)).frame(width: 10, height: 10)
                 }
-                Text("More").font(.system(size: 10)).foregroundStyle(FlowStyle.muted)
+                Text("More").font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
             }
             .accessibilityHidden(true)
         }
@@ -337,9 +337,9 @@ private struct AppUsageRow: View {
             .frame(width: 20, height: 20)
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
-                    Text(identity.name).font(.system(size: 12)).lineLimit(1)
+                    Text(identity.name).font(FlowStyle.caption).lineLimit(1)
                     Spacer()
-                    Text(CountPhrase.of(usage.words, "word")).font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
+                    Text(CountPhrase.of(usage.words, "word")).font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
                         .monospacedDigit()
                 }
                 GeometryReader { geo in

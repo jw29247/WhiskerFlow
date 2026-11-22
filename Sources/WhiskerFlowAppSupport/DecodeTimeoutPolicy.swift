@@ -28,22 +28,6 @@ public enum DecodeTimeoutPolicy {
     /// Hard ceiling, also used when the audio duration is unknown.
     public static var maximumTimeout: Double { baseMaximumTimeout * hardwareScale }
     public static let baseMaximumTimeout: Double = 300
-    /// Budget for a short decode on the release path. Keeping it small is what
-    /// lets the finish watchdog sit above the worst legitimate release.
-    public static var livePartialTimeout: Double { baseLivePartialTimeout * hardwareScale }
-    public static let baseLivePartialTimeout: Double = 20
-    /// Live decodes a single release can end up awaiting one after another: the
-    /// window decode already in flight, the confirm pass's prefix decode, and the
-    /// recovery decode of the unconfirmed tail.
-    public static let livePartialsPerRelease = 3
-
-    /// Longest a release may legitimately spend inside the live session's teardown.
-    /// A watchdog below this reports slow decodes as failures; above it, only a
-    /// genuine wedge trips.
-    public static var liveFinishBudget: Double {
-        livePartialTimeout * Double(livePartialsPerRelease)
-    }
-
     public static func timeout(forAudioSeconds duration: Double) -> Double {
         timeout(forAudioSeconds: duration, scale: hardwareScale)
     }

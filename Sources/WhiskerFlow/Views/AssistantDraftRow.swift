@@ -17,7 +17,7 @@ struct AssistantDraftRow: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(draft.kind == .note ? "NOTE" : draft.kind == .taskDraft ? "TASK DRAFT" : "CLIENT UPDATE DRAFT")
-                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(FlowStyle.muted)
+                    .font(FlowStyle.small.weight(.semibold)).foregroundStyle(FlowStyle.muted)
                 Spacer()
                 Text(draft.atlasReference == nil ? "On this Mac" : "Saved to Atlas").font(.caption).foregroundStyle(FlowStyle.muted)
             }

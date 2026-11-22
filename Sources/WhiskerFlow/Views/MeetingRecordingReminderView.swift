@@ -13,10 +13,10 @@ struct MeetingRecordingReminderView: View {
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 6) {
                 if copied {
-                    Text("Copied. Paste it in the meeting chat.").font(.system(size: 13, weight: .medium))
+                    Text("Copied. Paste it in the meeting chat.").font(FlowStyle.callout.weight(.medium))
                 } else {
                     HStack(alignment: .firstTextBaseline) {
-                        Text("Tell the others you’re recording").font(.system(size: 13, weight: .semibold))
+                        Text("Tell the others you’re recording").font(FlowStyle.callout.weight(.semibold))
                         Spacer()
                         Button { appState.dismissRecordingReminder() } label: { Image(systemName: "xmark") }
                             .buttonStyle(.plain).foregroundStyle(FlowStyle.muted)

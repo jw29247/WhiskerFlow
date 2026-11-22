@@ -43,7 +43,7 @@ struct MeetingTalkShareBar: View {
                 Text("You \(Int((share * 100).rounded()))%").foregroundStyle(FlowStyle.accent)
                 Spacer()
                 Text("Others \(Int(((1 - share) * 100).rounded()))%").foregroundStyle(FlowStyle.muted)
-            }.font(.system(size: compact ? 11 : 12, weight: .medium)).monospacedDigit()
+            }.font((compact ? FlowStyle.small : FlowStyle.caption).weight(.medium)).monospacedDigit()
             GeometryReader { proxy in
                 HStack(spacing: 2) {
                     Capsule().fill(share > 0.65 ? FlowStyle.warning : FlowStyle.accent)
@@ -116,7 +116,7 @@ struct MeetingCoachInsightsSection: View {
                 Divider()
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Your last \(trends.meetingCount) coached meeting\(trends.meetingCount == 1 ? "" : "s")")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(FlowStyle.callout.weight(.medium))
                     HStack(alignment: .top, spacing: 24) {
                         stat("Talk share", trends.averageTalkShare.map { "\(Int(($0 * 100).rounded()))%" } ?? "—",
                              detail: direction(trends.talkShareDirection))
@@ -137,7 +137,7 @@ struct MeetingCoachInsightsSection: View {
     private func stat(_ title: String, _ value: String, detail: String?) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.caption).foregroundStyle(FlowStyle.muted)
-            Text(value).font(.system(size: 18, weight: .semibold, design: .rounded)).monospacedDigit()
+            Text(value).font(FlowStyle.subheading).monospacedDigit()
             if let detail { Text(detail).font(.caption2).foregroundStyle(FlowStyle.muted) }
         }
     }

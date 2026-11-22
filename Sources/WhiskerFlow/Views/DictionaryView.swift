@@ -17,7 +17,7 @@ struct DictionaryView: View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 7) {
-                    Text("Corrections").font(.system(size: 30, weight: .semibold, design: .rounded))
+                    Text("Corrections").font(FlowStyle.title)
                     Text("Learns from the words you fix, as you use the app.").foregroundStyle(FlowStyle.muted)
                 }
                 Spacer()

@@ -13,7 +13,7 @@ struct RecordingHUDView: View {
             } else { icon }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(FlowStyle.callout.weight(.semibold))
                     .foregroundStyle(FlowStyle.ink)
                     // A failure reason can run long: a fixed width (not a
                     // maximum, which the fixed-size panel would measure as one
@@ -24,7 +24,7 @@ struct RecordingHUDView: View {
                 if presentation == .recording, !appState.liveText.isEmpty {
                     // Live transcript, most-recent words kept visible.
                     Text(appState.liveText)
-                        .font(.system(size: 12))
+                        .font(FlowStyle.caption)
                         .foregroundStyle(FlowStyle.ink)
                         .lineLimit(2)
                         .truncationMode(.head)
@@ -32,12 +32,12 @@ struct RecordingHUDView: View {
                 } else if presentation == .recording {
                     TimelineView(.periodic(from: .now, by: 0.2)) { _ in
                         Text(elapsedString)
-                            .font(.system(size: 11, weight: .regular).monospacedDigit())
+                            .font(FlowStyle.small.monospacedDigit())
                             .foregroundStyle(FlowStyle.muted)
                     }
                 } else {
                     Text("WhiskerFlow")
-                        .font(.system(size: 11))
+                        .font(FlowStyle.small)
                         .foregroundStyle(FlowStyle.muted)
                 }
                 // Added below the transcript, never in its place: a thinking pause
@@ -46,7 +46,7 @@ struct RecordingHUDView: View {
                 // than the warning is useful.
                 if presentation == .recording, let signalWarning {
                     Text(signalWarning)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(FlowStyle.small.weight(.medium))
                         .foregroundStyle(signalWarningTint)
                         .frame(maxWidth: 320, alignment: .leading)
                 }

@@ -15,7 +15,7 @@ struct AtlasSignInGate: View {
                 .foregroundStyle(FlowStyle.accent)
                 .accessibilityHidden(true)
             Text("Sign in with Atlas to use WhiskerFlow")
-                .font(.system(size: 24, weight: .semibold, design: .rounded))
+                .font(FlowStyle.heading)
             Text("WhiskerFlow now uses your Atlas account for the team leaderboard, meeting recordings, the Assistant and each client's vocabulary. Dictation starts working as soon as you're signed in.")
                 .font(.callout)
                 .foregroundStyle(FlowStyle.muted)
@@ -35,11 +35,11 @@ struct AtlasSignInGate: View {
             }
             Label("The leaderboard shows your name, picture and daily counts (words, time saved, streak, meetings) to colleagues. Never any text.",
                   systemImage: "trophy")
-                .font(.system(size: 11))
+                .font(FlowStyle.small)
                 .foregroundStyle(FlowStyle.muted)
                 .frame(maxWidth: 460)
             Link("Privacy", destination: PrivacyPage.url)
-                .font(.system(size: 11))
+                .font(FlowStyle.small)
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

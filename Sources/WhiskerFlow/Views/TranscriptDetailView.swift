@@ -17,9 +17,9 @@ struct TranscriptDetailView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 7) {
                     Text(record.createdAt, format: .dateTime.month(.wide).day())
-                        .font(.system(size: 23, weight: .semibold, design: .rounded))
+                        .font(FlowStyle.heading)
                     Text(record.createdAt, format: .dateTime.weekday(.wide).hour().minute())
-                        .font(.system(size: 12)).foregroundStyle(FlowStyle.muted)
+                        .font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
                 }
                 Spacer(minLength: 8)
                 FlowCopyButton(text: record.status == .transcribed ? draft.text : record.text, allowsEmpty: record.status == .transcribed, copy: appState.copyEditorText)
@@ -38,7 +38,7 @@ struct TranscriptDetailView: View {
             }
             if record.status == .transcribed {
                 TextEditor(text: $draft.text)
-                    .font(.system(size: 16))
+                    .font(FlowStyle.lead)
                     .lineSpacing(7)
                     .scrollContentBackground(.hidden)
                     .padding(13)
@@ -91,7 +91,7 @@ struct TranscriptDetailView: View {
                     if let language = record.language { Text("Language: \(language)") }
                 }.font(.caption).foregroundStyle(FlowStyle.muted).padding(.top, 8)
             } label: {
-                Text("\(CountPhrase.of(record.wordCount, "word")) · Recording details").font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
+                Text("\(CountPhrase.of(record.wordCount, "word")) · Recording details").font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
             }.padding(.top, 18)
         }
         .padding(26)
@@ -139,7 +139,7 @@ struct TranscriptDetailView: View {
             .help(draft.isDirty ? "Save or discard your changes first" : "Transcribe this recording again with a different engine")
             Spacer()
         }
-        .font(.system(size: 12))
+        .font(FlowStyle.caption)
         .padding(.top, 14)
     }
 
