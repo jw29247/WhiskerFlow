@@ -48,8 +48,9 @@ files unchanged. Explicit user instructions take precedence.
 
 - Run the repository's required checks and appropriate behavioural verification
   for the change. The CI definition in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
-  remains authoritative: JSON resource validation, Swift build and tests, shell
-  packaging tests and pinned SwiftFormat lint. Preserve existing testing,
+  remains authoritative: Swift build and tests, shell packaging tests and
+  pinned SwiftFormat lint. (It no longer validates JSON resources: the shared
+  glossary left the repository and is validated in Atlas.) Preserve existing testing,
   security, data, CI and deployment requirements; do not import another
   repository's restrictions or weaken verification to move faster.
 - Repeat checks when relevant changes, failures or integration conflicts justify

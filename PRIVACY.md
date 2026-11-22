@@ -178,9 +178,12 @@ later fetches the notes Atlas writes for the meeting.
 - The client list and a client's vocabulary are downloaded when you refresh
   them or pick a client.
 
-**Shared glossary.** WhiskerFlow downloads the agency glossary (client names
-and terms) when it starts and every 4 hours. The request contains no text or
-personal data. The last copy is kept in `shared-vocabulary.json`.
+**Shared glossary.** While you are signed in, WhiskerFlow downloads the
+agency glossary (client names and terms) from Atlas when it starts and every 4
+hours. The request contains no text or personal data. The app ships no copy of
+its own: until the first download the glossary is empty and dictation works
+without it. The last copy downloaded is kept in `shared-vocabulary.json`, and
+signing out deletes it.
 
 **Leaderboard.** Every 15 minutes, and when you open the leaderboard,
 WhiskerFlow sends Atlas your daily totals: words, dictations, seconds spoken,
@@ -295,7 +298,10 @@ leaderboard counts) stays in Atlas. Ask That Works about it.
   reports go to Sentry. Neither includes audio or transcript text. The next
   release removes both and deletes the stored installation identifier.
 - **2.1.1 and earlier** download the shared glossary from this public GitHub
-  repository, not from Atlas.
+  repository, not from Atlas, and also carry a copy inside the app. The
+  repository no longer holds the glossary, so those versions stop receiving
+  updates: they keep using the last copy they downloaded, or the copy inside
+  the app if they never downloaded one.
 - **2.0.0 to 2.1.0** switched automatic meeting recording on without asking.
   2.1.1 switches it back off and asks once.
 - **Versions before 2.1.1** could let macOS send Apple Speech audio to Apple

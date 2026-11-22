@@ -47,7 +47,7 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "Logging", package: "swift-log")
             ],
-            resources: [.copy("Resources/shared-vocabulary.json"), .copy("Resources/CleanupNotices.txt")],
+            resources: [.copy("Resources/CleanupNotices.txt")],
             // The on-device coach model ships with macOS 26. Weak-link it so the
             // app still launches on macOS 14 and 15, where the feature is hidden.
             // Translation is weak-linked for the same reason (macOS 15 and later).
