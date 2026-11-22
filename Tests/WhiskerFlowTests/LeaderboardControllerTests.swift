@@ -85,6 +85,28 @@ final class LeaderboardControllerTests: XCTestCase {
         XCTAssertEqual(sentDays, [["2026-10-01", "2026-10-02"]])
     }
 
+    func testThePeriodicReportSkipsDaysAtlasAlreadyHasAndSendsNewUsage() async {
+        var days = (0..<3).reversed().map(day)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [LeaderboardStubProtocol.self]
+        let session = URLSession(configuration: configuration)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/London")!
+        let noon = calendar.date(from: DateComponents(year: 2026, month: 10, day: 2, hour: 12))!
+        let board = LeaderboardController(
+            client: { LeaderboardAtlasClient(baseURL: URL(string: "https://atlas.example")!, token: "twnt_test", session: session) },
+            usageDays: { _ in days }, defaults: defaults, calendar: { calendar }, now: { noon })
+        await board.report(onlyIfChanged: true)
+        XCTAssertEqual(sentDays.count, 1)
+        LeaderboardStubProtocol.requests = []
+        let unchanged = await board.report(onlyIfChanged: true)
+        XCTAssertTrue(unchanged)
+        XCTAssertEqual(sentDays, [], "Nothing new: no request")
+        days[days.count - 1].words += 25
+        await board.report(onlyIfChanged: true)
+        XCTAssertEqual(sentDays, [["2026-10-01", "2026-10-02"]], "A dictation since: sent on the next report")
+    }
+
     func testAFailedReportIsRetriedInFullNextTime() async {
         let board = controller(days: (0..<5).reversed().map(day))
         LeaderboardStubProtocol.status = 503

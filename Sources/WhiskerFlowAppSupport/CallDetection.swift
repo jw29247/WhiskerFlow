@@ -228,6 +228,9 @@ public struct CallSessionTracker: Equatable, Sendable {
         tracked.values.filter(\.announced).map(\.call).sorted { $0.id < $1.id }
     }
 
+    /// Whether a call is being confirmed, is active or is in its end grace.
+    public var isTracking: Bool { !tracked.isEmpty }
+
     /// - Parameters:
     ///   - calls: calls recognised in this poll.
     ///   - appsUsingMicrophone: owning apps still capturing input. A started

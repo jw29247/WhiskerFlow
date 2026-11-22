@@ -104,6 +104,11 @@ final class MeetingCaptureCoordinator {
   private var activeOverlapDetected = false
   private var captureTransitionInProgress = false
   private var heartbeatTask: Task<Void, Never>?
+  /// When the schedule was last fetched from Atlas successfully; nil after a
+  /// failure, without a client and after sign-out.
+  private(set) var lastScheduleFetchMs: Int64?
+  /// The last heartbeat Atlas accepted; nil after a failure.
+  private var lastHeartbeat: (atMs: Int64, state: MeetingHeartbeatPolicy.State)?
   private var lastFailureCode: String?
   private var didStart = false
   /// Bumped by `signOut()`. An Atlas request captures it before its await and
@@ -164,7 +169,7 @@ final class MeetingCaptureCoordinator {
     // user's private assistant file too.
     self.assistant = assistant ?? (store == nil ? MeetingAssistantController() : MeetingAssistantController(
       rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("WhiskerFlowAssistant-\(UUID().uuidString)")))
-    self.callDetector = callDetector ?? CallDetectionService()
+    self.callDetector = callDetector ?? CallDetectionService(microphoneActivity: CoreAudioMicrophoneActivity())
     let root = StorageLocations.applicationSupportRootOrTemporary()
       .appendingPathComponent("MeetingRecordings", isDirectory: true)
     self.store = store ?? EncryptedMeetingChunkStore(
@@ -246,6 +251,8 @@ final class MeetingCaptureCoordinator {
   /// the schedule from Atlas.
   func signOut() {
     signOutGeneration &+= 1
+    lastScheduleFetchMs = nil
+    lastHeartbeat = nil
     stopMonitoring()
     stopTask?.cancel()
     stopTask = nil
@@ -322,6 +329,19 @@ final class MeetingCaptureCoordinator {
 
   func refreshSchedule() {
     Task { @MainActor [weak self] in await self?.pollSchedule() }
+  }
+
+  /// Fetches the schedule if the last fetch is over a minute old. The
+  /// Meetings screen calls it as it opens, so its list is never the one from
+  /// up to `MeetingSchedulePollPolicy.idleFetchIntervalMs` ago. Without a
+  /// successful fetch to go by, the schedule loop is already fetching every
+  /// minute. Returns whether it started a fetch.
+  @discardableResult
+  func refreshScheduleIfStale(nowMs: Int64 = MeetingCaptureCoordinator.nowMs()) -> Bool {
+    guard let last = lastScheduleFetchMs,
+          nowMs - last >= MeetingSchedulePollPolicy.activeFetchIntervalMs else { return false }
+    refreshSchedule()
+    return true
   }
 
   func retryPendingRecordings() {
@@ -440,6 +460,7 @@ final class MeetingCaptureCoordinator {
       let intents = scheduleIntents.isEmpty ? cachedSchedule(now: now) : scheduleIntents
       let intent = CallCalendarMatcher.match(call, intents: intents, nowMs: now)
       callPrompt = DetectedCallPrompt(call: call, intent: intent)
+      if intent == nil { matchCallPromptAfterRefreshIfStale(call, nowMs: now) }
     case .ended(let call):
       lifecycleLog("call_ended", call: call)
       promptedCallIDs.remove(call.id)
@@ -448,6 +469,23 @@ final class MeetingCaptureCoordinator {
       if activeDetectedCallID != nil, callDetector.activeCalls.isEmpty, activeSessionID != nil, !captureTransitionInProgress {
         Task { @MainActor [weak self] in await self?.stopCapture() }
       }
+    }
+  }
+
+  /// The schedule can be up to `MeetingSchedulePollPolicy.idleFetchIntervalMs`
+  /// old while automatic recording is off. A call with no calendar match then
+  /// fetches it now and, if the question is still showing unanswered,
+  /// matches again, so an event added minutes ago still names the recording.
+  private func matchCallPromptAfterRefreshIfStale(_ call: DetectedCall, nowMs: Int64) {
+    guard let last = lastScheduleFetchMs,
+          nowMs - last >= MeetingSchedulePollPolicy.activeFetchIntervalMs else { return }
+    Task { @MainActor [weak self] in
+      guard let self else { return }
+      await self.pollSchedule()
+      guard let prompt = self.callPrompt, prompt.call.id == call.id, prompt.intent == nil,
+            let intent = CallCalendarMatcher.match(call, intents: self.scheduleIntents, nowMs: Self.nowMs())
+      else { return }
+      self.callPrompt = DetectedCallPrompt(call: prompt.call, intent: intent)
     }
   }
 
@@ -486,6 +524,7 @@ final class MeetingCaptureCoordinator {
 
   #if DEBUG
   func showCallPromptForPreview(_ prompt: DetectedCallPrompt) { callPrompt = prompt }
+  func setLastScheduleFetchForTesting(_ ms: Int64?) { lastScheduleFetchMs = ms }
   #endif
 
   private func lifecycleLog(_ event: String, call: DetectedCall) {
@@ -499,9 +538,21 @@ final class MeetingCaptureCoordinator {
 
   private func scheduleLoop() async {
     while !Task.isCancelled {
-      await pollSchedule()
-      try? await Task.sleep(nanoseconds: Self.schedulePollSeconds * 1_000_000_000)
+      await pollScheduleIfDue()
+      try? await Task.sleep(for: .seconds(Self.schedulePollSeconds), tolerance: .seconds(5))
     }
+  }
+
+  /// The minute tick of the schedule loop. It fetches as before unless
+  /// `MeetingSchedulePollPolicy` says nothing needs a fresh schedule yet.
+  func pollScheduleIfDue(nowMs: Int64 = MeetingCaptureCoordinator.nowMs()) async {
+    guard MeetingSchedulePollPolicy.shouldPoll(
+      nowMs: nowMs, lastFetchMs: lastScheduleFetchMs,
+      automaticRecording: settings.meetingModeEnabled,
+      capturing: activeSessionID != nil || captureTransitionInProgress,
+      intents: scheduleIntents
+    ) else { return }
+    await pollSchedule()
   }
 
   func pollSchedule() async {
@@ -537,9 +588,11 @@ final class MeetingCaptureCoordinator {
         guard generation == signOutGeneration else { return }
         settings.cacheMeetingSchedule(fresh)
         intents = fresh
+        lastScheduleFetchMs = now
       } catch {
         guard generation == signOutGeneration else { return }
         scheduleFetchFailed = true
+        lastScheduleFetchMs = nil
         lastFailureCode = "schedule"
         intents = cachedSchedule(now: now)
         if !isBusy {
@@ -551,6 +604,7 @@ final class MeetingCaptureCoordinator {
         DiagnosticsService.capture(error: error, category: "network", code: "meeting_schedule")
       }
     } else {
+      lastScheduleFetchMs = nil
       intents = cachedSchedule(now: now)
       if intents.isEmpty {
         await updateUnpairedStatus()
@@ -1285,9 +1339,9 @@ final class MeetingCaptureCoordinator {
 
   private func heartbeatLoop() async {
     while !Task.isCancelled {
-      await sendHeartbeat()
+      await sendHeartbeatIfDue()
       await stopCaptureIfStorageExhausted()
-      try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+      try? await Task.sleep(for: .seconds(60), tolerance: .seconds(5))
     }
   }
 
@@ -1302,12 +1356,35 @@ final class MeetingCaptureCoordinator {
     Task { @MainActor [weak self] in await self?.stopCapture() }
   }
 
-  private func sendHeartbeat() async {
+  /// The minute tick of the heartbeat loop. Sends as before unless
+  /// `MeetingHeartbeatPolicy` says Atlas already has this state.
+  func sendHeartbeatIfDue(nowMs: Int64 = MeetingCaptureCoordinator.nowMs()) async {
     guard let client = await atlasClient() else { return }
-    let permissionState = [
-      "microphone": microphonePermission.isGranted ? "granted" : "denied",
-      "screenRecording": CGPreflightScreenCaptureAccess() ? "granted" : "denied",
-    ]
+    let state = heartbeatState()
+    guard MeetingHeartbeatPolicy.shouldSend(
+      nowMs: nowMs, lastSent: lastHeartbeat, state: state,
+      busy: isBusy || captureTransitionInProgress
+    ) else { return }
+    let diskState = await localDiskState()
+    let appVersion =
+      Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+    do {
+      try await client.heartbeat(
+        appVersion: appVersion,
+        permissionState: state.permissionState,
+        diskState: diskState,
+        captureState: state.captureState,
+        lastFailureReason: state.lastFailureReason
+      )
+      lastHeartbeat = (nowMs, state)
+    } catch {
+      lastHeartbeat = nil
+    }
+  }
+
+  /// What a heartbeat reports, apart from disk state (an XPC query, read
+  /// only when one is sent).
+  private func heartbeatState() -> MeetingHeartbeatPolicy.State {
     let captureState: String
     switch status {
     case .recording: captureState = "recording"
@@ -1316,13 +1393,11 @@ final class MeetingCaptureCoordinator {
     case .uncovered: captureState = "uncovered"
     case .covered: captureState = "idle"
     }
-    let diskState = await localDiskState()
-    let appVersion =
-      Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
-    try? await client.heartbeat(
-      appVersion: appVersion,
-      permissionState: permissionState,
-      diskState: diskState,
+    return MeetingHeartbeatPolicy.State(
+      permissionState: [
+        "microphone": microphonePermission.isGranted ? "granted" : "denied",
+        "screenRecording": CGPreflightScreenCaptureAccess() ? "granted" : "denied",
+      ],
       captureState: captureState,
       lastFailureReason: lastFailureCode
     )
@@ -1468,6 +1543,49 @@ enum MeetingRecoveryPriority {
 enum MeetingRecoveryBatchOwnership {
   static func shouldClear(completing: UUID, current: UUID?) -> Bool {
     completing == current
+  }
+}
+
+/// How often the schedule loop fetches the 7-day schedule from Atlas. It
+/// ticks every minute, and fetches every minute (as it always did) while
+/// automatic recording is on, a recording is running or starting, the last
+/// fetch failed or never happened, or a cached meeting starts or ends within
+/// 15 minutes. Otherwise the calendar list only needs to stay roughly current,
+/// so it fetches every 10 minutes. Refresh in the Meetings screen and a sign-in
+/// still fetch at once.
+enum MeetingSchedulePollPolicy {
+  static let activeFetchIntervalMs: Int64 = 60_000
+  static let idleFetchIntervalMs: Int64 = 10 * 60_000
+  static let nearMeetingMs: Int64 = 15 * 60_000
+
+  static func shouldPoll(
+    nowMs: Int64, lastFetchMs: Int64?, automaticRecording: Bool, capturing: Bool,
+    intents: [AtlasCaptureScheduleIntent]
+  ) -> Bool {
+    guard let lastFetchMs, !automaticRecording, !capturing, nowMs >= lastFetchMs else { return true }
+    if nowMs - lastFetchMs >= idleFetchIntervalMs { return true }
+    return intents.contains { $0.startMs - nearMeetingMs <= nowMs && nowMs <= $0.endMs + nearMeetingMs }
+  }
+}
+
+/// How often the heartbeat loop reports this Mac's state to Atlas. It ticks
+/// every minute and sends every minute (as it always did) while recording,
+/// uploading or starting a capture, after a failed send, and whenever the
+/// reported state changes. While nothing changes it sends every 5 minutes.
+/// Disk state is read only for a send, so a change there can take 5 minutes
+/// to reach Atlas while idle (every minute while recording, as before).
+enum MeetingHeartbeatPolicy {
+  struct State: Equatable {
+    var permissionState: [String: String]
+    var captureState: String
+    var lastFailureReason: String?
+  }
+
+  static let idleIntervalMs: Int64 = 5 * 60_000
+
+  static func shouldSend(nowMs: Int64, lastSent: (atMs: Int64, state: State)?, state: State, busy: Bool) -> Bool {
+    guard let lastSent, !busy, lastSent.state == state, nowMs >= lastSent.atMs else { return true }
+    return nowMs - lastSent.atMs >= idleIntervalMs
   }
 }
 

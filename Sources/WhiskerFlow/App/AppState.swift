@@ -105,8 +105,6 @@ final class AppState {
     /// A release-time decode can take far longer on a slow Mac; its record is
     /// already saved as transcribing, and the next launch marks it for retry.
     private static let shutdownDrainSeconds: TimeInterval = 5
-    /// How often the Meetings view's free-space verdict is re-measured off-main.
-    private static let meetingStorageRefreshSeconds: UInt64 = 60
 
     var records: [TranscriptRecord] = []
     var selectedRecordID: TranscriptRecord.ID?
@@ -223,7 +221,6 @@ final class AppState {
     private var finishWorkTokens: [UUID: UUID] = [:]
     private var retryAllTask: Task<Void, Never>?
     private var meetingStorageTask: Task<Void, Never>?
-    private var meetingStoragePollTask: Task<Void, Never>?
     /// Cached Keychain state. Views and the hotkey path read these instead of the
     /// Keychain, which can block the main thread on a slow securityd or an ACL
     /// prompt; see `refreshAtlasAccountCache()`.
@@ -640,9 +637,10 @@ final class AppState {
 
     /// Cached, because the capacity query can synchronously wait on CacheDelete
     /// XPC; it is re-measured off the main thread by
-    /// `refreshMeetingStorageAvailability()`. The coordinator re-checks before
-    /// any capture starts, so the optimistic launch value never records on a
-    /// full disk.
+    /// `refreshMeetingStorageAvailability()` at launch, on activation and
+    /// every 30 s while the Meetings screen (its only reader) is showing. The
+    /// coordinator re-checks before any capture starts, so the optimistic
+    /// launch value never records on a full disk.
     private(set) var isMeetingStorageAvailable = true
 
     func refreshMeetingStorageAvailability() {
@@ -655,16 +653,6 @@ final class AppState {
             self.meetingStorageTask = nil
             let available = state == "ready"
             if self.isMeetingStorageAvailable != available { self.isMeetingStorageAvailable = available }
-        }
-    }
-
-    private func startMeetingStoragePolling() {
-        meetingStoragePollTask?.cancel()
-        meetingStoragePollTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                self?.refreshMeetingStorageAvailability()
-                try? await Task.sleep(nanoseconds: Self.meetingStorageRefreshSeconds * 1_000_000_000)
-            }
         }
     }
 
@@ -717,7 +705,6 @@ final class AppState {
         prepareNextCapture()
         refreshMeetingStorageAvailability()
         meetingCapture.start()
-        startMeetingStoragePolling()
         hudController = RecordingHUDController(appState: self)
         warmUpEngine()
         configureCleanup()
@@ -769,8 +756,6 @@ final class AppState {
         }
         audioDeviceMonitor?.stop()
         audioDeviceMonitor = nil
-        meetingStoragePollTask?.cancel()
-        meetingStoragePollTask = nil
         meetingCapture.stopMonitoring()
     }
 
@@ -1131,6 +1116,13 @@ final class AppState {
   func refreshMeetingSchedule() {
         guard !UIPreview.isEnabled else { return }
     meetingCapture.refreshSchedule()
+  }
+
+  /// For the Meetings screen as it opens: fetches only if the list is over a
+  /// minute old.
+  func refreshMeetingScheduleIfStale() {
+        guard !UIPreview.isEnabled else { return }
+    meetingCapture.refreshScheduleIfStale()
   }
 
   func recordScheduledMeeting(_ intent: AtlasCaptureScheduleIntent) {
@@ -1813,9 +1805,11 @@ final class AppState {
                 options: [.userInitiated, .latencyCritical],
                 reason: "Dictation in progress"
             )
+            LocalDiagnostics.setDictationActive(true)
         } else if !active, let activity = dictationActivity {
             ProcessInfo.processInfo.endActivity(activity)
             dictationActivity = nil
+            LocalDiagnostics.setDictationActive(false)
         }
     }
 

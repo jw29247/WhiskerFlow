@@ -24,6 +24,9 @@ final class LeaderboardController {
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private var reporting: Task<Bool, Never>?
     @ObservationIgnored private var periodic: Task<Void, Never>?
+    /// What Atlas has accepted for each day in this launch, so the periodic
+    /// report can skip a resend.
+    @ObservationIgnored private var acceptedDays: [String: LeaderboardDay] = [:]
     @ObservationIgnored private var showsPreview = false
     /// Bumped by `signOut()`, so a board or report still in flight is dropped.
     @ObservationIgnored private var accountGeneration = 0
@@ -87,16 +90,17 @@ final class LeaderboardController {
         guard periodic == nil else { return }
         periodic = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                await self?.report()
-                try? await Task.sleep(nanoseconds: Self.reportIntervalNanoseconds)
+                await self?.report(onlyIfChanged: true)
+                try? await Task.sleep(for: .nanoseconds(Self.reportIntervalNanoseconds), tolerance: .seconds(60))
             }
         }
     }
 
     /// Sends the days Atlas doesn't have yet. Returns whether it succeeded;
-    /// a failure is retried on the next report.
+    /// a failure is retried on the next report. `onlyIfChanged` (the periodic
+    /// report) sends nothing when the days are the ones Atlas last accepted.
     @discardableResult
-    func report() async -> Bool {
+    func report(onlyIfChanged: Bool = false) async -> Bool {
         if let reporting { return await reporting.value }
         let task = Task { @MainActor [weak self] () -> Bool in
             guard let self, let client = self.client() else { return false }
@@ -105,6 +109,7 @@ final class LeaderboardController {
             let boundary = self.reportsFrom
             let days = LeaderboardReport.daysToSend(self.usageDays(self.meetingTally), reportedThrough: self.reportedThrough, today: today)
                 .filter { day in boundary.map { day.day >= $0 } ?? true }
+            if onlyIfChanged, !days.isEmpty, days.allSatisfy({ self.acceptedDays[$0.day.key] == $0 }) { return true }
             do {
                 for start in stride(from: 0, to: days.count, by: LeaderboardReport.maximumDaysPerRequest) {
                     let end = min(start + LeaderboardReport.maximumDaysPerRequest, days.count)
@@ -112,6 +117,7 @@ final class LeaderboardController {
                 }
                 guard generation == self.accountGeneration else { return false }
                 self.reportedThrough = today
+                for day in days { self.acceptedDays[day.day.key] = day }
                 return true
             } catch {
                 return false
@@ -154,6 +160,7 @@ final class LeaderboardController {
     /// accepted. The meeting tally is this Mac's own count and stays.
     func signOut() {
         accountGeneration &+= 1
+        acceptedDays = [:]
         periodic?.cancel()
         periodic = nil
         reporting?.cancel()
