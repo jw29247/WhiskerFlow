@@ -14,7 +14,8 @@ Atlas and others, and what the app reads.
   dictation audio and transcripts stay on the Mac. Meeting recordings and their
   transcripts are uploaded to Atlas, and the team leaderboard on Atlas shows colleagues
   your name and daily counts (never text). No telemetry or crash reports are sent;
-  diagnostics stay on this Mac.
+  diagnostics stay on this Mac (2.1.1 and earlier still send them; see
+  [PRIVACY.md](PRIVACY.md)).
 - **Nothing else to install** — no Python, no Homebrew. The model downloads itself on first use.
 - **Works offline too** — once you are signed in, a built-in Apple Speech engine needs no
   download, for the languages macOS can recognise on this Mac. It never sends audio to Apple.

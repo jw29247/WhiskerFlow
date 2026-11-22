@@ -1,6 +1,8 @@
 # WhiskerFlow privacy
 
-Last updated: 22 November 2026. Describes WhiskerFlow 2.1.0.
+Last updated: 22 November 2026. Describes the next release of WhiskerFlow, the
+version after 2.1.1. Released versions differ in a few ways, listed under
+"Earlier versions" at the end.
 
 WhiskerFlow is That Works' internal dictation and meeting-recording tool for
 macOS. That Works is responsible for it. Questions about this page or about
@@ -18,7 +20,8 @@ This page describes what the software does. It is not a legal statement.
 - The team leaderboard on Atlas shows colleagues your name and your daily
   counts. It never shows any text.
 - WhiskerFlow sends no telemetry, analytics or crash reports. Its diagnostic
-  logs stay on your Mac.
+  logs stay on your Mac. (Versions up to 2.1.1 do send diagnostics; see
+  "Earlier versions".)
 
 ## What stays on your Mac
 
@@ -169,8 +172,8 @@ later fetches the notes Atlas writes for the meeting.
   Atlas AI when I request it** (off by default); with it off, preparation is
   done on your Mac. Atlas passes these requests to its AI provider.
 - **Review latest meeting** asks Atlas AI to review a meeting already on
-  Atlas, sending your goal with it. In 2.1.0 this button works even when the
-  Atlas AI switch is off.
+  Atlas, sending your goal with it. At present this button works even when
+  the Atlas AI switch is off.
 - **Send** on a draft saves its title and text to Atlas as a private draft.
 - The client list and a client's vocabulary are downloaded when you refresh
   them or pick a client.
@@ -184,7 +187,7 @@ WhiskerFlow sends Atlas your daily totals: words, dictations, seconds spoken,
 estimated time saved, meetings recorded and meeting minutes. The first report
 sends every day Insights holds. Never any text. Colleagues with leaderboard
 access see your name, picture and these counts, plus your streaks. There
-is no switch to turn this off in 2.1.0. Pictures on the board are loaded from
+is no switch to turn this off yet. Pictures on the board are loaded from
 the address Atlas gives for each person.
 
 ### Apple
@@ -204,7 +207,7 @@ the address Atlas gives for each person.
 WhiskerFlow downloads models from `huggingface.co`:
 - the Parakeet dictation model, the first time you dictate;
 - a small vocabulary model, only if Dictionary hints for Parakeet are on
-  (off by default; 2.1.0 has no control for it in Settings);
+  (off by default, with no control in Settings);
 - the Cleanup model, only when you choose to download it.
 
 These downloads send nothing about you except what any download does (your IP
@@ -213,8 +216,7 @@ address).
 ### GitHub (updates)
 
 WhiskerFlow checks for updates once a day through Sparkle. It reads the update
-list from `raw.githubusercontent.com` and downloads updates from GitHub
-Releases. GitHub sees your IP address and the app's name and version. Turn off
+list from GitHub and downloads updates from GitHub Releases. GitHub sees your IP address and the app's name and version. Turn off
 **Automatically check for updates** in Settings → App to stop the daily check.
 
 Nothing else is contacted, apart from the links you click (for example this
@@ -267,7 +269,7 @@ having their agreement where it is needed, is your responsibility.
 
 ## Signing out and uninstalling
 
-**Signing out.** WhiskerFlow 2.1.0 has no sign-out button. Your device token
+**Signing out.** WhiskerFlow has no sign-out button yet. Your device token
 stays in your Keychain until you remove it (Keychain Access, item
 `agency.thatworks.WhiskerFlow.meeting-capture`).
 
@@ -284,3 +286,17 @@ you remove them:
 
 Anything already sent to Atlas (meetings, transcripts, notes, drafts and
 leaderboard counts) stays in Atlas. Ask That Works about it.
+
+## Earlier versions
+
+- **2.1.1 and earlier** also send diagnostics off your Mac. Timings, resource
+  use and error codes, tagged with an installation identifier kept on your
+  Mac, go to Superlog through a relay hosted on Railway. Crash, hang and error
+  reports go to Sentry. Neither includes audio or transcript text. The next
+  release removes both.
+- **2.1.1 and earlier** download the shared glossary from this public GitHub
+  repository, not from Atlas.
+- **2.0.0 to 2.1.0** switched automatic meeting recording on without asking.
+  2.1.1 switches it back off and asks once.
+- **Versions before 2.1.1** could let macOS send Apple Speech audio to Apple
+  for a language it could not recognise on your Mac.
