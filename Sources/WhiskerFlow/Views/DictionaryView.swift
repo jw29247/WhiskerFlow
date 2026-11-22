@@ -67,7 +67,7 @@ struct DictionaryView: View {
                     Button("Allow Accessibility") { appState.requestAccessibilityPermission() }
                 }
             }
-            Text("\(appState.dictionary.entries.count) saved corrections. Everything stays on this Mac. Existing saved spellings are kept.")
+            Text("\(CountPhrase.of(appState.dictionary.entries.count, "saved correction")). Everything stays on this Mac. Existing saved spellings are kept.")
                 .font(.caption).foregroundStyle(FlowStyle.muted)
         }.padding(32)
     }

@@ -185,7 +185,7 @@ struct SettingsView: View {
                         in: InsightsSummary.typingWordsPerMinuteRange, step: 5) {
                     LabeledContent("Your typing speed", value: "\(appState.settings.typingWordsPerMinute) wpm")
                 }
-                Text("Insights keep counts only — words, speaking time, app and engine — never transcript text. They stay on this Mac and are kept whatever the history setting.")
+                Text("Insights keep counts only — words, speaking time, app and engine — never transcript text. They stay on this Mac, whatever the history setting; only daily totals go to the team leaderboard.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Reset insights…", role: .destructive) { confirmResetInsights = true }

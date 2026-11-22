@@ -58,7 +58,7 @@ screen: forever, 1 year, 90 days (the default), 30 days, 7 days, 24 hours, or
   in memory for a few minutes so you can copy it. Failed recordings are still
   kept for 24 hours so you can retry them.
 - The retention setting covers History and dictation audio only. It does not
-  cover Insights, the Dictionary, meetings, or the backups described next.
+  cover Insights, Corrections, meetings, or the backups described next.
 
 **Backups of unreadable history.** If WhiskerFlow finds its history file
 damaged, it moves it aside as `transcripts.corrupt-<number>.sqlite` (or, for
@@ -66,14 +66,16 @@ history from older versions, `transcripts.corrupt-<number>.json`) in the same
 folder and starts a new history. These backups may be the only copy of your
 old transcripts, so WhiskerFlow never deletes them and the retention setting
 does not apply to them. Delete them yourself if you don't need them. Damaged
-Dictionary and meeting files are likewise left in place, never overwritten.
+Corrections and meeting files are likewise left in place, never overwritten.
 
-### Dictionary and learned corrections
+### Corrections
 
-Your Dictionary (`Dictionary/dictionary.json`) and learned corrections
-(`Corrections/corrections.json`) are kept until you delete them.
+Your corrections (`Dictionary/dictionary.json`) are kept until you delete
+them. Versions before 2.1 also kept learned corrections in
+`Corrections/corrections.json`; WhiskerFlow no longer uses that file and
+leaves it in place.
 
-With **Learn from my corrections** on (the default, in the Dictionary screen),
+With **Learn from my corrections** on (the default, in the Corrections screen),
 WhiskerFlow briefly reads the text field you pasted into, before and after
 your edit, to learn names and fixes. Only the corrected words are saved, not
 the surrounding text.
@@ -206,7 +208,7 @@ the address Atlas gives for each person.
 
 WhiskerFlow downloads models from `huggingface.co`:
 - the Parakeet dictation model, the first time you dictate;
-- a small vocabulary model, only if Dictionary hints for Parakeet are on
+- a small vocabulary model, only if hints from Corrections for Parakeet are on
   (off by default, with no control in Settings);
 - the Cleanup model, only when you choose to download it.
 
@@ -237,7 +239,7 @@ page or a model licence), which open in your browser.
     browser, the page address or window title. These stay in memory; only the
     category is saved.
   - To learn corrections: it reads the text field around a paste (see
-    Dictionary above).
+    Corrections above).
   - For voice editing: it reads the text you have selected.
   - During a Google Meet recording in Chrome: it reads Meet's participant
     names and speaking indicators to label the transcript. Those names are part
@@ -276,7 +278,7 @@ stays in your Keychain until you remove it (Keychain Access, item
 **Uninstalling.** Deleting the app does not delete its data. These stay until
 you remove them:
 - `~/Library/Application Support/WhiskerFlow` (history, audio, meetings,
-  Dictionary, Insights, Assistant data and models);
+  Corrections, Insights, Assistant data and models);
 - `~/Library/Application Support/FluidAudio/Models` (the Parakeet models);
 - `~/Library/Logs/WhiskerFlow` (diagnostic logs);
 - the preferences for `agency.thatworks.WhiskerFlow`;

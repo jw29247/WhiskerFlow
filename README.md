@@ -23,7 +23,7 @@ Atlas and others, and what the app reads.
   is written in that category's tone (Formal, Casual, Very casual or Literal). Browsers are sorted by the
   website you're on. Change tones, or move individual apps, in **Assistant → Styles**; all rules run on this Mac.
 - **Floating HUD** with a live level meter, a rich menu-bar popover, searchable/editable
-  history, a Dictionary that learns names and fixes from your corrections (and can hint them to the recogniser), configurable hotkey, and hold-to-talk or tap-to-toggle modes.
+  history, Corrections that learn names and fixes from the words you fix (and can hint them to the recogniser), configurable hotkey, and hold-to-talk or tap-to-toggle modes.
 
 ## Requirements
 
