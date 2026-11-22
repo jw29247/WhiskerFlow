@@ -13,6 +13,7 @@ struct AtlasSignInGate: View {
             Image(systemName: "person.crop.circle.badge.checkmark")
                 .font(.system(size: 46, weight: .light))
                 .foregroundStyle(FlowStyle.accent)
+                .accessibilityHidden(true)
             Text("Sign in with Atlas to use WhiskerFlow")
                 .font(.system(size: 24, weight: .semibold, design: .rounded))
             Text("WhiskerFlow now uses your Atlas account for the team leaderboard, meeting recordings, the Assistant and each client's vocabulary. Dictation starts working as soon as you're signed in.")

@@ -157,6 +157,7 @@ struct OnboardingHeading: View {
         VStack(spacing: 12) {
             if let symbol {
                 Image(systemName: symbol).font(.system(size: 30, weight: .light)).foregroundStyle(FlowStyle.accent)
+                    .accessibilityHidden(true)
             }
             Text(title).font(.system(size: 28, weight: .semibold, design: .rounded)).tracking(-0.6)
                 .multilineTextAlignment(.center)

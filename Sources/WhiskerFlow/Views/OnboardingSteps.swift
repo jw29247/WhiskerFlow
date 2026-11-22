@@ -103,6 +103,7 @@ struct OnboardingPermissionsStep: View {
         OnboardingCard {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: symbol).font(.system(size: 20)).frame(width: 26).foregroundStyle(FlowStyle.accent)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
                     HStack {
                         Text(title).font(.system(size: 14, weight: .medium))
@@ -348,7 +349,10 @@ struct OnboardingShortcutStep: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
-                    if passed { Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(.green) }
+                    if passed {
+                        Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(.green)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
         }
@@ -385,6 +389,7 @@ struct OnboardingShortcutStep: View {
                     }
                 }
                 .font(.system(size: 20, weight: .medium, design: .rounded)).frame(height: 24)
+                .accessibilityHidden(true)
                 Text(choice == .fn ? "fn / Globe" : (choice == .custom ? "Custom" : choice.displayName))
                     .font(.system(size: 12, weight: selected ? .medium : .regular))
             }
@@ -490,6 +495,7 @@ struct OnboardingModelStep: View {
                     }
                     if appState.modelState == .ready {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            .accessibilityLabel("Ready")
                     }
                 }
                 if appState.modelState.isFailure {
