@@ -27,11 +27,19 @@ final class AsyncTimeoutTests: XCTestCase {
     }
 
     func testThrowsWhenDeadlineWins() async {
-        do {
-            _ = try await withTimeout(seconds: 0.01) {
-                try await Task.sleep(nanoseconds: 1_000_000_000)
+        let deadline = ManualDeadline()
+        let caller = Task {
+            try await withTimeout(seconds: 0.01, sleep: deadline.sleep) {
+                // Cancelled by the timeout; it never runs out.
+                try await Task.sleep(nanoseconds: 60_000_000_000)
                 return "late"
             }
+        }
+        await deadline.untilRequested(1)
+        XCTAssertEqual(deadline.requested, [10_000_000])
+        deadline.fire()
+        do {
+            _ = try await caller.value
             XCTFail("Expected timeout")
         } catch {
             XCTAssertEqual(error as? AsyncTimeoutError, .timedOut)
@@ -56,14 +64,20 @@ final class AsyncTimeoutTests: XCTestCase {
         let release = TestFlag()
         let completed = TestFlag()
 
-        do {
-            _ = try await withAbandoningDeadline(seconds: 0.05) {
+        let deadline = ManualDeadline()
+        let caller = Task {
+            try await withAbandoningDeadline(seconds: 0.05, sleep: deadline.sleep) {
                 while !release.isSet {
                     await Task.yield()
                 }
                 completed.set()
                 return "late"
             }
+        }
+        await deadline.untilRequested(1)
+        deadline.fire()
+        do {
+            _ = try await caller.value
             XCTFail("Expected timeout")
         } catch {
             XCTAssertEqual(error as? AsyncTimeoutError, .timedOut)
@@ -75,34 +89,49 @@ final class AsyncTimeoutTests: XCTestCase {
 
     func testAbandoningDeadlineDoesNotResumeTwiceWhenAbandonedWorkFinishes() async {
         let release = TestFlag()
-
-        do {
-            _ = try await withAbandoningDeadline(seconds: 0.05) {
+        let finished = expectation(description: "abandoned work finished")
+        let deadline = ManualDeadline()
+        let caller = Task {
+            try await withAbandoningDeadline(seconds: 0.05, sleep: deadline.sleep) {
+                defer { finished.fulfill() }
                 while !release.isSet {
                     await Task.yield()
                 }
                 return "late"
             }
+        }
+        await deadline.untilRequested(1)
+        deadline.fire()
+        do {
+            _ = try await caller.value
             XCTFail("Expected timeout")
         } catch {
             XCTAssertEqual(error as? AsyncTimeoutError, .timedOut)
         }
 
         release.set()
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        await fulfillment(of: [finished], timeout: 10)
+        // The abandoned work resumes the wait a moment after it returns. A
+        // second resume traps the process, so give it a short, bounded chance
+        // to happen here rather than in a later test. This is the only real
+        // wait left in this file.
+        try? await Task.sleep(nanoseconds: 10_000_000)
     }
 
     /// A cancelled caller (quit drain, capture restart) must stop waiting at once
     /// instead of sitting out the whole deadline behind a non-cooperative decode.
     func testAbandoningDeadlineReturnsAsSoonAsTheCallerIsCancelled() async {
         let release = TestFlag()
+        let running = expectation(description: "operation running")
         let caller = Task {
+            // 30 s is only a ceiling: a passing run never reaches it.
             try await withAbandoningDeadline(seconds: 30) {
+                running.fulfill()
                 while !release.isSet { await Task.yield() }
                 return "late"
             }
         }
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        await fulfillment(of: [running], timeout: 10)
         let started = Date()
         caller.cancel()
         do {
@@ -133,19 +162,21 @@ final class AsyncTimeoutTests: XCTestCase {
 
     func testAbandoningCancellationWaitsWithoutADeadlineButHonoursCancel() async throws {
         let value = try await withAbandoningCancellation {
-            try await Task.sleep(nanoseconds: 50_000_000)
+            await Task.yield()
             return "done"
         }
         XCTAssertEqual(value, "done")
 
         let release = TestFlag()
+        let running = expectation(description: "operation running")
         let caller = Task {
             try await withAbandoningCancellation {
+                running.fulfill()
                 while !release.isSet { await Task.yield() }
                 return "late"
             }
         }
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        await fulfillment(of: [running], timeout: 10)
         caller.cancel()
         do {
             _ = try await caller.value

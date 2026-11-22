@@ -115,7 +115,8 @@ final class MeetingCoordinatorTests: XCTestCase {
     }
 
     func testTimedOutDecodeKeepsGateOccupiedUntilUnderlyingWorkActuallySettles() async throws {
-        let gate = ModelDecodeGate()
+        let deadline = ManualDeadline()
+        let gate = ModelDecodeGate(sleep: deadline.sleep)
         let workStarted = expectation(description: "work started")
         let releaseWork = AsyncMeetingTestLatch()
         let timedOut = Task {
@@ -125,7 +126,9 @@ final class MeetingCoordinatorTests: XCTestCase {
                 return "late result"
             }
         }
-        await fulfillment(of: [workStarted], timeout: 1)
+        await fulfillment(of: [workStarted], timeout: 10)
+        await deadline.untilRequested(1)
+        deadline.fire()
         do {
             _ = try await timedOut.value
             XCTFail("The caller should be released at its deadline")
@@ -139,10 +142,7 @@ final class MeetingCoordinatorTests: XCTestCase {
         } catch ModelDecodeGateError.occupied {}
 
         await releaseWork.open()
-        for _ in 0..<100 {
-            if await !(gate.isOccupied) { break }
-            try await Task.sleep(nanoseconds: 1_000_000)
-        }
+        await gate.settling?.value
         let occupiedAfterSettlement = await gate.isOccupied
         XCTAssertFalse(occupiedAfterSettlement)
         let next = try await gate.run(seconds: 1) { "next" }
