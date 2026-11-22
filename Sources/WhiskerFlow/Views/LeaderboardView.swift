@@ -11,7 +11,7 @@ struct LeaderboardView: View {
         @Bindable var leaderboard = leaderboard
         VStack(spacing: 0) {
             HStack(spacing: 14) {
-                Text("Leaderboard").font(.system(size: 24, weight: .semibold, design: .rounded))
+                Text("Leaderboard").font(FlowStyle.heading)
                 Spacer()
                 Picker("Period", selection: $leaderboard.window) {
                     ForEach(LeaderboardWindow.allCases) { Text($0.title).tag($0) }
@@ -68,7 +68,7 @@ struct LeaderboardView: View {
                 Text("Updated \(updated.formatted(date: .omitted, time: .shortened))")
             }
         }
-        .font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
+        .font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
         .padding(.horizontal, 28).padding(.vertical, 12)
     }
 }
@@ -85,19 +85,19 @@ private struct LeaderboardRowView: View {
             avatar
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(entry.name).font(.system(size: 14, weight: .medium))
+                    Text(entry.name).font(FlowStyle.body.weight(.medium))
                     if entry.isYou {
-                        Text("You").font(.system(size: 10, weight: .semibold))
+                        Text("You").font(FlowStyle.small.weight(.semibold))
                             .padding(.horizontal, 6).padding(.vertical, 2)
                             .background(FlowStyle.accent.opacity(0.18), in: Capsule())
                             .foregroundStyle(FlowStyle.accent)
                     }
                 }
-                Text(secondary).font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
+                Text(secondary).font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
             }
             Spacer()
             Text(primary)
-                .font(.system(size: 17, weight: .semibold, design: .rounded)).monospacedDigit()
+                .font(FlowStyle.lead.weight(.semibold)).fontDesign(.rounded).monospacedDigit()
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
         .background(entry.isYou ? FlowStyle.selection : FlowStyle.surface, in: RoundedRectangle(cornerRadius: 10))
@@ -113,7 +113,7 @@ private struct LeaderboardRowView: View {
                 .font(.system(size: 18))
                 .accessibilityLabel("Rank \(row.rank)")
         default:
-            Text("\(row.rank)").font(.system(size: 14, weight: .medium)).monospacedDigit().foregroundStyle(FlowStyle.muted)
+            Text("\(row.rank)").font(FlowStyle.body.weight(.medium)).monospacedDigit().foregroundStyle(FlowStyle.muted)
         }
     }
 
@@ -125,7 +125,7 @@ private struct LeaderboardRowView: View {
                 AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { Text(initials) }
                     .clipShape(Circle())
             } else {
-                Text(initials).font(.system(size: 12, weight: .semibold)).foregroundStyle(FlowStyle.accent)
+                Text(initials).font(FlowStyle.caption.weight(.semibold)).foregroundStyle(FlowStyle.accent)
             }
         }
         .frame(width: 32, height: 32)

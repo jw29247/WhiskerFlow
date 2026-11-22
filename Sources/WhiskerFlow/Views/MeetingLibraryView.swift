@@ -12,7 +12,7 @@ struct MeetingLibraryList: View {
         let library = appState.meetingLibrary
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Your meetings · on this Mac").font(.system(size: 13, weight: .medium))
+                Text("Your meetings · on this Mac").font(FlowStyle.callout.weight(.medium))
                 Spacer()
                 Text("Transcripts kept: \(appState.settings.meetingTranscriptRetention.displayName.lowercased())")
                     .font(.caption).foregroundStyle(FlowStyle.muted)
@@ -42,7 +42,7 @@ struct MeetingLibraryList: View {
             Button { open(entry.sessionID) } label: {
                 HStack(spacing: 14) {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(entry.title).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                        Text(entry.title).font(FlowStyle.body.weight(.medium)).lineLimit(1)
                         HStack(spacing: 6) {
                             Text(entry.startedAt, format: .dateTime.day().month(.abbreviated).hour().minute())
                             if let duration = entry.durationMs, duration > 0 {
@@ -50,7 +50,7 @@ struct MeetingLibraryList: View {
                             }
                             if !entry.notes.isEmpty { Text("·"); Label("\(entry.notes.count)", systemImage: "note.text") }
                             if !entry.bookmarks.isEmpty { Text("·"); Label("\(entry.bookmarks.count)", systemImage: "bookmark") }
-                        }.font(.system(size: 12)).foregroundStyle(FlowStyle.muted).labelStyle(.titleAndIcon)
+                        }.font(FlowStyle.caption).foregroundStyle(FlowStyle.muted).labelStyle(.titleAndIcon)
                         if entry.status == .failed || entry.status == .queued, let detail = entry.statusDetail {
                             Text(detail).font(.caption).foregroundStyle(FlowStyle.muted).lineLimit(2)
                         }
@@ -82,7 +82,7 @@ struct MeetingStatusPill: View {
             }
             Text(status.displayName)
         }
-        .font(.system(size: 11, weight: .medium))
+        .font(FlowStyle.small.weight(.medium))
         .foregroundStyle(color)
         .padding(.horizontal, 9).padding(.vertical, 4)
         .background(color.opacity(0.12), in: Capsule())
@@ -141,7 +141,7 @@ struct MeetingNotepadView: View {
                     ForEach(notes.reversed()) { note in
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
                             Text(MeetingTimeline.timestamp(note.elapsedMs))
-                                .font(.system(size: 12, design: .monospaced)).foregroundStyle(FlowStyle.muted)
+                                .font(FlowStyle.caption.monospaced()).foregroundStyle(FlowStyle.muted)
                             Text(note.text).font(.callout).textSelection(.enabled)
                         }
                     }
@@ -276,7 +276,7 @@ struct MeetingDetailView: View {
                 .keyboardShortcut("[", modifiers: .command).help("Back to meetings · ⌘[")
                 .accessibilityLabel("Back to meetings")
             VStack(alignment: .leading, spacing: 7) {
-                Text(entry.title).font(.system(size: 24, weight: .semibold, design: .rounded)).lineLimit(2)
+                Text(entry.title).font(FlowStyle.heading).lineLimit(2)
                 HStack(spacing: 8) {
                     Text(entry.startedAt, format: .dateTime.weekday(.wide).day().month().hour().minute())
                     if isLive, let elapsed = appState.activeMeetingElapsedMs {
@@ -285,7 +285,7 @@ struct MeetingDetailView: View {
                         Text("·"); Text(MeetingTimeline.timestamp(duration))
                     }
                     MeetingStatusPill(status: entry.status)
-                }.font(.system(size: 12)).foregroundStyle(FlowStyle.muted)
+                }.font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
                 if let detail = entry.statusDetail, entry.status != .delivered {
                     Text(detail).font(.caption).foregroundStyle(FlowStyle.muted).textSelection(.enabled)
                 }
@@ -357,7 +357,7 @@ struct MeetingDetailView: View {
             + entry.dictations.map { ("dictation-\($0.id.uuidString)", $0.startMs, "mic.fill", "Dictated") }
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Moments").font(.system(size: 13, weight: .medium))
+                Text("Moments").font(FlowStyle.callout.weight(.medium))
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(items.sorted { $0.ms < $1.ms }, id: \.id) { item in
@@ -367,7 +367,7 @@ struct MeetingDetailView: View {
                                     Text(MeetingTimeline.timestamp(item.ms)).monospacedDigit().foregroundStyle(FlowStyle.muted)
                                     Text(item.text).lineLimit(1).frame(maxWidth: 180, alignment: .leading)
                                 }
-                                .font(.system(size: 12))
+                                .font(FlowStyle.caption)
                                 .padding(.horizontal, 10).padding(.vertical, 6)
                                 .background(FlowStyle.surface, in: Capsule())
                                 .overlay(Capsule().stroke(FlowStyle.line, lineWidth: 1))
@@ -413,7 +413,7 @@ struct MeetingDetailView: View {
     private func list(_ title: String, _ items: [String]) -> some View {
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: 5) {
-                Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(FlowStyle.muted)
+                Text(title).font(FlowStyle.caption.weight(.semibold)).foregroundStyle(FlowStyle.muted)
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 6) { Text("•"); Text(item).textSelection(.enabled) }
                 }
@@ -424,7 +424,7 @@ struct MeetingDetailView: View {
     private func transcript(_ entry: MeetingLibraryEntry, timeline: [MeetingTimelineItem], matchSet: Set<String>, isLive: Bool) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text("Transcript").font(.system(size: 13, weight: .medium))
+                Text("Transcript").font(FlowStyle.callout.weight(.medium))
                 Spacer()
                 if entry.untranscribedAudibleWindowCount > 0 {
                     Text("\(entry.untranscribedAudibleWindowCount) stretch\(entry.untranscribedAudibleWindowCount == 1 ? "" : "es") of audible audio couldn’t be transcribed")
@@ -468,21 +468,21 @@ struct MeetingDetailView: View {
         case .turn(_, let turn, let dictated):
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text(MeetingTimeline.timestamp(turn.startMs))
-                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(FlowStyle.muted)
+                    .font(FlowStyle.small.monospaced()).foregroundStyle(FlowStyle.muted)
                     .frame(width: 54, alignment: .trailing)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
-                        Text(turn.speaker.displayName).font(.system(size: 12, weight: .semibold))
+                        Text(turn.speaker.displayName).font(FlowStyle.caption.weight(.semibold))
                             .foregroundStyle(turn.speaker.resolution == .selfSpeaker ? FlowStyle.accent : FlowStyle.ink)
                         if dictated {
-                            Text("Dictated").font(.system(size: 10, weight: .semibold))
+                            Text("Dictated").font(FlowStyle.small.weight(.semibold))
                                 .padding(.horizontal, 6).padding(.vertical, 1)
                                 .background(FlowStyle.accent.opacity(0.14), in: Capsule())
                                 .foregroundStyle(FlowStyle.accent)
                                 .help("Spoken with push-to-talk during the meeting")
                         }
                     }
-                    Text(turn.text).font(.system(size: 14)).textSelection(.enabled)
+                    Text(turn.text).font(FlowStyle.body).textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }.padding(.vertical, 7).padding(.horizontal, 6)
@@ -502,12 +502,12 @@ struct MeetingDetailView: View {
     private func marker(ms: Int64, symbol: String, title: String, text: String, trailing: String?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(MeetingTimeline.timestamp(ms))
-                .font(.system(size: 11, design: .monospaced)).foregroundStyle(FlowStyle.muted)
+                .font(FlowStyle.small.monospaced()).foregroundStyle(FlowStyle.muted)
                 .frame(width: 54, alignment: .trailing)
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Image(systemName: symbol).foregroundStyle(FlowStyle.accent)
-                Text(title).font(.system(size: 12, weight: .semibold))
-                Text(text).font(.system(size: 13)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                Text(title).font(FlowStyle.caption.weight(.semibold))
+                Text(text).font(FlowStyle.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
                 if let trailing { Text(trailing).font(.caption).foregroundStyle(FlowStyle.muted) }
             }

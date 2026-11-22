@@ -92,7 +92,7 @@ struct CallPromptView: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("\(prompt.call.platform.displayName) call detected").font(.system(size: 12, weight: .medium))
+                    Text("\(prompt.call.platform.displayName) call detected").font(FlowStyle.caption.weight(.medium))
                         .foregroundStyle(FlowStyle.muted)
                     Spacer()
                     Button { appState.declineCallPrompt() } label: { Image(systemName: "xmark") }
@@ -100,9 +100,9 @@ struct CallPromptView: View {
                         .help("Not now")
                 }
                 if prompt.intent != nil {
-                    Text(prompt.title).font(.system(size: 14, weight: .semibold)).lineLimit(2)
+                    Text(prompt.title).font(FlowStyle.body.weight(.semibold)).lineLimit(2)
                 }
-                Text("Record this meeting?").font(.system(size: 14, weight: prompt.intent == nil ? .semibold : .regular))
+                Text("Record this meeting?").font(FlowStyle.body.weight(prompt.intent == nil ? .semibold : .regular))
                 Label("If you record, tell the other participants.", systemImage: "person.2.wave.2")
                     .font(.caption).foregroundStyle(FlowStyle.recording)
                 HStack(spacing: 8) {

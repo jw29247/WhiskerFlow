@@ -12,7 +12,7 @@ struct DictationView: View {
             ScrollView {
                 VStack(spacing: 0) {
                     HStack {
-                        Text("Dictate").font(.system(size: 15, weight: .medium))
+                        Text("Dictate").font(FlowStyle.body.weight(.medium))
                         Spacer()
                         FlowStatus(title: presentation.statusTitle, color: presentation.statusColor)
                     }
@@ -21,7 +21,7 @@ struct DictationView: View {
                     VStack(spacing: 23) {
                         LiveFlowWaveform(appState: appState, recording: appState.isRecording, size: 67)
                         Text(presentation.heading)
-                            .font(.system(size: 36, weight: .semibold, design: .rounded))
+                            .font(FlowStyle.display)
                             .tracking(-1.1)
                             .multilineTextAlignment(.center)
                             .accessibilityAddTraits(.isHeader)
@@ -30,11 +30,11 @@ struct DictationView: View {
                             FlowKeycap(title: appState.settings.hotkeyDisplayName)
                             Text(appState.isRecording ? "to finish" : "to dictate")
                         }
-                        .font(.system(size: 22, weight: .regular))
+                        .font(FlowStyle.subheading.weight(.regular)).fontDesign(.default)
                         .accessibilityElement(children: .combine)
 
                         Text(presentation.deliveryDescription)
-                            .font(.system(size: 14))
+                            .font(FlowStyle.body)
                             .foregroundStyle(FlowStyle.muted)
                             .multilineTextAlignment(.center)
 
@@ -128,7 +128,7 @@ struct DictationView: View {
         VStack(spacing: 0) {
             Divider().overlay(FlowStyle.line)
             HStack {
-                Text("Recent dictation").font(.system(size: 13, weight: .medium))
+                Text("Recent dictation").font(FlowStyle.callout.weight(.medium))
                 Spacer()
                 Button("View history") { openHistory(nil) }
                     .buttonStyle(.plain).foregroundStyle(FlowStyle.accent)
@@ -140,7 +140,7 @@ struct DictationView: View {
                     Image(systemName: "text.alignleft").foregroundStyle(FlowStyle.muted)
                         .accessibilityHidden(true)
                     Text("Your words will appear here after your first dictation.")
-                        .font(.system(size: 13)).foregroundStyle(FlowStyle.muted)
+                        .font(FlowStyle.callout).foregroundStyle(FlowStyle.muted)
                     Spacer()
                 }.padding(.vertical, 20)
             } else {
@@ -152,11 +152,11 @@ struct DictationView: View {
                                 .contentShape(Rectangle())
                         }.buttonStyle(.plain)
                         Text(record.createdAt, format: .dateTime.month(.abbreviated).day().hour().minute())
-                            .font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
+                            .font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
                         FlowCopyButton(text: record.text, compact: true, copy: appState.copy)
                             .buttonStyle(.plain).foregroundStyle(FlowStyle.muted)
                     }
-                    .font(.system(size: 13)).padding(.vertical, 19)
+                    .font(FlowStyle.callout).padding(.vertical, 19)
                     if record.id != recent.last?.id { Divider().opacity(0.5) }
                 }
             }

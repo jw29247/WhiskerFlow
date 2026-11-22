@@ -41,6 +41,50 @@ enum FlowStyle {
         static let onAccent: Pair = (0xFFFFFF, 0x101522)
     }
 
+    // Text styles. Use one of these for every piece of text; for another
+    // weight, modify the style (`FlowStyle.body.weight(.medium)`) rather than
+    // picking a new size.
+
+    /// The one hero line on a screen (Dictate's heading, the welcome) and headline numbers.
+    static let display = font(TypeScale.display)
+    /// Screen titles on Meetings, Corrections, Assistant and setup steps, and large stats.
+    static let title = font(TypeScale.title)
+    /// Screen and detail titles: History, Insights, Leaderboard, a Settings category, a transcript.
+    static let heading = font(TypeScale.heading)
+    /// Sidebar names, card numbers, and large lines read at a glance.
+    static let subheading = font(TypeScale.subheading)
+    /// Text read and edited at length (a transcript), and the name or figure
+    /// that leads a compact panel or row.
+    static let lead = font(TypeScale.lead)
+    /// Reading text: transcripts, list item titles, descriptions under a heading.
+    static let body = font(TypeScale.body)
+    /// Supporting text, section labels and controls.
+    static let callout = font(TypeScale.callout)
+    /// Metadata, hints and secondary lines.
+    static let caption = font(TypeScale.caption)
+    /// The smallest text: timestamps, badges, chart labels and footers.
+    static let small = font(TypeScale.small)
+
+    /// The size, default weight and design behind each text style. Nothing is
+    /// below 11 points; the type scale test checks it.
+    enum TypeScale {
+        typealias Style = (size: CGFloat, weight: Font.Weight, design: Font.Design)
+        static let display: Style = (34, .semibold, .rounded)
+        static let title: Style = (28, .semibold, .rounded)
+        static let heading: Style = (24, .semibold, .rounded)
+        static let subheading: Style = (20, .semibold, .rounded)
+        static let lead: Style = (16, .regular, .default)
+        static let body: Style = (14, .regular, .default)
+        static let callout: Style = (13, .regular, .default)
+        static let caption: Style = (12, .regular, .default)
+        static let small: Style = (11, .regular, .default)
+        static let all = [display, title, heading, subheading, lead, body, callout, caption, small]
+    }
+
+    private static func font(_ style: TypeScale.Style) -> Font {
+        .system(size: style.size, weight: style.weight, design: style.design)
+    }
+
     private static func adaptive(_ pair: Palette.Pair) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in
             let hex = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? pair.dark : pair.light
@@ -117,7 +161,7 @@ struct FlowStatus: View {
     var body: some View {
         HStack(spacing: 7) {
             Circle().fill(color).frame(width: 6, height: 6)
-            Text(title).font(.system(size: 12))
+            Text(title).font(FlowStyle.caption)
         }
         .foregroundStyle(FlowStyle.muted)
         .accessibilityElement(children: .combine)
@@ -133,7 +177,7 @@ struct FlowPrimaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .medium))
+            .font(FlowStyle.callout.weight(.medium))
             .padding(.horizontal, 15).padding(.vertical, 10)
             .foregroundStyle(FlowStyle.onAccent)
             .background(RoundedRectangle(cornerRadius: 8).fill(destructive ? FlowStyle.recording : FlowStyle.accent)
@@ -189,8 +233,8 @@ struct FlowEmptyState: View {
         VStack(spacing: 14) {
             Image(systemName: symbol).font(.system(size: 30, weight: .light)).foregroundStyle(FlowStyle.accent)
                 .accessibilityHidden(true)
-            Text(title).font(.system(size: 21, weight: .semibold, design: .rounded)).foregroundStyle(FlowStyle.ink)
-            Text(detail).font(.system(size: 13)).foregroundStyle(FlowStyle.muted)
+            Text(title).font(FlowStyle.subheading).foregroundStyle(FlowStyle.ink)
+            Text(detail).font(FlowStyle.callout).foregroundStyle(FlowStyle.muted)
                 .multilineTextAlignment(.center).frame(maxWidth: 330)
         }
         .padding(28)

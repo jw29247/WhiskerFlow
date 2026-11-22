@@ -18,7 +18,7 @@ struct HistoryView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("History").font(.system(size: 24, weight: .semibold, design: .rounded))
+                Text("History").font(FlowStyle.heading)
                 Spacer()
                 HistoryRetentionControl(appState: appState, presentation: .menu)
                 Button { openInsights() } label: { Label("Insights", systemImage: "chart.bar.xaxis") }
@@ -96,8 +96,8 @@ struct HistoryView: View {
                                         if record.id == draft.recordID && draft.isDirty {
                                             Circle().fill(FlowStyle.accent).frame(width: 5, height: 5).accessibilityLabel("Unsaved changes")
                                         }
-                                    }.font(.system(size: 10)).foregroundStyle(FlowStyle.muted)
-                                    Text(title(record)).font(.system(size: 13)).lineLimit(3)
+                                    }.font(FlowStyle.small).foregroundStyle(FlowStyle.muted)
+                                    Text(title(record)).font(FlowStyle.callout).lineLimit(3)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                                 .padding(13).contentShape(RoundedRectangle(cornerRadius: 9))
@@ -115,7 +115,7 @@ struct HistoryView: View {
             }
             Divider()
             Text("\(filtered.count.formatted()) of \(CountPhrase.of(appState.records.count, "saved recording"))")
-                .font(.system(size: 10)).foregroundStyle(FlowStyle.muted).padding(13)
+                .font(FlowStyle.small).foregroundStyle(FlowStyle.muted).padding(13)
         }
         .frame(width: 245)
         .onChange(of: appState.searchText) { _, _ in visibleLimit = Self.pageSize }
