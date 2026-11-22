@@ -97,6 +97,7 @@ struct InsightsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Image(systemName: "flame.fill").foregroundStyle(summary.currentStreak > 0 ? FlowStyle.accent : FlowStyle.muted)
+                        .accessibilityHidden(true)
                     Text(summary.currentStreak.formatted())
                         .font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
                     Text(summary.currentStreak == 1 ? "day" : "days").foregroundStyle(FlowStyle.muted)

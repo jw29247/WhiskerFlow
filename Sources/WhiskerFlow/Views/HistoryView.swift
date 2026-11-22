@@ -63,6 +63,7 @@ struct HistoryView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(FlowStyle.muted)
+                    .accessibilityHidden(true)
                 TextField("Search transcripts", text: $appState.searchText)
                     .textFieldStyle(.plain).focused($searchFocused)
                     .accessibilityLabel("Search transcripts")
@@ -87,7 +88,10 @@ struct HistoryView: View {
                                     HStack(spacing: 6) {
                                         Text(record.createdAt, format: .dateTime.month(.abbreviated).day().hour().minute())
                                         Spacer(minLength: 2)
-                                        if record.status.isFailed { Image(systemName: "exclamationmark.circle").foregroundStyle(.orange) }
+                                        if record.status.isFailed {
+                                            Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
+                                                .accessibilityLabel("Failed")
+                                        }
                                         if record.status.isInProgress { ProgressView().controlSize(.mini) }
                                         if record.id == draft.recordID && draft.isDirty {
                                             Circle().fill(FlowStyle.accent).frame(width: 5, height: 5).accessibilityLabel("Unsaved changes")

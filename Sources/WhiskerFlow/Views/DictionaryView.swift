@@ -36,6 +36,7 @@ struct DictionaryView: View {
             }
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(FlowStyle.muted)
+                    .accessibilityHidden(true)
                 TextField("Search corrections", text: $search).textFieldStyle(.plain)
             }.padding(12).background(FlowStyle.surface, in: RoundedRectangle(cornerRadius: 9))
             ScrollView {
@@ -50,6 +51,7 @@ struct DictionaryView: View {
                             if !heard.isEmpty {
                                 Text(heard).foregroundStyle(FlowStyle.muted)
                                 Image(systemName: "arrow.right").foregroundStyle(FlowStyle.muted).font(.caption)
+                                    .accessibilityLabel("becomes")
                             }
                             Text(entry.written).fontWeight(.medium)
                             Spacer()

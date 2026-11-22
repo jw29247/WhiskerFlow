@@ -272,6 +272,7 @@ struct MeetingDetailView: View {
             Button(action: close) { Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold)) }
                 .buttonStyle(.plain).foregroundStyle(FlowStyle.accent)
                 .keyboardShortcut("[", modifiers: .command).help("Back to meetings · ⌘[")
+                .accessibilityLabel("Back to meetings")
             VStack(alignment: .leading, spacing: 7) {
                 Text(entry.title).font(.system(size: 24, weight: .semibold, design: .rounded)).lineLimit(2)
                 HStack(spacing: 8) {
@@ -305,6 +306,8 @@ struct MeetingDetailView: View {
                     }
                 } label: { Image(systemName: "ellipsis.circle") }
                     .menuStyle(.borderlessButton).fixedSize()
+                    .accessibilityLabel("More actions")
+                    .help("More actions")
                 if let url = appState.atlasMeetingURL(for: entry) {
                     Link(destination: url) { Label("Open in Atlas", systemImage: "arrow.up.right.square") }
                         .buttonStyle(FlowPrimaryButtonStyle())
@@ -317,6 +320,7 @@ struct MeetingDetailView: View {
     private func searchBar(matchCount: Int) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(FlowStyle.muted)
+                .accessibilityHidden(true)
             TextField("Search transcript and notes · ⌘F", text: $query)
                 .textFieldStyle(.plain).focused($searchFocused)
                 .onSubmit { if matchCount > 0 { matchIndex = (matchIndex + 1) % matchCount } }
@@ -326,10 +330,14 @@ struct MeetingDetailView: View {
                     .font(.caption).foregroundStyle(FlowStyle.muted).monospacedDigit()
                 Button { matchIndex = (matchIndex + matchCount - 1) % max(1, matchCount) } label: { Image(systemName: "chevron.up") }
                     .buttonStyle(.plain).disabled(matchCount == 0).help("Previous match · ⇧⌘G")
+                    .accessibilityLabel("Previous match")
                 Button { matchIndex = (matchIndex + 1) % max(1, matchCount) } label: { Image(systemName: "chevron.down") }
                     .buttonStyle(.plain).disabled(matchCount == 0).help("Next match · ⌘G")
+                    .accessibilityLabel("Next match")
                 Button { query = "" } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(FlowStyle.muted)
+                    .accessibilityLabel("Clear search")
+                    .help("Clear search")
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
