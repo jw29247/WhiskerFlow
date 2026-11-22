@@ -75,3 +75,14 @@ final class ManualDeadline: @unchecked Sendable {
         request.continuation.resume()
     }
 }
+
+/// Yields until `condition` holds, at most `limit` times, and reports whether
+/// it did. It never sleeps; the limit only stops a broken test spinning
+/// forever.
+func yieldUntil(limit: Int = 100_000, _ condition: () async -> Bool) async -> Bool {
+    for _ in 0..<limit {
+        if await condition() { return true }
+        await Task.yield()
+    }
+    return await condition()
+}

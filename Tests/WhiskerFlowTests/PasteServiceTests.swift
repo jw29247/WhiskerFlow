@@ -82,10 +82,12 @@ final class PasteServiceTests: XCTestCase {
         restorer.begin(on: board)
         board.clearContents(); board.setString("Dictation", forType: .string)
         restorer.delivered(changeCount: board.changeCount)
-        restorer.finish(on: board, changeCount: board.changeCount, after: 0.2)
+        // Long enough that the real-time backstop cannot restore early; the
+        // test ends the delay itself.
+        restorer.finish(on: board, changeCount: board.changeCount, after: 30)
         let restore = try XCTUnwrap(restorer.pendingRestore)
         await delay.untilRequested(1)
-        XCTAssertEqual(delay.requested, [200_000_000])
+        XCTAssertEqual(delay.requested, [30_000_000_000])
         XCTAssertEqual(board.string(forType: .string), "Dictation", "kept until the delay has passed")
         delay.fire()
         await restore.value

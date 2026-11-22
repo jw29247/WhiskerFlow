@@ -39,7 +39,9 @@ final class AbandonedGateHolderTests: XCTestCase {
         let gate = ModelDecodeGate(sleep: deadline.sleep)
         let release = HolderLatch()
         let holder = Task {
-            try await gate.run(seconds: 0.2) {
+            // Long enough that the deadline's real-time backstop cannot end
+            // it before the load below is queued; the test fires it.
+            try await gate.run(seconds: 30) {
                 await release.wait()
                 return "late"
             }
@@ -49,7 +51,8 @@ final class AbandonedGateHolderTests: XCTestCase {
             try await gate.runQueued(waitingUpTo: nil) { XCTFail("Must not run beside the wedged decode") }
         }
         // The load is queued before the holder's deadline passes.
-        while await gate.queuedCount < 1 { await Task.yield() }
+        let queued = await yieldUntil { await gate.queuedCount >= 1 }
+        guard queued else { return XCTFail("The load never queued") }
         await deadline.untilRequested(1)
         deadline.fire()
         do {

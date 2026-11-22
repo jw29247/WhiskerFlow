@@ -21,7 +21,8 @@ final class ModelDecodeGateQueueTests: XCTestCase {
         let second = Task {
             try await gate.runQueued(waitingUpTo: nil) { await order.append("second") }
         }
-        while await gate.queuedCount < 1 { await Task.yield() }
+        let queued = await yieldUntil { await gate.queuedCount >= 1 }
+        guard queued else { return XCTFail("The second caller never queued") }
 
         // A fail-fast caller cannot jump the queue while it is held.
         do {
@@ -102,7 +103,8 @@ final class ModelDecodeGateQueueTests: XCTestCase {
         let holder = Task { try await gate.runQueued(waitingUpTo: nil) { await release.wait() } }
         while await !(gate.isOccupied) { await Task.yield() }
         let waiter = Task { try await gate.runQueued(waitingUpTo: nil) { XCTFail("Cancelled waiter must not run") } }
-        while await gate.queuedCount < 1 { await Task.yield() }
+        let queued = await yieldUntil { await gate.queuedCount >= 1 }
+        guard queued else { return XCTFail("The second caller never queued") }
         waiter.cancel()
         do {
             try await waiter.value
