@@ -149,18 +149,21 @@ public final class RegisteredShortcutController {
     private func reconcile() {
         let wanted = desired
         var changed = false
+        // Remove everything that is no longer wanted first. The system refuses
+        // a combination this app already holds, so a shortcut taking over
+        // another's keys (dictation set to the meeting shortcut) could not
+        // otherwise register, and the refusal would be remembered.
         for shortcut in RegisteredShortcut.allCases {
             let want = wanted[shortcut]
             if refused[shortcut] != want { refused[shortcut] = nil }
-            let have = registered[shortcut]
-            guard have != want else { continue }
-            if have != nil {
-                registrar.unregister(shortcut)
-                registered[shortcut] = nil
-                held.remove(shortcut)
-                changed = true
-            }
-            guard let want, refused[shortcut] == nil else { continue }
+            guard let have = registered[shortcut], have != want else { continue }
+            registrar.unregister(shortcut)
+            registered[shortcut] = nil
+            held.remove(shortcut)
+            changed = true
+        }
+        for shortcut in RegisteredShortcut.allCases {
+            guard let want = wanted[shortcut], registered[shortcut] == nil, refused[shortcut] == nil else { continue }
             if registrar.register(shortcut, combo: want) {
                 registered[shortcut] = want
                 changed = true

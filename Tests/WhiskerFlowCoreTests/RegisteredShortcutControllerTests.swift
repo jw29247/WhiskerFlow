@@ -86,6 +86,24 @@ final class RegisteredShortcutControllerTests: XCTestCase {
         XCTAssertEqual(registrar.active, [.dictation: meeting])
     }
 
+    /// The system refuses a combination the app already holds, so the old
+    /// owner has to go before the new one is registered.
+    func testTakingOverAnotherShortcutsComboUnregistersItFirst() {
+        let registrar = FakeShortcutRegistrar()
+        registrar.refuse = { [unowned registrar] shortcut, combo in
+            registrar.active.contains { $0.key != shortcut && $0.value == combo }
+        }
+        let (controller, _) = make(f5, registrar: registrar)
+        controller.start()
+        XCTAssertEqual(registrar.active, [.dictation: f5, .meeting: meeting])
+
+        controller.setDictationCombo(meeting)
+
+        XCTAssertEqual(registrar.active, [.dictation: meeting], "Dictation owns the combination; the meeting hot key is gone")
+        XCTAssertTrue(controller.isRegistered(.dictation))
+        XCTAssertFalse(controller.isRegistered(.meeting))
+    }
+
     func testStopUnregistersEverything() {
         let (controller, registrar) = make(f5)
         controller.start()
