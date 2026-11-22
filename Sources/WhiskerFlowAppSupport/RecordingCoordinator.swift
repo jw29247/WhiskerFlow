@@ -6,6 +6,14 @@ public enum RecordingPhase: Equatable, Sendable {
     case recording(UUID)
     case finishing(UUID)
 
+    /// Preparing or recording: the phases in which Esc discards the dictation.
+    public var isDiscardable: Bool {
+        switch self {
+        case .preparing, .recording: return true
+        case .idle, .finishing: return false
+        }
+    }
+
     public var isCapturing: Bool {
         if case .recording = self { return true }
         return false
@@ -88,7 +96,13 @@ public struct CapturedAudio: Equatable, Sendable {
 
 @MainActor
 public final class RecordingCoordinator {
-    public private(set) var phase: RecordingPhase = .idle
+    public private(set) var phase: RecordingPhase = .idle {
+        didSet { if phase != oldValue { onPhaseChange?(phase) } }
+    }
+    /// Told about every phase change, for state that must follow it cheaply
+    /// (whether Esc is registered). Must not do slow work: it runs on the
+    /// key-press path.
+    public var onPhaseChange: ((RecordingPhase) -> Void)?
     public private(set) var stopReason: CaptureStopReason?
 
     private var discardedWhilePreparing: UUID?

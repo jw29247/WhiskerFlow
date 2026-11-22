@@ -198,4 +198,24 @@ final class RecordingCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.phase, .finishing(session))
         XCTAssertEqual(coordinator.stopReason, .userReleased)
     }
+
+    func testDiscardablePhases() {
+        let id = UUID()
+        XCTAssertFalse(RecordingPhase.idle.isDiscardable)
+        XCTAssertTrue(RecordingPhase.preparing(id).isDiscardable)
+        XCTAssertTrue(RecordingPhase.recording(id).isDiscardable)
+        XCTAssertFalse(RecordingPhase.finishing(id).isDiscardable)
+    }
+
+    func testPhaseChangesAreReportedOnceEach() throws {
+        let coordinator = RecordingCoordinator()
+        var phases: [RecordingPhase] = []
+        coordinator.onPhaseChange = { phases.append($0) }
+        let session = try XCTUnwrap(coordinator.requestStart())
+        XCTAssertNil(coordinator.requestStart(), "a refused start changes nothing")
+        coordinator.didStart(session)
+        coordinator.requestFinish(session)
+        coordinator.didFinish(session)
+        XCTAssertEqual(phases, [.preparing(session), .recording(session), .finishing(session), .idle])
+    }
 }
