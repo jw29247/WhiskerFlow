@@ -74,38 +74,35 @@ final class OnboardingIntegrationTests: XCTestCase {
     @MainActor
     func testFreshInstallPresentsAndPersistsEveryTransition() {
         let store = MemoryOnboardingStore()
-        var events: [OnboardingTelemetryEvent] = []
-        let controller = OnboardingController(store: store, record: { events.append($0) })
+        let controller = OnboardingController(store: store)
         XCTAssertTrue(controller.presentIfNeeded(hasHistory: false, hadPreviousLaunch: false, permissionsReady: false))
         XCTAssertTrue(controller.isPresented)
         XCTAssertEqual(store.stored?.current, .welcome)
 
         controller.advance(OnboardingConditions())
         XCTAssertEqual(store.stored?.current, .permissions, "saved on every step so a quit resumes here")
-        XCTAssertEqual(events.map(\.outcome), [.viewed, .completed, .viewed])
+        XCTAssertEqual(store.stored?.completed, [.welcome])
 
         // A relaunch reads the same store and resumes.
-        let relaunched = OnboardingController(store: store, record: { events.append($0) })
+        let relaunched = OnboardingController(store: store)
         XCTAssertTrue(relaunched.presentIfNeeded(hasHistory: false, hadPreviousLaunch: true, permissionsReady: false))
         XCTAssertEqual(relaunched.current, .permissions)
-        XCTAssertEqual(events.last, OnboardingTelemetryEvent(step: .permissions, outcome: .resumed))
+        XCTAssertTrue(store.stored?.isInProgress == true)
     }
 
     @MainActor
-    func testExistingUserIsMarkedDoneWithoutFunnelTelemetry() {
+    func testExistingUserIsMarkedDoneWithoutSeeingSetup() {
         let store = MemoryOnboardingStore()
-        var events: [OnboardingTelemetryEvent] = []
-        let controller = OnboardingController(store: store, record: { events.append($0) })
+        let controller = OnboardingController(store: store)
         XCTAssertFalse(controller.presentIfNeeded(hasHistory: true, hadPreviousLaunch: true, permissionsReady: true))
         XCTAssertFalse(controller.isPresented)
         XCTAssertTrue(store.stored?.isFinished == true)
-        XCTAssertTrue(events.isEmpty, "a user who never saw setup must not count as finishing it")
     }
 
     @MainActor
     func testFinishingClosesSetupAndRunSetupAgainStartsOver() {
         let store = MemoryOnboardingStore(OnboardingProgress(current: .done, furthest: .done, startedAt: Date()))
-        let controller = OnboardingController(store: store, record: { _ in })
+        let controller = OnboardingController(store: store)
         controller.present()
         controller.advance(OnboardingConditions(microphoneGranted: true, accessibilityGranted: true))
         XCTAssertFalse(controller.isPresented)
@@ -120,13 +117,13 @@ final class OnboardingIntegrationTests: XCTestCase {
     @MainActor
     func testSetUpLaterKeepsProgressAndIsNotForcedBackOnce() {
         let store = MemoryOnboardingStore()
-        let controller = OnboardingController(store: store, record: { _ in })
+        let controller = OnboardingController(store: store)
         controller.present()
         controller.advance(OnboardingConditions())
         controller.dismiss()
         XCTAssertFalse(controller.isPresented)
         XCTAssertEqual(store.stored?.current, .permissions)
-        XCTAssertFalse(OnboardingController(store: store, record: { _ in })
+        XCTAssertFalse(OnboardingController(store: store)
             .presentIfNeeded(hasHistory: false, hadPreviousLaunch: true, permissionsReady: true))
     }
 

@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Observation
-import OpenTelemetryApi
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
@@ -474,29 +473,14 @@ final class AssistantController {
         guard let requestTransport else { throw AssistantError.message("Connect Atlas in Meeting setup first.") }
         let account = saved.accountIdentity
         var versioned = args; versioned["contractVersion"] = 1
-        return try await Observability.tracer.spanBuilder(spanName: "assistant.request").withActiveSpan { span in
-            let category = ["captureDraft", "listClientProfiles", "getClientProfile", "rewrite", "getResult", "requestCoach", "addBookmark", "deleteCoach"].contains(operation) ? operation : "other"
-            span.setAttribute(key: "assistant.operation", value: category)
-            var outcome = "failure"
-            defer {
-                span.setAttribute(key: "outcome", value: outcome)
-                Observability.assistantOperations.add(value: 1, attributes: ["operation": .string(category), "outcome": .string(outcome)])
-            }
-            do {
-                guard accountIdentityProvider == nil || accountIdentityProvider?() == account else {
-                    throw AssistantError.message("Atlas connection changed before sending. Please try again.")
-                }
-                let data = try await requestTransport().call(operation: operation, arguments: JSONSerialization.data(withJSONObject: versioned))
-                guard accountIdentityProvider == nil || accountIdentityProvider?() == account else {
-                    synchronizeAccount(); throw AssistantError.message("Atlas connection changed. The previous response was discarded.")
-                }
-                guard let row = try JSONSerialization.jsonObject(with: data) as? [String: Any], row["contractVersion"] as? Int == 1 else { throw AssistantError.message("Atlas's assistant version is not supported by this app.") }
-                outcome = "success"; span.status = .ok
-                return row
-            } catch {
-                span.status = .error(description: "Assistant request failed")
-                throw error
-            }
+        guard accountIdentityProvider == nil || accountIdentityProvider?() == account else {
+            throw AssistantError.message("Atlas connection changed before sending. Please try again.")
         }
+        let data = try await requestTransport().call(operation: operation, arguments: JSONSerialization.data(withJSONObject: versioned))
+        guard accountIdentityProvider == nil || accountIdentityProvider?() == account else {
+            synchronizeAccount(); throw AssistantError.message("Atlas connection changed. The previous response was discarded.")
+        }
+        guard let row = try JSONSerialization.jsonObject(with: data) as? [String: Any], row["contractVersion"] as? Int == 1 else { throw AssistantError.message("Atlas's assistant version is not supported by this app.") }
+        return row
     }
 }
