@@ -163,10 +163,10 @@ struct OnboardingHeading: View {
                 Image(systemName: symbol).font(.system(size: 30, weight: .light)).foregroundStyle(FlowStyle.accent)
                     .accessibilityHidden(true)
             }
-            Text(title).font(.system(size: 28, weight: .semibold, design: .rounded)).tracking(-0.6)
+            Text(title).font(FlowStyle.title).tracking(-0.6)
                 .multilineTextAlignment(.center)
                 .accessibilityAddTraits(.isHeader)
-            Text(detail).font(.system(size: 14)).foregroundStyle(FlowStyle.muted)
+            Text(detail).font(FlowStyle.body).foregroundStyle(FlowStyle.muted)
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 470)
         }

@@ -14,22 +14,22 @@ struct OnboardingWelcomeStep: View {
             Spacer(minLength: 8)
             FlowWaveform(size: 60)
             Text("Speak. It’s written.")
-                .font(.system(size: 32, weight: .semibold, design: .rounded)).tracking(-0.8)
+                .font(FlowStyle.display).tracking(-0.8)
                 .accessibilityAddTraits(.isHeader)
             Text("Hold one key, say what you mean, and WhiskerFlow types it wherever your cursor is, in any app.")
-                .font(.system(size: 15)).foregroundStyle(FlowStyle.muted)
+                .font(FlowStyle.body).foregroundStyle(FlowStyle.muted)
                 .multilineTextAlignment(.center).frame(maxWidth: 440)
             HStack(spacing: 12) {
                 Text(DictationPresentation(appState: appState).gesture)
                 FlowKeycap(title: appState.settings.hotkeyDisplayName)
                 Text("to dictate")
             }
-            .font(.system(size: 18))
+            .font(FlowStyle.subheading.weight(.regular)).fontDesign(.default)
             .padding(.vertical, 6)
             OnboardingCard {
-                Label("Private by design", systemImage: "lock.shield").font(.system(size: 14, weight: .medium))
+                Label("Private by design", systemImage: "lock.shield").font(FlowStyle.body.weight(.medium))
                 Text("Dictation runs entirely on this Mac. Your voice and your words aren’t sent anywhere. Meeting recording is separate: it starts only when you choose Record or turn on automatic recording, and recordings are uploaded to Atlas.")
-                    .font(.system(size: 13)).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
+                    .font(FlowStyle.callout).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: 470)
             Text("Setup takes about two minutes. The speech model is already downloading in the background.")
@@ -82,7 +82,7 @@ struct OnboardingPermissionsStep: View {
             if OnboardingLaunchPolicy.suggestsAccessibilityRelaunch(
                 requestedAt: appState.onboarding.accessibilityRequestedAt, trusted: axGranted, now: now) {
                 OnboardingCard {
-                    Label("Already switched it on?", systemImage: "arrow.clockwise.circle").font(.system(size: 13, weight: .medium))
+                    Label("Already switched it on?", systemImage: "arrow.clockwise.circle").font(FlowStyle.callout.weight(.medium))
                     Text("macOS sometimes applies Accessibility only after WhiskerFlow restarts. Your setup progress is saved and you’ll come straight back here.")
                         .font(.caption).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
                     Button("Relaunch WhiskerFlow") { AppRelauncher.relaunch() }
@@ -106,11 +106,11 @@ struct OnboardingPermissionsStep: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
                     HStack {
-                        Text(title).font(.system(size: 14, weight: .medium))
+                        Text(title).font(FlowStyle.body.weight(.medium))
                         Spacer()
                         OnboardingStatusBadge(granted: granted)
                     }
-                    Text(why).font(.system(size: 12)).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
+                    Text(why).font(FlowStyle.caption).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 14) {
                         if let action { Button(action, action: perform) }
                         Button("Open in System Settings") { SystemSettingsLink.open(settingsLink) }
@@ -143,7 +143,7 @@ struct OnboardingMicrophoneStep: View {
             }
             OnboardingCard {
                 HStack {
-                    Text("Microphone").font(.system(size: 13, weight: .medium))
+                    Text("Microphone").font(FlowStyle.callout.weight(.medium))
                     Spacer()
                     microphonePicker
                 }
@@ -332,7 +332,7 @@ struct OnboardingShortcutStep: View {
             if settings.activeHotkeyCombo == HotkeyTrigger.fn.presetCombo, let explanation = globeUsage.conflictExplanation {
                 OnboardingCard {
                     Label("Your 🌐 key already does something", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(FlowStyle.warning).font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(FlowStyle.warning).font(FlowStyle.callout.weight(.medium))
                     Text(explanation).font(.caption).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
                     Button("Open Keyboard Settings") { SystemSettingsLink.open(SystemSettingsLink.keyboard) }
                 }
@@ -346,7 +346,7 @@ struct OnboardingShortcutStep: View {
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: isPressed)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(passed ? "Your shortcut works." : (isPressed ? "Got it. Now let go." : "Press your shortcut now."))
-                            .font(.system(size: 14, weight: .medium))
+                            .font(FlowStyle.body.weight(.medium))
                         Text(testDetail(passed: passed)).font(.caption).foregroundStyle(FlowStyle.muted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -390,10 +390,10 @@ struct OnboardingShortcutStep: View {
                     default: Image(systemName: "keyboard")
                     }
                 }
-                .font(.system(size: 20, weight: .medium, design: .rounded)).frame(height: 24)
+                .font(FlowStyle.subheading.weight(.medium)).frame(height: 24)
                 .accessibilityHidden(true)
                 Text(choice == .fn ? "fn / Globe" : (choice == .custom ? "Custom" : choice.displayName))
-                    .font(.system(size: 12, weight: selected ? .medium : .regular))
+                    .font(FlowStyle.caption.weight(selected ? .medium : .regular))
             }
             .frame(maxWidth: .infinity).padding(.vertical, 14)
             .background(selected ? FlowStyle.selection : FlowStyle.surface, in: RoundedRectangle(cornerRadius: 10))
@@ -480,7 +480,7 @@ struct OnboardingModelStep: View {
             OnboardingCard {
                 HStack {
                     Label(engine == .parakeetTDTv3 ? "Parakeet TDT v3" : engine.displayName, systemImage: "cpu")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(FlowStyle.body.weight(.medium))
                     Spacer()
                     Text(sizeText).font(.caption).foregroundStyle(FlowStyle.muted)
                 }
@@ -564,17 +564,17 @@ struct OnboardingPracticeStep: View {
                               detail: "Click in the box, then \(DictationPresentation(appState: appState).gesture.lowercased()) \(appState.settings.hotkeySpokenName) and read the sentence. \(DictationPresentation(appState: appState).finish) when you’re done.")
             OnboardingCard {
                 Text(prompt.instruction).font(.caption).foregroundStyle(FlowStyle.muted)
-                Text("“\(prompt.sentence)”").font(.system(size: 18, weight: .medium, design: .rounded))
+                Text("“\(prompt.sentence)”").font(FlowStyle.subheading.weight(.medium))
                     .fixedSize(horizontal: false, vertical: true)
             }
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $text)
-                    .font(.system(size: 14))
+                    .font(FlowStyle.body)
                     .focused($fieldFocused)
                     .scrollContentBackground(.hidden)
                     .padding(8)
                 if text.isEmpty {
-                    Text(placeholder).font(.system(size: 14)).foregroundStyle(FlowStyle.muted)
+                    Text(placeholder).font(FlowStyle.body).foregroundStyle(FlowStyle.muted)
                         .padding(.horizontal, 13).padding(.vertical, 8).allowsHitTesting(false)
                 }
             }
@@ -595,7 +595,7 @@ struct OnboardingPracticeStep: View {
             }
             if results[.selfCorrection] != nil {
                 OnboardingCard {
-                    Label("Now try it anywhere", systemImage: "sparkles").font(.system(size: 13, weight: .medium))
+                    Label("Now try it anywhere", systemImage: "sparkles").font(FlowStyle.callout.weight(.medium))
                     Text("Open Notes, Mail or Slack, click where you’d type, and \(DictationPresentation(appState: appState).gesture.lowercased()) \(appState.settings.hotkeySpokenName).")
                         .font(.caption).foregroundStyle(FlowStyle.muted)
                 }
@@ -654,7 +654,7 @@ struct OnboardingExtrasStep: View {
                               detail: "Skip these now if you like. They live in Meetings, Assistant and Settings.")
             OnboardingCard {
                 HStack {
-                    Label("Connect Atlas", systemImage: "person.crop.circle.badge.checkmark").font(.system(size: 14, weight: .medium))
+                    Label("Connect Atlas", systemImage: "person.crop.circle.badge.checkmark").font(FlowStyle.body.weight(.medium))
                     Spacer()
                     if paired {
                         OnboardingStatusBadge(granted: true, grantedText: "Connected")
@@ -682,7 +682,7 @@ struct OnboardingExtrasStep: View {
             }
             OnboardingCard {
                 HStack {
-                    Label("Meeting recording", systemImage: "person.2.wave.2").font(.system(size: 14, weight: .medium))
+                    Label("Meeting recording", systemImage: "person.2.wave.2").font(FlowStyle.body.weight(.medium))
                     Spacer()
                     Toggle("Record scheduled meetings automatically", isOn: $appState.settings.meetingModeEnabled)
                         .labelsHidden().toggleStyle(.switch)
@@ -695,7 +695,7 @@ struct OnboardingExtrasStep: View {
                     .font(.caption).foregroundStyle(FlowStyle.muted)
                 Divider()
                 HStack {
-                    Text("Screen Recording").font(.system(size: 13))
+                    Text("Screen Recording").font(FlowStyle.callout)
                     Spacer()
                     OnboardingStatusBadge(granted: appState.hasScreenRecordingPermission)
                     if !appState.hasScreenRecordingPermission {
@@ -754,7 +754,7 @@ struct OnboardingDoneStep: View {
     private func shortcutRow(keys: String, action: String, detail: String) -> some View {
         HStack(spacing: 14) {
             FlowKeycap(title: keys, compact: true).frame(minWidth: 96, alignment: .leading)
-            Text(action).font(.system(size: 13))
+            Text(action).font(FlowStyle.callout)
             Spacer()
             Text(detail).font(.caption).foregroundStyle(FlowStyle.muted)
         }
