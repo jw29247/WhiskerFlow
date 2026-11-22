@@ -126,6 +126,12 @@ private final class HeldMeetingAtlasStub: MeetingAtlasClient, @unchecked Sendabl
     func finalize(meetingID: String, artifactID: String, transcriptionState: String, status: String) async throws {}
 }
 
+/// An Assistant transport whose next request waits for the test.
+private final class HeldAssistantTransport: AssistantAtlasTransport, @unchecked Sendable {
+    let reply = HeldReply<Data>()
+    func call(operation: String, arguments: Data) async throws -> Data { await reply.hold() }
+}
+
 @MainActor
 final class AtlasSignOutTests: XCTestCase {
     private static let firstToken = "twnt_first_device_token_0001"
@@ -289,6 +295,45 @@ final class AtlasSignOutTests: XCTestCase {
         XCTAssertEqual(state.assistant.message,
                        "This draft belongs to a different Atlas connection. Reconnect that account or copy it for review.")
         XCTAssertEqual(state.assistant.saved.drafts.count, 1, "It stays on this Mac")
+    }
+
+    func testAnAssistantRequestThatFinishesAfterSignOutKeepsTheUsersOwnWords() async throws {
+        let (state, _) = signedInApp(MemoryKeychain(token: Self.firstToken))
+        let identity = AppState.accountIdentity(forToken: Self.firstToken)
+        let assistant = state.assistant
+        assistant.synchronizeAccount()
+        assistant.setCloudEnabled(true)
+        assistant.selectClient("client_acme")
+        assistant.addClientTerm(find: "acme", replacement: "ACME")
+        let transport = HeldAssistantTransport()
+        assistant.requestTransport = { transport }
+        let refresh = Task { await assistant.refreshClients() }
+        await transport.reply.untilStarted()
+
+        XCTAssertTrue(state.signOutOfAtlas())
+        transport.reply.release(try JSONSerialization.data(withJSONObject: [
+            "contractVersion": 1, "profiles": [["reference": "client_acme", "name": "Acme"]],
+        ] as [String: Any]))
+        await refresh.value
+
+        XCTAssertEqual(assistant.saved.clientCustomVocabulary?["client_acme"]?.rules.map(\.find), ["acme"],
+                       "The user's own client words stay")
+        XCTAssertTrue(assistant.saved.cloudEnabled, "The Atlas AI choice stays")
+        XCTAssertEqual(assistant.saved.accountIdentity, identity, "The signed-out state is not adopted as an account")
+        XCTAssertTrue(assistant.saved.clients.isEmpty, "The late client list is discarded")
+    }
+
+    func testRelaunchingSignedOutKeepsTheUsersOwnWords() {
+        let keychain = MemoryKeychain(token: Self.firstToken)
+        let (state, _) = signedInApp(keychain)
+        state.assistant.synchronizeAccount()
+        state.assistant.selectClient("client_acme")
+        state.assistant.addClientTerm(find: "acme", replacement: "ACME")
+        XCTAssertTrue(state.signOutOfAtlas())
+
+        // What any later entry point (a launch, a dictation) does first.
+        XCTAssertFalse(state.assistant.synchronizeAccount(), "There is no connection to adopt")
+        XCTAssertEqual(state.assistant.saved.clientCustomVocabulary?["client_acme"]?.rules.count, 1)
     }
 
     // MARK: - Pieces

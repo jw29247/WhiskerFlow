@@ -116,11 +116,19 @@ final class AssistantController {
             return true
         } catch { message = "Could not save locally. Free some disk space and try again."; return false }
     }
+    /// Adopts the current Atlas connection, forgetting the previous one's
+    /// Atlas data, client words and Atlas AI choice. Returns false when that
+    /// couldn't be saved or there is no connection to adopt.
     @discardableResult
     func synchronizeAccount() -> Bool {
         guard let accountIdentityProvider else { return true }
         let identity = accountIdentityProvider()
         guard saved.accountIdentity != identity else { return true }
+        // No connection (signed out, or a launch without a readable token) is
+        // not another account: `signOut()` keeps the client words and Atlas AI
+        // choice on purpose, and a request that finishes after sign-out must
+        // not wipe them. Only the next sign-in decides.
+        guard identity != nil else { return false }
         let persisted = update { state in
             state.accountIdentity = identity
             state.clients = []; state.clientVocabulary = [:]; state.selectedClient = nil
@@ -481,7 +489,10 @@ final class AssistantController {
     }
 
     func call(_ operation: String, _ args: [String: Any]) async throws -> [String: Any] {
-        guard synchronizeAccount() else { throw AssistantError.message("Atlas connection state could not be saved. No request was sent.") }
+        guard synchronizeAccount() else {
+            throw AssistantError.message(currentAccountIdentity == nil ? "Sign in to Atlas first. No request was sent."
+                : "Atlas connection state could not be saved. No request was sent.")
+        }
         guard let requestTransport else { throw AssistantError.message("Connect Atlas in Meeting setup first.") }
         let account = saved.accountIdentity
         var versioned = args; versioned["contractVersion"] = 1
