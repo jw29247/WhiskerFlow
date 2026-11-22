@@ -32,7 +32,7 @@ def summarize(rows, now, hours):
             if context:
                 interaction[row.get('launch')] = {
                     **interaction.get(row.get('launch'), {}), **context,
-                    **{k: row[k] for k in ('timestamp', 'launch', 'installation_id', 'build', 'pid') if k in row},
+                    **{k: row[k] for k in ('timestamp', 'launch', 'build', 'pid') if k in row},
                 }
     for context in interaction.values():
         if now - float(context['timestamp']) > 120:

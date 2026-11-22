@@ -106,9 +106,9 @@ final class AppSettings {
         didSet { defaults.set(meetingTranscriptRetention.rawValue, forKey: Keys.meetingTranscriptRetention) }
     }
 
-    /// Keychain reads are synchronous securityd IPC. Only this setter writes
-    /// the token, so a read-through cache of a definite answer (the token, or
-    /// none) stays authoritative.
+    /// Keychain reads are synchronous securityd IPC. Only this setter and
+    /// `removeAtlasDeviceToken()` write the token, so a read-through cache of a
+    /// definite answer (the token, or none) stays authoritative.
     @ObservationIgnored private var cachedAtlasDeviceToken: String?
 
     var atlasDeviceToken: String {
@@ -145,6 +145,26 @@ final class AppSettings {
                 reportPersistenceFailure(error)
             }
         }
+    }
+
+    /// True from an explicit sign-out until the next sign-in. Unlike a missing
+    /// token it is never set by a Keychain that can't be read for a moment, so
+    /// it is what stops meeting recording after a sign-out.
+    var signedOutOfAtlas: Bool { didSet { defaults.set(signedOutOfAtlas, forKey: Keys.signedOutOfAtlas) } }
+
+    /// The Keychain item behind `atlasDeviceToken`, for readers off the main actor.
+    var atlasTokenStore: MeetingCaptureTokenStore { meetingTokenStore }
+
+    /// Sign-out: deletes the token from the Keychain and caches its absence.
+    /// Unlike the setter, a Keychain failure throws and leaves the cache as it
+    /// was, so the caller can tell the user the sign-out did not happen.
+    func removeAtlasDeviceToken() throws {
+        try meetingTokenStore.delete()
+        cachedAtlasDeviceToken = ""
+    }
+
+    func removeCachedMeetingSchedule() {
+        defaults.removeObject(forKey: Keys.cachedMeetingSchedule)
     }
 
     func cachedMeetingSchedule() -> [AtlasCaptureScheduleIntent] {
@@ -254,6 +274,7 @@ final class AppSettings {
         meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? false
         meetingModeChoicePending = defaults.bool(forKey: Keys.meetingModeChoicePending)
         askToRecordCalls = defaults.object(forKey: Keys.askToRecordCalls) as? Bool ?? true
+        signedOutOfAtlas = defaults.bool(forKey: Keys.signedOutOfAtlas)
         meetingRecordingNotice = defaults.string(forKey: Keys.meetingRecordingNotice) ?? ""
         coachEnabled = defaults.object(forKey: Keys.coachEnabled) as? Bool ?? true
         coachLiveAnalysis = defaults.object(forKey: Keys.coachLiveAnalysis) as? Bool ?? true
@@ -269,6 +290,9 @@ final class AppSettings {
         // hang CoreAudio. Drop its setting and the hang record it kept.
         defaults.removeObject(forKey: Keys.ignoreSpeakerAudio)
         defaults.removeObject(forKey: Keys.voiceProcessingHungInputs)
+        // Diagnostics no longer leave the Mac, so the persistent installation
+        // ID that tagged them is no longer read. Delete what old builds stored.
+        defaults.removeObject(forKey: Keys.diagnosticsInstallationID)
     }
 
     static let atlasProductionURL = "https://atlas.thatworks.agency"
@@ -411,6 +435,8 @@ final class AppSettings {
         static let translateToEnglish = "translateToEnglish"
         static let ignoreSpeakerAudio = "ignoreSpeakerAudio"
         static let voiceProcessingHungInputs = "voiceProcessingHungInputs"
+        /// Written by builds up to 2.1.1 to tag diagnostics sent off the Mac.
+        static let diagnosticsInstallationID = "diagnostics.installationID"
         static let delivery = "delivery"
         static let playSounds = "playSounds"
         static let allowAppleFallback = "allowAppleFallback"
@@ -435,6 +461,7 @@ final class AppSettings {
         static let meetingModeChoicePending = "meetingModeChoicePending"
         static let meetingTranscriptRetention = "meetingTranscriptRetention"
         static let askToRecordCalls = "askToRecordCalls"
+        static let signedOutOfAtlas = "signedOutOfAtlas"
         static let meetingRecordingNotice = "meetingRecordingNotice"
         static let coachEnabled = "coachEnabled"
         static let coachLiveAnalysis = "coachLiveAnalysis"

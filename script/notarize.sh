@@ -24,9 +24,6 @@
 #   NOTARY_PROFILE  notarytool keychain profile name (default: WhiskerFlow-Notary)
 #   VERSION         release version (default: Resources/Info.plist CFBundleShortVersionString;
 #                   an override that disagrees with the plist is rejected below)
-#   WHISKERFLOW_SENTRY_DSN  public DSN embedded in the packaged app
-#   SENTRY_AUTH_TOKEN       release-only token used by sentry-cli
-#   SENTRY_ORG / SENTRY_PROJECT  destination for dSYMs and release metadata
 #   ALLOW_UNVERIFIED_RELEASE=1   EMERGENCY ONLY: skip the green-CI release gate
 #
 set -euo pipefail
@@ -43,8 +40,6 @@ RELEASE_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || echo "<release c
 PRODUCT="WhiskerFlow"
 VERSION="${VERSION:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT_DIR/Resources/Info.plist")}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-WhiskerFlow-Notary}"
-WHISKERFLOW_SENTRY_DSN="${WHISKERFLOW_SENTRY_DSN:-https://e933f92c9d1aeb052c5e27580575e46c@o4511347438583808.ingest.de.sentry.io/4511710099013712}"
-export WHISKERFLOW_SENTRY_DSN
 
 DIST_DIR="$ROOT_DIR/dist"
 STAGING_DIR="$DIST_DIR/$PRODUCT-$VERSION"
@@ -55,22 +50,12 @@ SPARKLE_ZIP="$DIST_DIR/$PRODUCT-$VERSION.zip"
 DSYM_PATH="$DIST_DIR/$PRODUCT-$VERSION.dSYM"
 DOWNLOAD_URL="https://github.com/$REPO/releases/download/v$VERSION/$PRODUCT-$VERSION.zip"
 
-SENTRY_UPLOAD_ENABLED=true
-if [[ -z "${SENTRY_AUTH_TOKEN:-}" || -z "${SENTRY_ORG:-}" || -z "${SENTRY_PROJECT:-}" ]]; then
-  SENTRY_UPLOAD_ENABLED=false
-  echo "==> Sentry credentials are not configured; retaining the dSYM locally without uploading it"
-elif ! command -v sentry-cli >/dev/null 2>&1; then
-  echo "ERROR: sentry-cli is required when Sentry release credentials are configured." >&2
-  exit 1
-fi
-
 PLIST_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT_DIR/Resources/Info.plist")"
 BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$ROOT_DIR/Resources/Info.plist")"
 if [[ "$PLIST_VERSION" != "$VERSION" ]]; then
   echo "ERROR: VERSION=$VERSION does not match Info.plist version $PLIST_VERSION." >&2
   exit 1
 fi
-SENTRY_RELEASE="agency.thatworks.WhiskerFlow@$VERSION+$BUILD_NUMBER"
 
 # --- Auto-update preflight: a Sparkle public key must be set, or shipped builds
 #     would reject every update. Generate it once with script/sparkle_keygen.sh.
@@ -137,14 +122,9 @@ if [[ -z "$APP_UUIDS" || "$APP_UUIDS" != "$DSYM_UUIDS" ]]; then
 fi
 # SwiftPM's Swift Build backend embeds Swift's serialized debugging options,
 # full of local build paths, in the dSYM (__swift_ast), and no compiler flag
-# turns that off. The dSYM is never part of a release, so that only matters if
-# it is about to be uploaded.
+# turns that off. The dSYM is never uploaded or attached to a release; it is
+# kept on this Mac for local symbolication only.
 if strings "$DSYM_PATH/Contents/Resources/DWARF/$PRODUCT" | grep -F "$HOME/" >/dev/null; then
-  if [[ "$SENTRY_UPLOAD_ENABLED" == true ]]; then
-    echo "ERROR: Generated dSYM contains a local home-directory path and would be uploaded to Sentry." >&2
-    echo "       Unset the Sentry release credentials to keep the dSYM on this Mac instead." >&2
-    exit 1
-  fi
   echo "==> NOTE: the dSYM contains local build paths. It stays on this Mac; do not upload or share it."
 fi
 echo "==> Generated matching dSYM at $DSYM_PATH"
@@ -190,27 +170,12 @@ CASK="$ROOT_DIR/Casks/whiskerflow.rb"
 /usr/bin/sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/" "$CASK"
 /usr/bin/sed -i '' -E "s/^  sha256 .*/  sha256 \"$SHA\"/" "$CASK"
 
-# --- 6. Publish symbolication data only after the signed artifacts validate --
-if [[ "$SENTRY_UPLOAD_ENABLED" == true ]]; then
-  sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
-    debug-files upload "$DSYM_PATH"
-  sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
-    releases new "$SENTRY_RELEASE"
-  sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
-    releases set-commits "$SENTRY_RELEASE" --auto
-  sentry-cli --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
-    releases finalize "$SENTRY_RELEASE"
-  echo "==> Uploaded dSYM and finalized Sentry release $SENTRY_RELEASE"
-else
-  echo "==> Skipped Sentry upload; dSYM retained at $DSYM_PATH"
-fi
-
 cat <<MSG
 
 ==> Done.
     DMG (fresh installs):  $DMG_PATH
     ZIP (auto-update):     $SPARKLE_ZIP
-    dSYM (Sentry):         $DSYM_PATH
+    dSYM (this Mac only):  $DSYM_PATH
     sha256 (DMG):          $SHA
     Updated:               appcast.xml + $CASK
 

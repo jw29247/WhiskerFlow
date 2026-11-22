@@ -103,6 +103,9 @@ enum UIPreview {
         #endif
     }
 
+    /// Keeps the floating HUD alive for `--ui-state=hud-*` previews.
+    private static var previewHUD: RecordingHUDController?
+
     static var dictionarySearch: String { argument("--ui-dictionary-search=") ?? "" }
 
     private static func argument(_ prefix: String) -> String? {
@@ -179,6 +182,18 @@ enum UIPreview {
             state.hasScreenRecordingPermission = mode != "setup"
             if mode != "empty" && mode != "setup" && onboardingStep == nil { addSampleInsights(to: state) }
             if mode == "error" { state.status = .failure("The microphone disconnected. Choose an available microphone in Settings.") }
+            // The floating HUD's failure state: `hud-failure` and `hud-failure-long`.
+            if mode.hasPrefix("hud-failure") {
+                state.status = .failure(mode == "hud-failure-long"
+                    ? "Couldn’t reach the app. Your text is on the clipboard. Click into the app you were using and paste."
+                    : "Couldn’t paste. Your text is on the clipboard.")
+                // The panel follows the app's appearance, not the main window's;
+                // NSApp exists from the next turn.
+                DispatchQueue.main.async {
+                    NSApp.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
+                    previewHUD = RecordingHUDController(appState: state)
+                }
+            }
             if mode == "recording" { state.isRecording = true; state.status = .recording; state.audioLevel = 0.16; state.liveText = "This is a preview of your words as you speak." }
             if mode == "secure-input" { state.isShortcutPausedBySecureInput = true }
             if mode == "transcribing" { state.isTranscribing = true; state.status = .transcribing }

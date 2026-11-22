@@ -13,20 +13,35 @@ public enum MeetingCaptureTokenLookup: Equatable, Sendable {
 
 public final class MeetingCaptureTokenStore: @unchecked Sendable {
     public typealias CopyMatching = @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
+    public typealias Add = @Sendable (CFDictionary) -> OSStatus
+    public typealias Update = @Sendable (CFDictionary, CFDictionary) -> OSStatus
+    public typealias Delete = @Sendable (CFDictionary) -> OSStatus
 
     private let service: String
     private let account: String
     private let copyMatching: CopyMatching
+    private let addItem: Add
+    private let updateItem: Update
+    private let deleteItem: Delete
 
-    /// - Parameter copyMatching: the Keychain query; tests inject failures.
+    /// - Parameters:
+    ///   - copyMatching: the Keychain query; tests inject failures.
+    ///   - addItem, updateItem, deleteItem: the Keychain writes; tests inject
+    ///     an in-memory Keychain so sign-in and sign-out never touch a real item.
     public init(
         service: String = "agency.thatworks.WhiskerFlow.meeting-capture",
         account: String = "atlas-device-token",
-        copyMatching: @escaping CopyMatching = { SecItemCopyMatching($0, $1) }
+        copyMatching: @escaping CopyMatching = { SecItemCopyMatching($0, $1) },
+        addItem: @escaping Add = { SecItemAdd($0, nil) },
+        updateItem: @escaping Update = { SecItemUpdate($0, $1) },
+        deleteItem: @escaping Delete = { SecItemDelete($0) }
     ) {
         self.service = service
         self.account = account
         self.copyMatching = copyMatching
+        self.addItem = addItem
+        self.updateItem = updateItem
+        self.deleteItem = deleteItem
     }
 
     public func lookup() -> MeetingCaptureTokenLookup {
@@ -69,11 +84,11 @@ public final class MeetingCaptureTokenStore: @unchecked Sendable {
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        let status = updateItem(query as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
             var add = query
             attributes.forEach { add[$0.key] = $0.value }
-            let addStatus = SecItemAdd(add as CFDictionary, nil)
+            let addStatus = addItem(add as CFDictionary)
             guard addStatus == errSecSuccess else { throw MeetingCaptureKeychainError.status(addStatus) }
         } else if status != errSecSuccess {
             throw MeetingCaptureKeychainError.status(status)
@@ -86,7 +101,7 @@ public final class MeetingCaptureTokenStore: @unchecked Sendable {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
-        let status = SecItemDelete(query as CFDictionary)
+        let status = deleteItem(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw MeetingCaptureKeychainError.status(status)
         }

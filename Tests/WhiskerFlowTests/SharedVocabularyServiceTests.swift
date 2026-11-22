@@ -233,4 +233,31 @@ final class SharedVocabularyServiceTests: XCTestCase {
         XCTAssertEqual(service.rules.map(\.find), ["bperfect"])
         XCTAssertEqual(try cachedFinds(), ["bperfect"])
     }
+
+    func testExplicitSignOutDeletesTheDownloadedGlossaryAndStopsRefreshing() async throws {
+        GlossaryStubProtocol.replies[Self.firstToken] = .init(status: 200, body: ["ok": true, "value": glossary([("acme", "ACME")])])
+        let service = makeService()
+        service.start()
+        await service.waitForCurrentFetch()
+        service.startPeriodicRefresh()
+        XCTAssertEqual(try cachedFinds(), ["acme"])
+
+        token = nil
+        service.signOut()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cacheURL.path), "The client glossary is not kept on this Mac")
+        XCTAssertFalse(service.rules.map(\.find).contains("acme"))
+        XCTAssertFalse(service.isRefreshingPeriodically)
+        let sent = GlossaryStubProtocol.requests.count
+        service.refresh()
+        service.credentialsChanged()
+        XCTAssertEqual(GlossaryStubProtocol.requests.count, sent, "Nothing is requested signed out")
+
+        token = Self.secondToken
+        GlossaryStubProtocol.replies[Self.secondToken] = .init(status: 200, body: ["ok": true, "value": glossary([("globex", "Globex")])])
+        service.credentialsChanged()
+        await service.waitForCurrentFetch()
+        XCTAssertEqual(service.rules.map(\.find), ["globex"], "Signing in again fetches the glossary without a restart")
+        XCTAssertEqual(GlossaryStubProtocol.requests.last?.value(forHTTPHeaderField: "Authorization"), "Bearer \(Self.secondToken)")
+    }
 }

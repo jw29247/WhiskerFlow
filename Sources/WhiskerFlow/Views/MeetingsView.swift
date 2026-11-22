@@ -213,6 +213,7 @@ struct MeetingsView: View {
 
 struct MeetingSetupView: View {
     @Bindable var appState: AppState
+    @State private var confirmingSignOut = UIPreview.mode.hasPrefix("sign-out")
 
     var body: some View {
         Section("Atlas") {
@@ -224,9 +225,16 @@ struct MeetingSetupView: View {
                 Button(appState.isSigningInToAtlas ? "Connecting…" : (appState.isAtlasPaired ? "Reconnect" : "Connect Atlas")) {
                     appState.signInToAtlas()
                 }.disabled(appState.isSigningInToAtlas)
+                if appState.isAtlasPaired {
+                    Button("Sign out…") { appState.atlasSignOutError = nil; confirmingSignOut = true }
+                        .disabled(appState.isSigningInToAtlas || confirmingSignOut)
+                }
             }
             Text("atlas.thatworks.agency").font(.caption).foregroundStyle(FlowStyle.muted)
             if let error = appState.atlasSignInError { Text(error).font(.caption).foregroundStyle(.orange) }
+            if confirmingSignOut && appState.isAtlasPaired {
+                AtlasSignOutConfirmation(appState: appState, isPresented: $confirmingSignOut)
+            }
         }
         Section("Audio access") {
             HStack {
