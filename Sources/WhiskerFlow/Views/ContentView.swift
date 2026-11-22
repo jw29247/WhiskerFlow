@@ -248,7 +248,7 @@ struct ContentView: View {
 
 }
 
-private enum FlowDestination: String, CaseIterable, Identifiable {
+enum FlowDestination: String, CaseIterable, Identifiable {
     case dictate = "Dictate", meetings = "Meetings", history = "History", dictionary = "Corrections", assistant = "Assistant",
          insights = "Insights", leaderboard = "Leaderboard"
     var id: String { rawValue }
@@ -260,5 +260,10 @@ private enum FlowDestination: String, CaseIterable, Identifiable {
     }
     var shortcutLabel: String {
         switch self { case .assistant: return "5"; case .dictate: return "1"; case .meetings: return "2"; case .history: return "3"; case .dictionary: return "4"; case .insights: return "6"; case .leaderboard: return "7" }
+    }
+    /// "⌘1 – ⌘7": every screen's shortcut, for the setup's Done step.
+    static var shortcutRangeLabel: String {
+        let labels = allCases.map(\.shortcutLabel).sorted()
+        return "⌘\(labels.first ?? "") – ⌘\(labels.last ?? "")"
     }
 }

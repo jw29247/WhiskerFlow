@@ -733,7 +733,7 @@ struct OnboardingDoneStep: View {
                 shortcutRow(keys: "⌥⇧⌘R", action: "Start or stop meeting recording", detail: "Press")
                 shortcutRow(keys: "⌥⇧⌘B", action: "Bookmark the meeting", detail: "Press while recording")
                 Divider()
-                shortcutRow(keys: "⌘1 – ⌘5", action: "Switch screens", detail: "In the WhiskerFlow window")
+                shortcutRow(keys: FlowDestination.shortcutRangeLabel, action: "Switch screens", detail: "In the WhiskerFlow window")
             }
             Text("Change your dictation shortcut in Settings → Dictation. The ⌥⇧⌘ shortcuts are fixed. You can run this setup again from Help → Run Setup Again, the menu bar, or Settings → App.")
                 .font(.caption).foregroundStyle(FlowStyle.muted)
