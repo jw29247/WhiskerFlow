@@ -1,7 +1,6 @@
 import Foundation
 import Logging
 import Observation
-import ServiceManagement
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
@@ -189,14 +188,12 @@ final class AppSettings {
         #endif
     }
 
-    var launchAtLogin: Bool {
-        didSet {
-            defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
-            if !UIPreview.isEnabled { applyLaunchAtLogin(launchAtLogin) }
-        }
-    }
+    /// Reads the system's login item; the stored default only remembers the
+    /// last request.
+    @ObservationIgnored let launchAtLogin: LaunchAtLoginController
 
-    init(defaults: UserDefaults = .standard, meetingTokenStore: MeetingCaptureTokenStore = MeetingCaptureTokenStore()) {
+    init(defaults: UserDefaults = .standard, meetingTokenStore: MeetingCaptureTokenStore = MeetingCaptureTokenStore(),
+         loginItemService: LoginItemService? = nil) {
         self.defaults = defaults
         self.meetingTokenStore = meetingTokenStore
         hadPreviousLaunch = Keys.previousLaunchMarkers.contains { defaults.object(forKey: $0) != nil }
@@ -264,7 +261,9 @@ final class AppSettings {
         meetingTranscriptRetention = defaults.string(forKey: Keys.meetingTranscriptRetention)
             .flatMap(MeetingTranscriptRetention.init(rawValue:)) ?? .defaultValue
         legacySelectedDeviceID = defaults.string(forKey: Keys.selectedDeviceID)
-        launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
+        launchAtLogin = LaunchAtLoginController(service: loginItemService ?? SystemLoginItemService()) {
+            defaults.set($0, forKey: Keys.launchAtLogin)
+        }
         defaults.removeObject(forKey: Keys.sharedVocabularyURL)
         // Echo cancellation was removed: it slowed every mic start and could
         // hang CoreAudio. Drop its setting and the hang record it kept.
@@ -326,22 +325,6 @@ final class AppSettings {
             let data = try JSONEncoder().encode(value)
             defaults.set(data, forKey: key)
             persistenceError = nil
-        } catch {
-            reportPersistenceFailure(error)
-        }
-    }
-
-    private func applyLaunchAtLogin(_ enabled: Bool) {
-        do {
-            if enabled {
-                if SMAppService.mainApp.status != .enabled {
-                    try SMAppService.mainApp.register()
-                }
-            } else {
-                if SMAppService.mainApp.status == .enabled {
-                    try SMAppService.mainApp.unregister()
-                }
-            }
         } catch {
             reportPersistenceFailure(error)
         }
