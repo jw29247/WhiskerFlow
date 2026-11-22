@@ -13,16 +13,7 @@ enum CoreAudioProcesses {
 
     static func current() -> [Process] {
         guard #available(macOS 14.2, *) else { return [] }
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyProcessObjectList,
-            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain
-        )
-        var size: UInt32 = 0
-        let system = AudioObjectID(kAudioObjectSystemObject)
-        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr, size > 0 else { return [] }
-        var objects = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
-        guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &objects) == noErr else { return [] }
-        return objects.compactMap { object in
+        return processObjectIDs().compactMap { object in
             let input = uint32(object, kAudioProcessPropertyIsRunningInput) != 0
             let output = uint32(object, kAudioProcessPropertyIsRunningOutput) != 0
             guard input || output else { return nil }
@@ -35,6 +26,21 @@ enum CoreAudioProcesses {
             AudioObjectGetPropertyData(object, &pidAddress, 0, nil, &pidSize, &pid)
             return Process(pid: pid, bundleID: bundleID(object), isRunningInput: input, isRunningOutput: output)
         }
+    }
+
+    /// CoreAudio's process objects, one per process that has used audio.
+    @available(macOS 14.2, *)
+    static func processObjectIDs() -> [AudioObjectID] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr, size > 0 else { return [] }
+        var objects = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &objects) == noErr else { return [] }
+        return objects
     }
 
     private static func uint32(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> UInt32 {

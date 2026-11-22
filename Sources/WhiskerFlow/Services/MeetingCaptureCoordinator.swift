@@ -169,7 +169,7 @@ final class MeetingCaptureCoordinator {
     // user's private assistant file too.
     self.assistant = assistant ?? (store == nil ? MeetingAssistantController() : MeetingAssistantController(
       rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("WhiskerFlowAssistant-\(UUID().uuidString)")))
-    self.callDetector = callDetector ?? CallDetectionService()
+    self.callDetector = callDetector ?? CallDetectionService(microphoneActivity: CoreAudioMicrophoneActivity())
     let root = StorageLocations.applicationSupportRootOrTemporary()
       .appendingPathComponent("MeetingRecordings", isDirectory: true)
     self.store = store ?? EncryptedMeetingChunkStore(
