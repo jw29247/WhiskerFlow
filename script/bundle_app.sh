@@ -114,7 +114,7 @@ fi
 # It is loaded by file path, so the install name is only a label: set one, or
 # the linker records the absolute output path on the build Mac.
 mkdir -p "$APP_BUNDLE/Contents/Frameworks"
-clang -fblocks -dynamiclib -O2 -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
+clang -fblocks -dynamiclib -O2 -arch arm64 -mmacosx-version-min=26.0 \
   -framework CoreFoundation \
   -install_name "@rpath/libWhiskerFlowNowPlaying.dylib" \
   -o "$APP_BUNDLE/Contents/Frameworks/libWhiskerFlowNowPlaying.dylib" \

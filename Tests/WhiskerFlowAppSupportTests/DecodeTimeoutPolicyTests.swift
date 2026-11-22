@@ -27,13 +27,12 @@ final class DecodeTimeoutPolicyTests: XCTestCase {
         XCTAssertEqual(DecodeTimeoutPolicy.timeout(forAudioSeconds: 5.001, scale: 1), 30.003, accuracy: 0.0001)
     }
 
-    /// Budgets are tuned on a 16 GB Apple Silicon Mac; a base 8 GB machine and
-    /// Intel get proportionally longer before a slow decode counts as wedged.
+    /// Budgets are tuned on a 16 GB Apple Silicon Mac; a base 8 GB machine
+    /// gets proportionally longer before a slow decode counts as wedged.
     func testSlowerHardwareGetsProportionallyLongerBudgets() {
         let gib: UInt64 = 1_024 * 1_024 * 1_024
-        XCTAssertEqual(DecodeTimeoutPolicy.hardwareScale(physicalMemoryBytes: 16 * gib, isAppleSilicon: true), 1)
-        XCTAssertEqual(DecodeTimeoutPolicy.hardwareScale(physicalMemoryBytes: 8 * gib, isAppleSilicon: true), 2)
-        XCTAssertEqual(DecodeTimeoutPolicy.hardwareScale(physicalMemoryBytes: 32 * gib, isAppleSilicon: false), 3)
+        XCTAssertEqual(DecodeTimeoutPolicy.hardwareScale(physicalMemoryBytes: 16 * gib), 1)
+        XCTAssertEqual(DecodeTimeoutPolicy.hardwareScale(physicalMemoryBytes: 8 * gib), 2)
         XCTAssertEqual(DecodeTimeoutPolicy.timeout(forAudioSeconds: 30, scale: 2), 210)
         XCTAssertGreaterThanOrEqual(DecodeTimeoutPolicy.hardwareScale, 1)
     }
