@@ -172,8 +172,8 @@ later fetches the notes Atlas writes for the meeting.
   Atlas AI when I request it** (off by default); with it off, preparation is
   done on your Mac. Atlas passes these requests to its AI provider.
 - **Review latest meeting** asks Atlas AI to review a meeting already on
-  Atlas, sending your goal with it. At present this button works even when
-  the Atlas AI switch is off.
+  Atlas, sending your goal with it. It needs the same switch: with it off,
+  nothing is sent.
 - **Send** on a draft saves its title and text to Atlas as a private draft.
 - The client list and a client's vocabulary are downloaded when you refresh
   them or pick a client.
