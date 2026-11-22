@@ -38,6 +38,10 @@ struct DictationView: View {
                             .foregroundStyle(FlowStyle.muted)
                             .multilineTextAlignment(.center)
 
+                        if appState.isShortcutPausedBySecureInput {
+                            SecureInputNotice()
+                        }
+
                         if presentation.needsSetup {
                             Button("Set up dictation", action: openSetup)
                                 .buttonStyle(FlowPrimaryButtonStyle())

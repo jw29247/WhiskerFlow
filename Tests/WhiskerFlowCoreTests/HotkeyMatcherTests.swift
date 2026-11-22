@@ -126,4 +126,20 @@ final class HotkeyMatcherTests: XCTestCase {
         XCTAssertTrue(KeyCombo(keyCode: 111).isUsableAsGlobalHotkey)             // F12
         XCTAssertTrue(KeyCombo(keyCode: 61, modifiers: .option, isModifierOnly: true).isUsableAsGlobalHotkey)
     }
+
+    // MARK: - Discard key
+
+    func testPlainEscapePressIsTheDiscardKey() {
+        XCTAssertTrue(HotkeyMatcher.isDiscardPress(keyCode: 53, modifiers: [], isKeyDown: true, isRepeat: false))
+        // fn is set by some keyboards for Escape and must not matter.
+        XCTAssertTrue(HotkeyMatcher.isDiscardPress(keyCode: 53, modifiers: .function, isKeyDown: true, isRepeat: false))
+    }
+
+    func testEscapeReleaseRepeatOrChordDoesNotDiscard() {
+        XCTAssertFalse(HotkeyMatcher.isDiscardPress(keyCode: 53, modifiers: [], isKeyDown: false, isRepeat: false))
+        XCTAssertFalse(HotkeyMatcher.isDiscardPress(keyCode: 53, modifiers: [], isKeyDown: true, isRepeat: true))
+        XCTAssertFalse(HotkeyMatcher.isDiscardPress(keyCode: 53, modifiers: .option, isKeyDown: true, isRepeat: false))
+        XCTAssertFalse(HotkeyMatcher.isDiscardPress(keyCode: 53, modifiers: .command, isKeyDown: true, isRepeat: false))
+        XCTAssertFalse(HotkeyMatcher.isDiscardPress(keyCode: f12Key, modifiers: [], isKeyDown: true, isRepeat: false))
+    }
 }

@@ -195,6 +195,7 @@ enum UIPreview {
                 }
             }
             if mode == "recording" { state.isRecording = true; state.status = .recording; state.audioLevel = 0.16; state.liveText = "This is a preview of your words as you speak." }
+            if mode == "secure-input" { state.isShortcutPausedBySecureInput = true }
             if mode == "transcribing" { state.isTranscribing = true; state.status = .transcribing }
             if mode == "toggle-auto-stopped" {
                 let message = ToggleAutoStop.silence.savedMessage(copiedToClipboard: false)

@@ -11,6 +11,10 @@ import WhiskerFlowCore
 @MainActor
 final class HotkeyMonitor {
     private let onChange: (Bool) -> Void
+    /// Called on a plain Escape press, for discarding a dictation in progress.
+    /// The key events are already observed for the shortcut, so this adds a
+    /// comparison per key event and no extra monitor.
+    var onDiscardKey: (() -> Void)?
     private var matcher: HotkeyMatcher
     private var isSuspended = false
     private var flagsLocalMonitor: Any?
@@ -118,12 +122,18 @@ final class HotkeyMonitor {
     private func handleKey(_ event: NSEvent, source: String) {
         guard !isSuspended else { return }
         let modifiers = KeyModifiers(rawValue: UInt(event.modifierFlags.rawValue))
+        let isKeyDown = event.type == .keyDown
         emitIfChanged(matcher.handleKey(
             keyCode: event.keyCode,
             modifiers: modifiers,
-            isKeyDown: event.type == .keyDown,
+            isKeyDown: isKeyDown,
             isRepeat: event.isARepeat
         ), event: event, source: source)
+        if let onDiscardKey, HotkeyMatcher.isDiscardPress(
+            keyCode: event.keyCode, modifiers: modifiers, isKeyDown: isKeyDown, isRepeat: event.isARepeat
+        ) {
+            onDiscardKey()
+        }
     }
 
     private func emitIfChanged(_ pressed: Bool?, event: NSEvent? = nil, source: String = "local") {
