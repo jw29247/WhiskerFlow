@@ -62,10 +62,8 @@ final class HistoryRetentionAppTests: XCTestCase {
         XCTAssertEqual(state.records.count, 1, "a failed recording stays retryable with history off")
 
         state.retryAllFailed()
-        let deadline = Date().addingTimeInterval(20)
-        while (state.insightsSummary.lifetimeDictations == 0 || !state.records.isEmpty), Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await state.retryAllTask?.value
+        await state.insightRecording?.value
 
         XCTAssertTrue(state.records.isEmpty)
         XCTAssertEqual(state.latestTranscript?.text, "Private words")
@@ -123,16 +121,12 @@ final class HistoryRetentionAppTests: XCTestCase {
         state.records = store.records
         XCTAssertTrue(state.hasRecording(original))
 
-        state.retranscribe(original, with: .parakeetTDTv3)
-        var deadline = Date().addingTimeInterval(20)
-        while state.isTranscribing || state.status == .transcribing, Date() < deadline { try await Task.sleep(nanoseconds: 50_000_000) }
+        await state.retranscribe(original, with: .parakeetTDTv3)?.value
         XCTAssertEqual(state.records.first?.text, "Original words", "a failed retry keeps the transcript")
         XCTAssertEqual(state.records.first?.status, .transcribed)
 
         recognizer.text = "From the other engine"
-        state.retranscribe(original, with: .parakeetTDTv3)
-        deadline = Date().addingTimeInterval(20)
-        while state.records.first?.text == "Original words", Date() < deadline { try await Task.sleep(nanoseconds: 50_000_000) }
+        await state.retranscribe(original, with: .parakeetTDTv3)?.value
         // The writing tone may add end punctuation; the words come from the other engine.
         XCTAssertTrue(state.records.first?.text.hasPrefix("From the other engine") == true)
         XCTAssertEqual(state.records.first?.engine, TranscriptionEngineKind.parakeetTDTv3.rawValue)

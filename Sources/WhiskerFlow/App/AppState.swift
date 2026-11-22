@@ -174,6 +174,8 @@ final class AppState {
     let leaderboard: LeaderboardController
     /// Recomputed when a dictation is recorded, on reset and on a typing-speed change.
     private(set) var insightsSummary = InsightsSummary(buckets: [], recentSamples: [])
+    /// The latest dictation's Insights update, readable so tests can await it.
+    private(set) var insightRecording: Task<Void, Never>?
     /// With history off, the last transcript stays in memory for a few minutes
     /// so Copy keeps working. It is never written to disk.
     private(set) var ephemeralTranscript: TranscriptRecord?
@@ -222,7 +224,8 @@ final class AppState {
     /// The shutdown-drain token each in-flight finish holds. Non-empty while a
     /// dictation is still finishing, which keeps background retries off the status.
     private var finishWorkTokens: [UUID: UUID] = [:]
-    private var retryAllTask: Task<Void, Never>?
+    /// Readable so tests can await a Retry All instead of polling.
+    private(set) var retryAllTask: Task<Void, Never>?
     private var meetingStorageTask: Task<Void, Never>?
     /// Cached Keychain state. Views and the hotkey path read these instead of the
     /// Keychain, which can block the main thread on a slow securityd or an ACL
@@ -1488,7 +1491,7 @@ final class AppState {
         let tone = configuration.writing.tone
         let vocabulary = configuration.vocabulary
         let recognizeCorrections = configuration.recognizeCorrections
-        Task { @MainActor [weak self] in
+        insightRecording = Task { @MainActor [weak self] in
             let counts = await Task.detached(priority: .utility) {
                 AssistantTextProcessing.correctionCounts(rawText, tone: tone, vocabulary: vocabulary,
                                                          recognizeCorrections: recognizeCorrections)
@@ -1523,10 +1526,12 @@ final class AppState {
         ephemeralTranscript = nil
     }
 
-    func retry(_ record: TranscriptRecord) {
-        guard !UIPreview.isEnabled else { return }
-        guard !activeTranscriptionIDs.contains(record.id) else { return }
-        Task { await retryRecording(record) }
+    /// Returns the retry, so tests can await it; the app does not.
+    @discardableResult
+    func retry(_ record: TranscriptRecord) -> Task<Void, Never>? {
+        guard !UIPreview.isEnabled else { return nil }
+        guard !activeTranscriptionIDs.contains(record.id) else { return nil }
+        return Task { await retryRecording(record) }
     }
 
     /// One record at a time: each retry is a full-file decode, and several at once

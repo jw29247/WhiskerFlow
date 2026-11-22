@@ -67,10 +67,7 @@ final class RetryDeliveryTests: XCTestCase {
         state.records = store.records
 
         state.retryAllFailed()
-        let deadline = Date().addingTimeInterval(20)
-        while state.records.contains(where: { $0.status != .transcribed }), Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await state.retryAllTask?.value
 
         XCTAssertEqual(state.records.map(\.status), [.transcribed, .transcribed])
         XCTAssertEqual(state.records.map(\.text), ["Retried transcript", "Retried transcript"])
@@ -105,11 +102,7 @@ final class RetryDeliveryTests: XCTestCase {
                              transcription: FakeRecognizer(text: "Book the venue").service)
         state.records = store.records
 
-        state.retry(record)
-        let deadline = Date().addingTimeInterval(20)
-        while state.records.contains(where: { $0.status != .transcribed }), Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await state.retry(record)?.value
 
         XCTAssertEqual(state.assistant.saved.drafts.map(\.kind), [.taskDraft])
         XCTAssertEqual(state.assistant.saved.drafts.first?.text.contains("Book the venue"), true)
@@ -143,11 +136,7 @@ final class RetryDeliveryTests: XCTestCase {
                              transcription: FakeRecognizer(text: String(repeating: "Book the venue. ", count: 600)).service)
         state.records = store.records
 
-        state.retry(record)
-        let deadline = Date().addingTimeInterval(20)
-        while state.status != .failure("Draft not saved; queued for retry"), Date() < deadline {
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
+        await state.retry(record)?.value
 
         XCTAssertEqual(state.status, .failure("Draft not saved; queued for retry"))
         XCTAssertTrue(state.assistant.saved.drafts.isEmpty)
