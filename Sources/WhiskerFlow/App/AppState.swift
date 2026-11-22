@@ -158,6 +158,8 @@ final class AppState {
     var translationNotice: String?
     private var devicePrepareTask: Task<Void, Never>?
     private let recordingCoordinator = RecordingCoordinator()
+    /// The dictation lifecycle. Set once in `init`, as soon as `self` exists.
+    @ObservationIgnored private(set) var dictation: DictationLifecycle!
     private var pasteService: any TextDeliveryService
     var lastPasteReceipt: PasteDeliveryReceipt?
     var assistantVoiceInstruction = ""
@@ -341,6 +343,7 @@ final class AppState {
         }
         // The settings' defaults: `.standard` in the app, a test's own suite in tests.
         onboarding = OnboardingController(store: onboardingStore ?? UserDefaultsOnboardingStore(defaults: resolvedSettings.userDefaults))
+        dictation = DictationLifecycle(app: self)
         if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "coach" {
             meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant, appState: self)
         }
