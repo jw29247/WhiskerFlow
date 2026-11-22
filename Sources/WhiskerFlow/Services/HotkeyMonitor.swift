@@ -17,6 +17,10 @@ final class HotkeyMonitor {
     var onDiscardKey: (() -> Void)?
     private var matcher: HotkeyMatcher
     private var isSuspended = false
+    /// While an event tap swallows this shortcut, the tap is its only source:
+    /// a swallowed event may or may not still reach the monitors, and one
+    /// source means a press can never be counted twice.
+    private var isDrivenByTap = false
     private var flagsLocalMonitor: Any?
     private var flagsGlobalMonitor: Any?
     private var keyLocalMonitor: Any?
@@ -40,6 +44,32 @@ final class HotkeyMonitor {
         guard suspended != isSuspended else { return }
         isSuspended = suspended
         if suspended { emitIfChanged(matcher.reset()) }
+    }
+
+    /// Hand matching to (or take it back from) `ShortcutEventTap`. The matcher
+    /// and any press in progress carry over, so switching never drops a release.
+    func setDrivenByTap(_ driven: Bool) {
+        isDrivenByTap = driven
+    }
+
+    /// An event the tap saw, for a shortcut the tap drives.
+    func feed(_ event: ShortcutEventTap.Event) {
+        guard isDrivenByTap, !isSuspended else { return }
+        let pressed: Bool?
+        switch event.kind {
+        case .flagsChanged:
+            pressed = matcher.handleFlags(keyCode: event.keyCode, modifiers: event.modifiers)
+        case .keyDown, .keyUp:
+            pressed = matcher.handleKey(keyCode: event.keyCode, modifiers: event.modifiers,
+                                        isKeyDown: event.kind == .keyDown, isRepeat: event.isRepeat)
+        }
+        guard let pressed else { return }
+        logger.info("Configured hotkey transition received", metadata: [
+            "event": "hotkey_transition", "event_source": "tap", "pressed": "\(pressed)",
+            "app_active": "\(NSApp?.isActive ?? false)",
+            "elapsed_ms": "\(max(0, ProcessInfo.processInfo.systemUptime - event.timestamp) * 1000)"
+        ])
+        onChange(pressed)
     }
 
     func start() {
@@ -114,7 +144,7 @@ final class HotkeyMonitor {
     }
 
     private func handleFlags(_ event: NSEvent, source: String) {
-        guard !isSuspended else { return }
+        guard !isSuspended, !isDrivenByTap else { return }
         let modifiers = KeyModifiers(rawValue: UInt(event.modifierFlags.rawValue))
         emitIfChanged(matcher.handleFlags(keyCode: event.keyCode, modifiers: modifiers), event: event, source: source)
     }
@@ -123,12 +153,15 @@ final class HotkeyMonitor {
         guard !isSuspended else { return }
         let modifiers = KeyModifiers(rawValue: UInt(event.modifierFlags.rawValue))
         let isKeyDown = event.type == .keyDown
-        emitIfChanged(matcher.handleKey(
-            keyCode: event.keyCode,
-            modifiers: modifiers,
-            isKeyDown: isKeyDown,
-            isRepeat: event.isARepeat
-        ), event: event, source: source)
+        if !isDrivenByTap {
+            emitIfChanged(matcher.handleKey(
+                keyCode: event.keyCode,
+                modifiers: modifiers,
+                isKeyDown: isKeyDown,
+                isRepeat: event.isARepeat
+            ), event: event, source: source)
+        }
+        // Discarding is idempotent, so seeing an Esc the tap also handled is harmless.
         if let onDiscardKey, HotkeyMatcher.isDiscardPress(
             keyCode: event.keyCode, modifiers: modifiers, isKeyDown: isKeyDown, isRepeat: event.isARepeat
         ) {

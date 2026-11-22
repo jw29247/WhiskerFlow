@@ -188,6 +188,10 @@ final class AppState {
     static let selectionShortcut = KeyCombo(keyCode: 14, modifiers: [.command, .option, .shift])
     static let quickCaptureShortcut = KeyCombo(keyCode: 45, modifiers: [.command, .option, .shift])
     static let bookmarkShortcut = KeyCombo(keyCode: 11, modifiers: [.command, .option, .shift])
+    /// ⌥⇧⌘R, the same as the "Toggle Meeting Capture" menu command.
+    static let meetingShortcut = KeyCombo(keyCode: 15, modifiers: [.command, .option, .shift])
+    private var shortcutTap: ShortcutEventTap?
+    private var isShortcutTapActive = false
     private var meetingCoachHUD: MeetingCoachHUDController?
     private var callPromptHUD: CallPromptHUDController?
     private var hudController: RecordingHUDController?
@@ -726,6 +730,10 @@ final class AppState {
         assistantHotkeyMonitors.forEach { $0.stop() }
         assistantHotkeyMonitors = []
         hotkeyMonitor = nil
+        recordingCoordinator.onPhaseChange = nil
+        shortcutTap?.stop()
+        shortcutTap = nil
+        isShortcutTapActive = false
         secureInputMonitor?.stop()
         secureInputMonitor = nil
         if !globeKeyShortcutOverride.restore() {
@@ -844,6 +852,9 @@ final class AppState {
         guard !UIPreview.isEnabled, let hotkeyMonitor else { return }
         configureGlobeKeyShortcut()
         hotkeyMonitor.update(combo: settings.activeHotkeyCombo)
+        let combo = settings.activeHotkeyCombo
+        shortcutTap?.update { $0.setDictationCombo(combo) }
+        hotkeyMonitor.setDrivenByTap(isShortcutTapActive && !combo.isModifierOnly)
     }
 
     func warmUpMeetingEngine() {
@@ -878,6 +889,7 @@ final class AppState {
     func setHotkeyCaptureActive(_ active: Bool) {
         hotkeyMonitor?.setSuspended(active)
         assistantHotkeyMonitors.forEach { $0.setSuspended(active) }
+        shortcutTap?.update { $0.isSuspended = active }
     }
 
     /// The team glossary plus the user's personal rules, applied to every
@@ -1580,6 +1592,32 @@ final class AppState {
             self.bookmarkMeeting()
         }
         bookmark.start(); assistantHotkeyMonitors.append(bookmark)
+        startShortcutTap()
+    }
+
+    /// Swallows the shortcuts WhiskerFlow acts on; see `ShortcutEventFilter`.
+    /// Until the tap is running (or if it never can), the monitors above
+    /// observe every shortcut exactly as before.
+    private func startShortcutTap() {
+        let tap = ShortcutEventTap(
+            filter: ShortcutEventFilter(dictationCombo: settings.activeHotkeyCombo, meetingCombo: Self.meetingShortcut),
+            onDecision: { [weak self] decision, event in
+                guard let self else { return }
+                if decision.forwardToDictation { self.hotkeyMonitor?.feed(event) }
+                if decision.discard { self.discardDictation() }
+                if decision.toggleMeeting { self.toggleMeetingCapture() }
+            },
+            onActiveChange: { [weak self] active in
+                guard let self else { return }
+                self.isShortcutTapActive = active
+                self.hotkeyMonitor?.setDrivenByTap(active && !self.settings.activeHotkeyCombo.isModifierOnly)
+            }
+        )
+        recordingCoordinator.onPhaseChange = { [weak tap] phase in
+            tap?.update { $0.isDictationRecording = phase.isDiscardable }
+        }
+        tap.start()
+        shortcutTap = tap
     }
 
     private func startSecureInputMonitor() {
