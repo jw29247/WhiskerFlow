@@ -26,6 +26,20 @@ cmp "$ROOT_DIR/Sources/WhiskerFlow/Resources/CleanupNotices.txt" \
   "$APP_BUNDLE/Contents/Resources/WhiskerFlow_WhiskerFlow.bundle/CleanupNotices.txt"
 codesign --verify --deep --strict "$APP_BUNDLE"
 
+# The app runs only on Apple Silicon, so it ships no Intel code: the Cleanup
+# runtime is thinned to arm64 when bundled. Sparkle is the one deliberate
+# exception; its signed helpers are embedded exactly as Sparkle ships them.
+[[ "$(lipo -archs "$APP_BUNDLE/Contents/Frameworks/llama.framework/llama")" == arm64 ]]
+while IFS= read -r -d '' file; do
+  archs="$(lipo -archs "$file" 2>/dev/null)" || continue
+  [[ " $archs " == *" x86_64 "* ]] || continue
+  case "${file#"$APP_BUNDLE"/}" in
+    Contents/Frameworks/Sparkle.framework/*) continue ;;
+  esac
+  echo "FAIL: $file contains an x86_64 slice" >&2
+  exit 1
+done < <(find "$APP_BUNDLE" -type f -print0)
+
 DEV_BUNDLE="$ROOT_DIR/.build/$CONFIGURATION/WhiskerFlow Test Dev.app"
 BUNDLE_IDENTIFIER_OVERRIDE=agency.thatworks.WhiskerFlow.dev \
   BUNDLE_NAME_OVERRIDE='WhiskerFlow Dev' \
