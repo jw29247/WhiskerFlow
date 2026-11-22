@@ -18,7 +18,7 @@ struct MeetingLibraryList: View {
                     .font(.caption).foregroundStyle(FlowStyle.muted)
             }
             if let error = library.storageError {
-                Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+                Label(error, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(FlowStyle.danger)
             }
             if library.entries.isEmpty {
                 Text(library.isLoaded
@@ -101,8 +101,9 @@ struct MeetingStatusPill: View {
 
     private var color: Color {
         switch status {
-        case .recording, .failed: return FlowStyle.recording
-        case .delivered: return .green
+        case .recording: return FlowStyle.recording
+        case .failed: return FlowStyle.danger
+        case .delivered: return FlowStyle.success
         case .queued: return FlowStyle.muted
         case .uploading, .transcribing: return FlowStyle.accent
         }
