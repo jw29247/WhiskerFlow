@@ -72,6 +72,16 @@ public struct HotkeyMatcher {
         return transition(to: false)
     }
 
+    /// Feed a pressed or released event of the registered hot key for this
+    /// combo. The system has already matched the key and its modifiers, so
+    /// only the transition is left; a repeated press while held changes
+    /// nothing. A required modifier going up still releases, through
+    /// `handleFlags`, so either release signal ends the press exactly once.
+    public mutating func handleRegisteredHotKey(pressed: Bool) -> Bool? {
+        guard !combo.isModifierOnly else { return nil }
+        return transition(to: pressed)
+    }
+
     /// The virtual key code of Escape.
     public static let escapeKeyCode: UInt16 = 53
 
