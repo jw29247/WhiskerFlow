@@ -3,14 +3,16 @@ import Observation
 import SwiftUI
 import WhiskerFlowAppSupport
 
-/// Shows "Record this meeting?" in a small floating panel when a call starts.
-/// Like the coach HUD it never takes focus from the call, and it is excluded
-/// from screen sharing.
+/// Shows "Record this meeting?" in a small floating panel when a call starts,
+/// and "Tell the others you're recording" once a recording starts while the
+/// coach HUD (which shows that reminder itself) is hidden. Like the coach HUD
+/// it never takes focus from the call, and it is excluded from screen sharing.
 @MainActor
 final class CallPromptHUDController {
     private let appState: AppState
     private var panel: CallPromptPanel?
     static let panelTitle = "Record this meeting?"
+    static let reminderTitle = "Tell the others you’re recording"
 
     init(appState: AppState) {
         self.appState = appState
@@ -18,14 +20,24 @@ final class CallPromptHUDController {
     }
 
     private func observe() {
-        let prompt = withObservationTracking {
-            appState.callPrompt
+        let (prompt, reminder) = withObservationTracking {
+            (appState.callPrompt, appState.isRecordingReminderVisible && !appState.meetingAssistant.shouldShowHUD
+                ? appState.recordingReminder.state : nil)
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in self?.observe() }
         }
         if let prompt {
             if panel == nil { createPanel() }
+            panel?.title = Self.panelTitle
             panel?.contentView = NSHostingView(rootView: CallPromptView(prompt: prompt, appState: appState))
+            position()
+            panel?.orderFrontRegardless()
+        } else if reminder != nil {
+            if panel == nil { createPanel() }
+            panel?.title = Self.reminderTitle
+            panel?.contentView = NSHostingView(rootView: FloatingMeetingCard {
+                MeetingRecordingReminderView(appState: appState)
+            })
             position()
             panel?.orderFrontRegardless()
         } else {
@@ -89,6 +101,8 @@ struct CallPromptView: View {
                     Text(prompt.title).font(.system(size: 14, weight: .semibold)).lineLimit(2)
                 }
                 Text("Record this meeting?").font(.system(size: 14, weight: prompt.intent == nil ? .semibold : .regular))
+                Label("If you record, tell the other participants.", systemImage: "person.2.wave.2")
+                    .font(.caption).foregroundStyle(FlowStyle.recording)
                 HStack(spacing: 8) {
                     Button("Record") { appState.acceptCallPrompt() }
                         .buttonStyle(FlowPrimaryButtonStyle())
@@ -104,5 +118,20 @@ struct CallPromptView: View {
         .background(FlowStyle.surface, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(FlowStyle.line))
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The floating meeting panels' card.
+struct FloatingMeetingCard<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content
+            .padding(16)
+            .frame(width: 340, alignment: .leading)
+            .foregroundStyle(FlowStyle.ink)
+            .background(FlowStyle.surface, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(FlowStyle.line))
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

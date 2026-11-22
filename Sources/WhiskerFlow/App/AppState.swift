@@ -312,9 +312,9 @@ final class AppState {
         }
         onboarding = OnboardingController(store: onboardingStore ?? UserDefaultsOnboardingStore())
         if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "coach" {
-            meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant)
+            meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant, appState: self)
         }
-        if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "call-prompt" {
+        if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "call-prompt" || UIPreview.mode.hasPrefix("recording-notice") {
             callPromptHUD = CallPromptHUDController(appState: self)
         }
         applyCoachSettings()
@@ -492,6 +492,19 @@ final class AppState {
   }
 
   func declineCallPrompt() { meetingCapture.declineCallPrompt() }
+
+  // MARK: Telling the others they are being recorded
+
+  var recordingReminder: MeetingRecordingReminder { meetingCapture.recordingReminder }
+  var isRecordingReminderVisible: Bool { recordingReminder.isVisible(during: activeMeetingSessionID) }
+  var meetingRecordingNoticeText: String { MeetingRecordingNotice.text(custom: settings.meetingRecordingNotice) }
+
+  /// Puts the notice on the clipboard only when the user clicks Copy.
+  func copyMeetingRecordingNotice() {
+    recordingReminder.copy(meetingRecordingNoticeText, using: copy)
+  }
+
+  func dismissRecordingReminder() { recordingReminder.dismiss() }
 
   func setAskToRecordCalls(_ enabled: Bool) {
     settings.askToRecordCalls = enabled

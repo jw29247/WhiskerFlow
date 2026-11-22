@@ -89,6 +89,14 @@ enum UIPreview {
                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            // A floating meeting panel (call prompt, reminder or coach) is
+            // written beside it as `-panel.png`.
+            if let panel = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.nonactivatingPanel) }),
+               let content = panel.contentView, let panelRep = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+                content.cacheDisplay(in: content.bounds, to: panelRep)
+                try? panelRep.representation(using: .png, properties: [:])?
+                    .write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-panel.png")))
+            }
             NSApp.terminate(nil)
         }
         #endif
@@ -105,12 +113,15 @@ enum UIPreview {
         guard mode.hasPrefix("onboarding-") else { return nil }
         return OnboardingStep(rawValue: String(mode.dropFirst("onboarding-".count)))
     }
-    static var isRecordingMeeting: Bool { mode == "meeting-recording" || mode == "coach" }
+    static var isRecordingMeeting: Bool { mode == "meeting-recording" || mode == "coach" || mode.hasPrefix("recording-notice") }
 
     static func makeAppState() -> AppState {
         #if DEBUG
         if isEnabled {
             let identifier = "agency.thatworks.WhiskerFlow.ui-preview.\(UUID().uuidString)"
+            // Floating panels aren't SwiftUI scenes: give them the preview's
+            // light or dark appearance too, not the Mac's.
+            NSApplication.shared.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
             let defaults = UserDefaults(suiteName: identifier)!
             // An install that 2.0.0 to 2.1.0 left recording automatically: the
             // reset turns it off and the main window asks once.
@@ -185,6 +196,11 @@ enum UIPreview {
             state.leaderboard.insertForPreview(previewLeaderboard)
             if mode == "call-prompt" { state.showCallPromptForPreview() }
             if mode == "coach" { seedCoach(state.meetingAssistant) }
+            // Every recording starts with "Tell the others you're recording".
+            // `recording-notice` shows it in its own floating panel (coach
+            // hidden); `recording-notice-copied` after Copy.
+            if isRecordingMeeting { state.recordingReminder.recordingStarted(sessionID: recordingSessionID) }
+            if mode == "recording-notice-copied" { state.recordingReminder.showCopiedForPreview() }
             return state
         }
         // End-to-end runs beside the installed app: same bundle ID (so the

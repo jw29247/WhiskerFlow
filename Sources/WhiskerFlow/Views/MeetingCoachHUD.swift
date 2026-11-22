@@ -7,10 +7,12 @@ import SwiftUI
 @MainActor
 final class MeetingCoachHUDController {
     private let controller: MeetingAssistantController
+    private let appState: AppState
     private var panel: PrivateCoachPanel?
 
-    init(controller: MeetingAssistantController) {
+    init(controller: MeetingAssistantController, appState: AppState) {
         self.controller = controller
+        self.appState = appState
         observeVisibility()
     }
 
@@ -45,7 +47,7 @@ final class MeetingCoachHUDController {
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.sharingType = .none
-        panel.contentView = NSHostingView(rootView: MeetingCoachHUDView(controller: controller) { [weak panel] size in
+        panel.contentView = NSHostingView(rootView: MeetingCoachHUDView(controller: controller, appState: appState) { [weak panel] size in
             guard size.height > 0 else { return }
             // Called from SwiftUI layout; resizing the hosting window here would
             // re-enter AppKit layout. Apply it on the next actor turn instead.
@@ -72,6 +74,7 @@ private final class PrivateCoachPanel: NSPanel {
 
 private struct MeetingCoachHUDView: View {
     @Bindable var controller: MeetingAssistantController
+    let appState: AppState
     let sizeChanged: (CGSize) -> Void
     @State private var bookmarkFeedback: String?
 
@@ -86,6 +89,10 @@ private struct MeetingCoachHUDView: View {
                 }.buttonStyle(.plain).accessibilityLabel("Hide coach")
             }
             Text(controller.activeTitle ?? "Meeting").font(.subheadline).lineLimit(1)
+            if appState.isRecordingReminderVisible {
+                MeetingRecordingReminderView(appState: appState)
+                    .padding(12).background(FlowStyle.selection, in: RoundedRectangle(cornerRadius: 10))
+            }
             if !controller.goal.isEmpty {
                 Text(controller.goal).font(.callout).lineLimit(2)
             }
