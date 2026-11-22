@@ -41,6 +41,7 @@ final class DictationLifecycle {
     /// I/O on the capture, decode and paste path are not coalesced.
     private var dictationActivity: NSObjectProtocol?
     private var dictationWarmUpTask: Task<Void, Never>?
+    private var latestDeliveryID: UUID?
     /// Neural Engine state decays within seconds; re-warm during long holds.
     private static let dictationWarmUpInterval: UInt64 = 4_000_000_000
 
@@ -138,10 +139,22 @@ final class DictationLifecycle {
         set { app.latestRecordingSessionID = newValue }
     }
 
-    private var latestDeliveryID: UUID? {
-        get { app.latestDeliveryID }
-        set { app.latestDeliveryID = newValue }
+    private var assistantVoiceInstruction: String {
+        get { app.assistantVoiceInstruction }
+        set { app.assistantVoiceInstruction = newValue }
     }
+
+    private var hasAccessibilityPermission: Bool {
+        get { app.hasAccessibilityPermission }
+        set { app.hasAccessibilityPermission = newValue }
+    }
+
+    private var lastPasteReceipt: PasteDeliveryReceipt? {
+        get { app.lastPasteReceipt }
+        set { app.lastPasteReceipt = newValue }
+    }
+
+    private var pasteService: any TextDeliveryService { app.pasteService }
 
     private func refreshDevices() { app.refreshDevices() }
 
@@ -223,28 +236,6 @@ final class DictationLifecycle {
 
     private nonisolated static func estimatedAudioSeconds(of url: URL) -> Double? {
         AppState.estimatedAudioSeconds(of: url)
-    }
-
-    private func deliverAutoStopped(_ text: String, autoStop: ToggleAutoStop, configuration: TranscriptionJobConfiguration,
-                                    recordID: UUID?, mayUpdateUI: Bool) {
-        app.deliverAutoStopped(text, autoStop: autoStop, configuration: configuration, recordID: recordID,
-                               mayUpdateUI: mayUpdateUI)
-    }
-
-    private func deliver(
-        _ text: String,
-        pasteTarget: NSRunningApplication?,
-        delivery: DeliveryMode,
-        mayUpdateStatus: Bool,
-        purpose: AssistantController.CapturePurpose = .dictation,
-        quickKind: AssistantRecordKind = .note,
-        clientReference: String? = nil,
-        accountIdentity: String? = nil,
-        sessionID: UUID? = nil
-    ) async {
-        await app.deliver(text, pasteTarget: pasteTarget, delivery: delivery, mayUpdateStatus: mayUpdateStatus,
-                          purpose: purpose, quickKind: quickKind, clientReference: clientReference,
-                          accountIdentity: accountIdentity, sessionID: sessionID)
     }
 
     // MARK: - Begin
@@ -1139,5 +1130,89 @@ final class DictationLifecycle {
             translationNotice = notice
             return (text, false, notice)
         }
+    }
+
+    // MARK: - Deliver
+
+    func deliver(
+        _ text: String,
+        pasteTarget: NSRunningApplication?,
+        delivery: DeliveryMode,
+        mayUpdateStatus: Bool,
+        purpose: AssistantController.CapturePurpose = .dictation,
+        quickKind: AssistantRecordKind = .note,
+        clientReference: String? = nil,
+        accountIdentity: String? = nil,
+        sessionID: UUID? = nil
+    ) async {
+        let deliveryStarted = ProcessInfo.processInfo.systemUptime
+        let deliveryID = UUID()
+        var deliveryOutcome = "failed"
+        var deliveryDetail = PasteDeliveryReceipt.Detail.none
+        // Recognition has completed. Destination verification is separate work
+        // and must not keep dictation controls in their transcription state.
+        if mayUpdateStatus && canUpdateLifecycleUI(for: sessionID) {
+            latestDeliveryID = deliveryID
+            isTranscribing = false
+            status = .delivering
+        }
+        lifecycleLogger.info("Text delivery started", metadata: ["event": "paste_started", "session": "\(sessionID?.uuidString ?? "")"])
+        defer { lifecycleLogger.info("Text delivery returned", metadata: ["event": "paste_returned", "session": "\(sessionID?.uuidString ?? "")", "outcome": "\(deliveryOutcome)", "paste_detail": "\(deliveryDetail.rawValue)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - deliveryStarted) * 1000)"]) }
+        if purpose != .dictation {
+            switch purpose {
+            case .quickCapture:
+                // Saved before History marked the transcript done; see transcribeRecording.
+                break
+            case .selectionInstruction:
+                guard mayUpdateStatus else { return }
+                // Spoken instructions are captured locally; the user explicitly requests the preview.
+                assistantVoiceInstruction = String(text.prefix(500))
+                assistant.message = "Instruction captured. Review it in Assistant, then generate a preview."
+            case .dictation: break
+            }
+            deliveryOutcome = "success"
+            if mayUpdateStatus && latestDeliveryID == deliveryID && canUpdateLifecycleUI(for: sessionID) { status = .success(assistant.message ?? "Ready in Assistant") }
+            return
+        }
+        switch delivery {
+        case .copyOnly:
+            pasteService.copy(text)
+            deliveryOutcome = "copied"
+            if mayUpdateStatus && latestDeliveryID == deliveryID && canUpdateLifecycleUI(for: sessionID) { status = .success("Copied to clipboard") }
+        case .pasteAtCursor:
+            // The text lands as soon as the keystroke is posted; insertion
+            // verification (and clipboard restoration) can take up to a second
+            // more, so report the paste then rather than holding "Pasting…".
+            let receipt = await pasteService.paste(text, into: pasteTarget, replacing: nil) { [weak self] in
+                guard let self, mayUpdateStatus, self.latestDeliveryID == deliveryID,
+                      self.canUpdateLifecycleUI(for: sessionID) else { return }
+                self.status = .success("Pasted")
+            }
+            deliveryOutcome = receipt.state.rawValue
+            deliveryDetail = receipt.detail
+            hasAccessibilityPermission = pasteService.hasAccessibilityPermission
+            if mayUpdateStatus && latestDeliveryID == deliveryID && canUpdateLifecycleUI(for: sessionID) {
+                lastPasteReceipt = receipt
+                let final: AppStatus = receipt.state == .failed ? .failure(receipt.message) : .success(receipt.message)
+                // Reassigning an equal status would re-arm the HUD's hide timer.
+                if status != final { status = final }
+            }
+        }
+    }
+
+    /// A toggle recording that stopped itself: never pasted, since nobody may be
+    /// at the keyboard. "Copy only" still copies, as it always does. When History
+    /// did not keep the text ("Don't save history", or the save failed), the
+    /// clipboard is the only way back to it, so it is copied there instead of
+    /// being lost.
+    private func deliverAutoStopped(_ text: String, autoStop: ToggleAutoStop, configuration: TranscriptionJobConfiguration,
+                                    recordID: UUID?, mayUpdateUI: Bool) {
+        let savedID = recordID.flatMap { id in records.contains { $0.id == id } ? id : nil }
+        let copies = configuration.delivery == .copyOnly || savedID == nil
+        if copies { pasteService.copy(text) }
+        guard mayUpdateUI else { return }
+        let message = autoStop.savedMessage(inHistory: savedID != nil, copiedToClipboard: copies)
+        status = .success(message)
+        autoStopNotice = AutoStopNotice(message: message, recordID: savedID)
     }
 }
