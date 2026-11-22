@@ -6,6 +6,7 @@ import WhiskerFlowAppSupport
 /// resume live in `OnboardingFlow`; this view renders them and runs the checks.
 struct OnboardingView: View {
     @Bindable var appState: AppState
+    @State private var model = OnboardingModelWatch()
     private var onboarding: OnboardingController { appState.onboarding }
 
     var body: some View {
@@ -16,14 +17,9 @@ struct OnboardingView: View {
             // Scrolls rather than clips when the window is made shorter.
             ScrollView {
                 switch step {
-                case .welcome: OnboardingWelcomeStep(appState: appState)
                 case .permissions: OnboardingPermissionsStep(appState: appState)
                 case .microphone: OnboardingMicrophoneStep(appState: appState)
-                case .shortcut: OnboardingShortcutStep(appState: appState)
-                case .language: OnboardingLanguageStep(appState: appState)
-                case .model: OnboardingModelStep(appState: appState)
-                case .practice: OnboardingPracticeStep(appState: appState)
-                case .extras: OnboardingExtrasStep(appState: appState)
+                case .practice: OnboardingPracticeStep(appState: appState, model: model)
                 case .done: OnboardingDoneStep(appState: appState)
                 }
             }
@@ -53,10 +49,27 @@ struct OnboardingView: View {
             }
         }
         .onAppear {
-            // The download starts at launch; make sure a failed or never-started
-            // preparation is running again from the first screen on.
-            if appState.modelState == .unloaded || appState.modelState.isFailure { appState.warmUpEngine() }
+            // The download starts at launch, so it is usually ready by the
+            // practice screen. Start it only if it never started or failed.
+            model.network.start()
+            model.start(.setupOpened, appState: appState)
         }
+        .onDisappear { model.network.stop() }
+        .onChange(of: model.network.isOnline) { _, online in
+            if online { model.start(.cameOnline, appState: appState) }
+        }
+        .onChange(of: appState.hasGlobeKeyConflict, initial: true) { _, _ in applyDefaultShortcut() }
+    }
+
+    /// Setup no longer asks for a shortcut: fn unless macOS won't let
+    /// WhiskerFlow have it (`OnboardingDefaults.shortcut`).
+    private func applyDefaultShortcut() {
+        guard !UIPreview.isEnabled,
+              let shortcut = OnboardingDefaults.shortcut(current: appState.settings.hotkey,
+                                                         personChoseShortcut: appState.settings.hotkeyWasChosen,
+                                                         fnReservedForDictation: !appState.hasGlobeKeyConflict) else { return }
+        appState.settings.hotkey = shortcut
+        appState.reloadHotkey()
     }
 
     private func header(step: OnboardingStep, conditions: OnboardingConditions) -> some View {
@@ -78,7 +91,7 @@ struct OnboardingView: View {
     }
 
     private func progressDot(_ item: OnboardingStep, current: OnboardingStep, conditions: OnboardingConditions) -> some View {
-        let satisfied = item != .done && item != .welcome && onboarding.flow.isSatisfied(item, conditions)
+        let satisfied = item != .done && onboarding.flow.isSatisfied(item, conditions)
         let isCurrent = item == current
         let reachable = onboarding.flow.canJump(to: item)
         return Button { onboarding.jump(to: item) } label: {
@@ -102,7 +115,7 @@ struct OnboardingView: View {
     private func footer(step: OnboardingStep, conditions: OnboardingConditions) -> some View {
         let satisfied = onboarding.flow.isSatisfied(step, conditions)
         return HStack {
-            if step != .welcome && step != .done {
+            if step != .permissions && step != .done {
                 Button("Back") { onboarding.back() }.buttonStyle(.plain).foregroundStyle(FlowStyle.muted)
             }
             Spacer()
@@ -119,11 +132,9 @@ struct OnboardingView: View {
 
     private func primaryTitle(step: OnboardingStep, satisfied: Bool) -> String {
         switch step {
-        case .welcome: return "Get started"
-        case .done: return "Start using WhiskerFlow"
-        case .model where !satisfied: return "Continue while it downloads"
-        case .extras where !satisfied: return "Skip for now"
         case .permissions: return "Continue"
+        case .practice where !satisfied: return "Skip practice"
+        case .done: return "Start using WhiskerFlow"
         default: return satisfied ? "Continue" : "Skip this step"
         }
     }
@@ -135,19 +146,51 @@ extension AppState {
         OnboardingConditions(
             microphoneGranted: hasMicrophonePermission,
             accessibilityGranted: hasAccessibilityPermission,
-            modelReady: modelState == .ready,
-            atlasConnected: isAtlasPaired,
-            // Automatic recording is optional; setup needs only the access
-            // that recording a meeting requires.
-            meetingRecordingReady: hasScreenRecordingPermission
+            modelReady: modelState == .ready
         )
     }
 }
 
-extension ModelState {
-    var isFailure: Bool {
-        if case .failed = self { return true }
-        return false
+/// The speech model as setup sees it, and the one place setup starts it.
+@MainActor
+@Observable
+final class OnboardingModelWatch {
+    let network = NetworkReachability()
+
+    func phase(of appState: AppState) -> OnboardingModelPhase {
+        #if DEBUG
+        if let preview = UIPreview.onboardingModelPhase { return preview }
+        #endif
+        switch appState.modelState {
+        case .unloaded: return .notStarted
+        case .ready: return .ready
+        case .preparing:
+            let download = appState.modelDownload
+            guard appState.settings.engine == .parakeetTDTv3 else { return .loading }
+            if download.isCompiling { return .optimising }
+            return download.needsDownload ? .downloading(fraction: download.fraction) : .loading
+        case .failed:
+            // Read only after a failure, never on the dictation path.
+            return .failed(OnboardingModelFailure.classify(
+                neededDownload: appState.modelDownload.needsDownload,
+                isOnline: network.isOnline,
+                availableBytes: Self.availableBytes(),
+                downloadBytes: StagedDownloadProgress.parakeetDownloadBytes
+            ))
+        }
+    }
+
+    /// Starts the preparation unless one is running or done, so setup never
+    /// begins a second download.
+    func start(_ trigger: OnboardingModelTrigger, appState: AppState) {
+        guard OnboardingModelPolicy.shouldStart(phase(of: appState), trigger: trigger) else { return }
+        appState.warmUpEngine()
+    }
+
+    private static func availableBytes() -> Int64? {
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        return (try? home.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage
     }
 }
 

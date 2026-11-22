@@ -3,7 +3,7 @@ import Foundation
 /// The first-run setup screens, in order. Raw values are persisted with the
 /// saved setup progress, so they must stay fixed words.
 public enum OnboardingStep: String, CaseIterable, Codable, Sendable, Comparable {
-    case welcome, permissions, microphone, shortcut, language, model, practice, extras, done
+    case permissions, microphone, practice, done
 
     public var index: Int { Self.allCases.firstIndex(of: self) ?? 0 }
 
@@ -18,15 +18,27 @@ public enum OnboardingStep: String, CaseIterable, Codable, Sendable, Comparable 
 
     public var title: String {
         switch self {
-        case .welcome: return "Welcome"
         case .permissions: return "Permissions"
         case .microphone: return "Microphone"
-        case .shortcut: return "Shortcut"
-        case .language: return "Language"
-        case .model: return "Speech model"
         case .practice: return "Practice"
-        case .extras: return "Extras"
         case .done: return "Done"
+        }
+    }
+
+    /// Reads a stored raw value, including the screens earlier builds had.
+    /// A removed screen resumes at the nearest remaining screen after it:
+    /// welcome → permissions; shortcut, language and model → practice;
+    /// extras → done. Nil only for a word no build ever wrote.
+    public init?(storedValue: String) {
+        if let step = OnboardingStep(rawValue: storedValue) {
+            self = step
+            return
+        }
+        switch storedValue {
+        case "welcome": self = .permissions
+        case "shortcut", "language", "model": self = .practice
+        case "extras": self = .done
+        default: return nil
         }
     }
 
@@ -34,27 +46,21 @@ public enum OnboardingStep: String, CaseIterable, Codable, Sendable, Comparable 
 }
 
 /// Live facts the app reads from the system. Everything the user proves inside
-/// setup (a heard voice, a fired shortcut, a practice dictation) lives in
+/// setup (a heard voice, a practice dictation) lives in
 /// `OnboardingProgress.completed` instead, so it survives a relaunch.
 public struct OnboardingConditions: Equatable, Sendable {
     public var microphoneGranted: Bool
     public var accessibilityGranted: Bool
     public var modelReady: Bool
-    public var atlasConnected: Bool
-    public var meetingRecordingReady: Bool
 
     public init(
         microphoneGranted: Bool = false,
         accessibilityGranted: Bool = false,
-        modelReady: Bool = false,
-        atlasConnected: Bool = false,
-        meetingRecordingReady: Bool = false
+        modelReady: Bool = false
     ) {
         self.microphoneGranted = microphoneGranted
         self.accessibilityGranted = accessibilityGranted
         self.modelReady = modelReady
-        self.atlasConnected = atlasConnected
-        self.meetingRecordingReady = meetingRecordingReady
     }
 
     public var permissionsReady: Bool { microphoneGranted && accessibilityGranted }
@@ -74,8 +80,8 @@ public struct OnboardingProgress: Codable, Equatable, Sendable {
     public var dismissedAt: Date?
 
     public init(
-        current: OnboardingStep = .welcome,
-        furthest: OnboardingStep = .welcome,
+        current: OnboardingStep = .permissions,
+        furthest: OnboardingStep = .permissions,
         completed: Set<OnboardingStep> = [],
         skipped: Set<OnboardingStep> = [],
         startedAt: Date? = nil,
@@ -93,6 +99,44 @@ public struct OnboardingProgress: Codable, Equatable, Sendable {
 
     public var isFinished: Bool { finishedAt != nil }
     public var isInProgress: Bool { startedAt != nil && finishedAt == nil }
+
+    private enum CodingKeys: String, CodingKey {
+        case current, furthest, completed, skipped, startedAt, finishedAt, dismissedAt
+    }
+
+    /// Progress saved by an earlier build may name screens that no longer
+    /// exist. Those map forward (`OnboardingStep(storedValue:)`), checks
+    /// recorded on removed screens are dropped, and a finished setup stays
+    /// finished whatever screen it was saved on.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
+        let finishedAt = try container.decodeIfPresent(Date.self, forKey: .finishedAt)
+        let dismissedAt = try container.decodeIfPresent(Date.self, forKey: .dismissedAt)
+        func step(_ key: CodingKeys) -> OnboardingStep? {
+            (try? container.decodeIfPresent(String.self, forKey: key)).flatMap { $0 }.flatMap(OnboardingStep.init(storedValue:))
+        }
+        func steps(_ key: CodingKeys) -> Set<OnboardingStep> {
+            let words = (try? container.decodeIfPresent([String].self, forKey: key)).flatMap { $0 } ?? []
+            // Only screens that still exist under the same name keep a check.
+            return Set(words.compactMap(OnboardingStep.init(rawValue:)))
+        }
+        let current = finishedAt != nil ? .done : (step(.current) ?? .permissions)
+        let furthest = max(step(.furthest) ?? current, current)
+        self.init(current: current, furthest: furthest, completed: steps(.completed), skipped: steps(.skipped),
+                  startedAt: startedAt, finishedAt: finishedAt, dismissedAt: dismissedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(current, forKey: .current)
+        try container.encode(furthest, forKey: .furthest)
+        try container.encode(completed.map(\.rawValue).sorted(), forKey: .completed)
+        try container.encode(skipped.map(\.rawValue).sorted(), forKey: .skipped)
+        try container.encodeIfPresent(startedAt, forKey: .startedAt)
+        try container.encodeIfPresent(finishedAt, forKey: .finishedAt)
+        try container.encodeIfPresent(dismissedAt, forKey: .dismissedAt)
+    }
 }
 
 /// The setup state machine: which screen is showing and which are satisfied.
@@ -107,20 +151,14 @@ public struct OnboardingFlow: Equatable, Sendable {
     public var current: OnboardingStep { progress.current }
 
     /// Checks that setup can prove on its own; the rest come from the system.
-    public static let testedSteps: Set<OnboardingStep> = [.microphone, .shortcut, .practice]
+    public static let testedSteps: Set<OnboardingStep> = [.microphone, .practice]
 
     public func isSatisfied(_ step: OnboardingStep, _ conditions: OnboardingConditions) -> Bool {
         switch step {
-        case .welcome: return progress.completed.contains(.welcome)
         case .permissions: return conditions.permissionsReady
         // A heard voice is meaningless once access is revoked.
         case .microphone: return conditions.microphoneGranted && progress.completed.contains(.microphone)
-        case .shortcut: return progress.completed.contains(.shortcut)
-        // A language is always chosen (English unless changed), so Continue.
-        case .language: return true
-        case .model: return conditions.modelReady
         case .practice: return progress.completed.contains(.practice)
-        case .extras: return conditions.atlasConnected && conditions.meetingRecordingReady
         case .done: return progress.isFinished
         }
     }
@@ -144,14 +182,14 @@ public struct OnboardingFlow: Equatable, Sendable {
         progress = OnboardingProgress(startedAt: now)
     }
 
-    /// Records that a screen's own check passed (a voice was heard, the shortcut
-    /// fired, a practice dictation landed). Idempotent.
+    /// Records that a screen’s own check passed (a voice was heard, a
+    /// practice dictation landed). Idempotent.
     public mutating func markPassed(_ step: OnboardingStep) {
         guard progress.completed.insert(step).inserted else { return }
         progress.skipped.remove(step)
     }
 
-    /// A passed check no longer holds (e.g. the shortcut or microphone changed).
+    /// A passed check no longer holds (e.g. the microphone changed).
     public mutating func invalidate(_ step: OnboardingStep) {
         progress.completed.remove(step)
     }
@@ -163,7 +201,7 @@ public struct OnboardingFlow: Equatable, Sendable {
         guard canContinue(conditions) else { return }
         let step = current
         if step == .done { return finish(now: now) }
-        if isSatisfied(step, conditions) || step == .welcome {
+        if isSatisfied(step, conditions) {
             if !Self.testedSteps.contains(step), progress.completed.insert(step).inserted {
                 progress.skipped.remove(step)
             }
@@ -197,7 +235,7 @@ public struct OnboardingFlow: Equatable, Sendable {
         progress.dismissedAt = now
     }
 
-    /// "Run setup again" starts over from the welcome screen, keeping nothing.
+    /// "Run setup again" starts over from the first screen, keeping nothing.
     public mutating func restart(now: Date = Date()) {
         progress = OnboardingProgress(startedAt: now)
     }

@@ -40,8 +40,37 @@ final class AppSettingsMigrationTests: XCTestCase {
         try body(defaults, name)
     }
 
-    private func settings(_ defaults: UserDefaults, _ name: String) -> AppSettings {
-        AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
+    private func settings(_ defaults: UserDefaults, _ name: String, preferredLanguages: [String] = ["en-GB"]) -> AppSettings {
+        AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name),
+                    preferredLanguages: preferredLanguages)
+    }
+
+    func testANewInstallStartsInTheMacsLanguageAndKeepsIt() {
+        withDefaults { defaults, name in
+            XCTAssertEqual(settings(defaults, name, preferredLanguages: ["de-DE", "en-GB"]).language, "de")
+            // Written through: the next launch is no longer a first launch.
+            XCTAssertEqual(settings(defaults, name, preferredLanguages: ["en-GB"]).language, "de")
+        }
+        withDefaults { defaults, name in
+            XCTAssertEqual(settings(defaults, name, preferredLanguages: ["tlh"]).language, "en", "A language WhiskerFlow can't write")
+        }
+    }
+
+    func testAnExistingInstallThatNeverChoseALanguageStaysInEnglish() {
+        withDefaults { defaults, name in
+            defaults.set(true, forKey: "SUHasLaunchedBefore")
+            XCTAssertEqual(settings(defaults, name, preferredLanguages: ["fr-FR"]).language, "en")
+        }
+    }
+
+    func testTheShortcutCountsAsChosenOnlyOnceSet() {
+        withDefaults { defaults, name in
+            let fresh = settings(defaults, name)
+            XCTAssertEqual(fresh.hotkey, .fn)
+            XCTAssertFalse(fresh.hotkeyWasChosen)
+            fresh.hotkey = .fn
+            XCTAssertTrue(settings(defaults, name).hotkeyWasChosen)
+        }
     }
 
     func testAutomaticMeetingRecordingIsOffOnAFreshInstallAndNotAsked() {

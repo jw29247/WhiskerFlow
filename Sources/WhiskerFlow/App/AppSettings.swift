@@ -206,7 +206,8 @@ final class AppSettings {
     @ObservationIgnored let launchAtLogin: LaunchAtLoginController
 
     init(defaults: UserDefaults = .standard, meetingTokenStore: MeetingCaptureTokenStore = MeetingCaptureTokenStore(),
-         loginItemService: LoginItemService? = nil, region: String? = Locale.current.region?.identifier) {
+         loginItemService: LoginItemService? = nil, region: String? = Locale.current.region?.identifier,
+         preferredLanguages: [String] = Locale.preferredLanguages) {
         self.defaults = defaults
         self.meetingTokenStore = meetingTokenStore
         hadPreviousLaunch = Keys.previousLaunchMarkers.contains { defaults.object(forKey: $0) != nil }
@@ -221,7 +222,8 @@ final class AppSettings {
             defaults.set(resolvedEngine.rawValue, forKey: Keys.engine)
         }
         for key in Keys.removedWhisperSettings { defaults.removeObject(forKey: key) }
-        let initialLanguage = Self.migratedLanguage(from: defaults)
+        let initialLanguage = Self.migratedLanguage(from: defaults, isFirstLaunch: !hadPreviousLaunch,
+                                                    preferredLanguages: preferredLanguages)
         language = initialLanguage
         translateToEnglish = defaults.object(forKey: Keys.translateToEnglish) as? Bool ?? true
         cleanupEnabled = defaults.bool(forKey: "cleanupEnabled")
@@ -328,6 +330,9 @@ final class AppSettings {
 
     /// The key combination the monitor should watch for, resolving presets and
     /// the custom shortcut to a single value.
+    /// False until the person picks a shortcut; `hotkey` is then the default.
+    var hotkeyWasChosen: Bool { defaults.object(forKey: Keys.hotkey) != nil }
+
     var activeHotkeyCombo: KeyCombo {
         hotkey.presetCombo ?? customHotkey
     }
@@ -380,10 +385,18 @@ final class AppSettings {
     /// through to `defaults` here. The flag is set on every launch, not just when
     /// migrating, so an "auto" chosen after a fresh install (or after any other
     /// stored language) is never mistaken for the legacy value.
-    private static func migratedLanguage(from defaults: UserDefaults) -> String {
+    ///
+    /// A new install starts in the Mac's own language (setup no longer asks),
+    /// written through so the next launch keeps it.
+    private static func migratedLanguage(from defaults: UserDefaults, isFirstLaunch: Bool,
+                                         preferredLanguages: [String]) -> String {
         let alreadyMigrated = defaults.bool(forKey: Keys.languageAutoMigrated)
         defaults.set(true, forKey: Keys.languageAutoMigrated)
-        guard let stored = defaults.string(forKey: Keys.language) else { return "en" }
+        guard let stored = defaults.string(forKey: Keys.language) else {
+            let initial = OnboardingDefaults.initialLanguage(isFirstLaunch: isFirstLaunch, preferredLanguages: preferredLanguages)
+            if initial != "en" { defaults.set(initial, forKey: Keys.language) }
+            return initial
+        }
         guard stored.lowercased() == "auto", !alreadyMigrated else { return stored }
         defaults.set("en", forKey: Keys.language)
         return "en"

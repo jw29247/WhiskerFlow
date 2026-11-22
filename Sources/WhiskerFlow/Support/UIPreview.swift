@@ -128,6 +128,17 @@ enum UIPreview {
         guard mode.hasPrefix("onboarding-") else { return nil }
         return OnboardingStep(rawValue: String(mode.dropFirst("onboarding-".count)))
     }
+    /// `--ui-model=downloading|offline|no-space|failed` shows the practice
+    /// screen's speech-model states; the default is ready.
+    static var onboardingModelPhase: OnboardingModelPhase? {
+        switch argument("--ui-model=") {
+        case "downloading": return .downloading(fraction: 0.48)
+        case "offline": return .failed(.offline)
+        case "no-space": return .failed(.notEnoughSpace(neededBytes: 650_000_000, availableBytes: 210_000_000))
+        case "failed": return .failed(.other)
+        default: return nil
+        }
+    }
     static var isRecordingMeeting: Bool { mode == "meeting-recording" || mode == "coach" || mode.hasPrefix("recording-notice") }
 
     static func makeAppState() -> AppState {
@@ -171,7 +182,7 @@ enum UIPreview {
             let permission = MicrophonePermissionController(provider: PreviewMicrophone(granted: mode != "setup"))
             let onboardingStore = UserDefaultsOnboardingStore(defaults: defaults)
             if let step = onboardingStep {
-                let passed: Set<OnboardingStep> = [.welcome, .permissions, .microphone, .shortcut, .practice]
+                let passed: Set<OnboardingStep> = [.permissions, .microphone, .practice]
                 onboardingStore.save(OnboardingProgress(current: step, furthest: step,
                                                         completed: passed.filter { $0 < step }, startedAt: Date()))
             }
@@ -248,7 +259,8 @@ enum UIPreview {
                 state.hasAccessibilityPermission = step != .permissions
                 state.hasScreenRecordingPermission = false
                 if step == .permissions { state.onboarding.accessibilityRequestedAt = .distantPast }
-                if step == .model || step <= .permissions {
+                state.modelState = .ready
+                if step <= .permissions || onboardingModelPhase?.isPreparing == true {
                     var tracker = StagedDownloadProgress.parakeetFirstDownload
                     tracker.ingest(fraction: 0, startsNewOperation: true)
                     tracker.ingest(fraction: 1)
