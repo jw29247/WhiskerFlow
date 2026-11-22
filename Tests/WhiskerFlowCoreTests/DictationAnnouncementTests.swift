@@ -21,7 +21,14 @@ final class DictationAnnouncementTests: XCTestCase {
             tracker.observe(presentation)
         }
 
-        XCTAssertEqual(fake.spoken, ["Recording", "Transcribing", "Pasted"])
+        XCTAssertEqual(fake.spoken, ["Transcribing", "Pasted"])
+    }
+
+    /// The microphone is live while recording, so speech then would end up in
+    /// the dictation.
+    func testNothingIsSpokenWhileTheMicrophoneIsLive() {
+        XCTAssertNil(DictationAnnouncement.message(from: .hidden, to: .recording))
+        XCTAssertNil(DictationAnnouncement.message(from: .notification("Pasted"), to: .recording))
     }
 
     func testCopiedUsesTheHUDWording() {

@@ -10,7 +10,6 @@ public protocol DictationAnnouncing: AnyObject {
 }
 
 public enum DictationAnnouncement {
-    public static let recording = "Recording"
     public static let transcribing = "Transcribing"
 
     /// What to say when the HUD moves from `old` to `new`, or nil for nothing.
@@ -18,11 +17,14 @@ public enum DictationAnnouncement {
     /// message ending in "…" ("Pasting…") is a step on the way to an outcome
     /// that is announced a moment later, so it is not spoken. Live transcript
     /// text is never part of a presentation, so it is never announced.
+    ///
+    /// Nothing is spoken when recording starts: the microphone is live, so
+    /// VoiceOver's voice from the speakers would be recorded into the
+    /// dictation and talk over its first words. The start sound is the cue.
     public static func message(from old: FloatingHUDPresentation, to new: FloatingHUDPresentation) -> String? {
         guard old != new else { return nil }
         switch new {
-        case .hidden: return nil
-        case .recording: return recording
+        case .hidden, .recording: return nil
         case .transcribing: return transcribing
         case .notification(let text):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
