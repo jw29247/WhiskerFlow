@@ -70,6 +70,12 @@ struct PasteService: TextDeliveryService {
         // Dictating with WhiskerFlow itself in front is a copy, not a failure:
         // pasting into our own window would post Cmd+V to ourselves.
         if let destination, destination.processIdentifier == ownProcessIdentifier {
+            // Behind the same gate and settling wait as a paste: an earlier
+            // Cmd+V still queued in a slow app reads the clipboard when it is
+            // handled, and must not find this text there.
+            await Self.deliveries.acquire()
+            defer { Self.deliveries.release() }
+            await Self.waitForUnverifiedPaste()
             Self.clipboard.keep()
             copy(normalized)
             return receipt(.copied, Self.ownAppMessage, .ownApp)
@@ -79,17 +85,18 @@ struct PasteService: TextDeliveryService {
             requestAccessibilityPermission()
             return receipt(.copied, "Copied — allow Accessibility to paste automatically", .noPermission)
         }
-        guard let destination, !destination.isTerminated else {
-            return undelivered("Couldn’t paste.", .noDestination)
-        }
         // One delivery at a time: an overlapping Retry/Replace would otherwise
         // post its Cmd+V while the previous one is still being handled.
         await Self.deliveries.acquire()
         defer { Self.deliveries.release() }
         // An unverified Cmd+V may still be queued in a busy target. It reads the
         // pasteboard when it is finally handled, so writing the next text now
-        // would paste that twice and lose the earlier one.
+        // would paste that twice and lose the earlier one. Every outcome below
+        // that touches the clipboard, including the failures, comes after this.
         await Self.waitForUnverifiedPaste()
+        guard let destination, !destination.isTerminated else {
+            return undelivered("Couldn’t paste.", .noDestination)
+        }
         let activationStarted = ProcessInfo.processInfo.systemUptime
         await Self.activateAndConfirm(destination)
         let activationSeconds = ProcessInfo.processInfo.systemUptime - activationStarted
