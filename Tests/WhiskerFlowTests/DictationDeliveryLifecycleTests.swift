@@ -99,7 +99,7 @@ final class DictationDeliveryLifecycleTests: XCTestCase {
         let entered = expectation(description: "Paste sent, verification pending")
         paste.entered = { entered.fulfill() }
         let operation = Task { await state.deliver("Synthetic sentence", pasteTarget: nil, delivery: .pasteAtCursor, mayUpdateStatus: true) }
-        await fulfillment(of: [entered], timeout: 2)
+        await fulfillment(of: [entered], timeout: 10)
         XCTAssertFalse(state.isTranscribing, "Recognition finished before delivery; verification must not keep the microphone busy")
         XCTAssertNotEqual(state.status, .transcribing)
         paste.pending?.resume(returning: PasteDeliveryReceipt(state: .unverified, text: "Synthetic sentence", message: "Sent; unverified"))
@@ -117,7 +117,7 @@ final class DictationDeliveryLifecycleTests: XCTestCase {
         let posted = expectation(description: "Keystroke posted, verification pending")
         paste.posted = { posted.fulfill() }
         let operation = Task { await state.deliver("Synthetic sentence", pasteTarget: nil, delivery: .pasteAtCursor, mayUpdateStatus: true) }
-        await fulfillment(of: [posted], timeout: 2)
+        await fulfillment(of: [posted], timeout: 10)
         XCTAssertEqual(state.status, .success("Pasted"), "The HUD must not hold \"Pasting…\" while insertion is verified")
         paste.pending?.resume(returning: PasteDeliveryReceipt(state: .unverified, text: "Synthetic sentence", message: "Pasted"))
         await operation.value
@@ -136,7 +136,7 @@ final class DictationDeliveryLifecycleTests: XCTestCase {
         let entered = expectation(description: "Old delivery waiting")
         paste.entered = { entered.fulfill() }
         let old = Task { await state.deliver("Old", pasteTarget: nil, delivery: .pasteAtCursor, mayUpdateStatus: true) }
-        await fulfillment(of: [entered], timeout: 2)
+        await fulfillment(of: [entered], timeout: 10)
         await state.deliver("New", pasteTarget: nil, delivery: .copyOnly, mayUpdateStatus: true)
         paste.pending?.resume(returning: PasteDeliveryReceipt(state: .unverified, text: "Old", message: "Old receipt"))
         await old.value

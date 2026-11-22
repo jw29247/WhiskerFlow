@@ -201,10 +201,8 @@ final class MeetingLibraryCoordinatorTests: XCTestCase {
         XCTAssertEqual(f.client.events.filter { $0 == "finalize" }.count, 1)
 
         try FileManager.default.removeItem(at: f.libraryRoot)
-        f.coordinator.retryRecording(sessionID: f.sessionID)
-        for _ in 0..<200 where (try? f.store.loadManifest(sessionID: f.sessionID)) != nil {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await f.coordinator.retryRecording(sessionID: f.sessionID)?.value
+        await f.library.flush()
         XCTAssertThrowsError(try f.store.loadManifest(sessionID: f.sessionID), "Removed once the library copy is on disk")
         XCTAssertEqual(f.client.events.filter { $0 == "create" }.count, 1, "The retry repeats no upload")
         let relaunched = MeetingLibraryController(
@@ -235,10 +233,7 @@ final class MeetingLibraryCoordinatorTests: XCTestCase {
         XCTAssertNoThrow(try f.store.loadManifest(sessionID: f.sessionID))
 
         f.client.failCreate = false
-        f.coordinator.retryRecording(sessionID: f.sessionID)
-        for _ in 0..<200 where f.library.entry(f.sessionID)?.status != .delivered {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await f.coordinator.retryRecording(sessionID: f.sessionID)?.value
         XCTAssertEqual(f.library.entry(f.sessionID)?.status, .delivered, "Retry on one meeting delivers it")
     }
 
@@ -314,7 +309,8 @@ final class MeetingLibraryCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(library.deleteDelivered(id))
         await library.flush()
-        for _ in 0..<50 where library.entry(id) == nil { try await Task.sleep(nanoseconds: 20_000_000) }
+        // The failed removal re-lists the meeting in a main-actor task.
+        await until { library.storageError != nil }
 
         XCTAssertEqual(library.entry(id)?.status, .delivered)
         XCTAssertNotNil(library.storageError)

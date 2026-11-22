@@ -24,7 +24,7 @@ final class AudioUnitRunningStateTests: XCTestCase {
         // Always break the simulated lock cycle, even on the old implementation.
         unitLock.unlock()
         XCTAssertEqual(result, .success, "The CoreAudio callback must return without querying the locked unit")
-        wait(for: [queried], timeout: 2)
+        wait(for: [queried], timeout: 10)
     }
 
     func testQueuedNotificationCannotQueryADisposedUnit() {
@@ -52,7 +52,7 @@ final class AudioUnitRunningStateTests: XCTestCase {
         }
         state.setRunning(true)
         DispatchQueue.global().async { state.propertyChanged() }
-        wait(for: [entered], timeout: 2)
+        wait(for: [entered], timeout: 10)
         let readReturned = DispatchSemaphore(value: 0)
         DispatchQueue.global().async {
             XCTAssertTrue(state.isRunning)

@@ -483,7 +483,7 @@ final class AtlasSignOutTests: XCTestCase {
         coordinator.stopMonitoring()
     }
 
-    func testMeetingCaptureStopsWhileSignedOutAndResumesAfterSignIn() async throws {
+    func testMeetingCaptureStopsWhileSignedOutAndResumesAfterSignIn() async {
         let defaults = makeDefaults()
         let settings = AppSettings(defaults: defaults, meetingTokenStore: MemoryKeychain(token: nil).store(service: "AtlasSignOutTests"))
         settings.askToRecordCalls = false
@@ -509,10 +509,7 @@ final class AtlasSignOutTests: XCTestCase {
         XCTAssertTrue(coordinator.scheduleIntents.isEmpty)
         XCTAssertNil(coordinator.callPrompt)
 
-        coordinator.toggleManualCapture()
-        for _ in 0..<100 where coordinator.statusDetail != "Sign in with Atlas to record meetings." || coordinator.isCaptureTransitioning {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await coordinator.toggleManualCapture()?.value
         XCTAssertFalse(coordinator.isCapturing, "Nothing is recorded while signed out")
         XCTAssertEqual(coordinator.statusDetail, "Sign in with Atlas to record meetings.")
 

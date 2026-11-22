@@ -68,6 +68,9 @@ actor MeetingLocalProcessor {
   private let transcribeMeeting: MeetingTranscriber
   private let processingRoot: URL?
   private let transientRetryUnitNanoseconds: UInt64
+  /// The pause before re-decoding an audible window that came back empty,
+  /// multiplied by the attempt number.
+  private let audibleRetryUnitNanoseconds: UInt64
 
   init(transcription: TranscriptionService, processingRoot: URL? = nil) {
     self.transcribeMeeting = { url, language in
@@ -75,16 +78,20 @@ actor MeetingLocalProcessor {
     }
     self.processingRoot = processingRoot
     self.transientRetryUnitNanoseconds = 1_000_000_000
+    self.audibleRetryUnitNanoseconds = 200_000_000
   }
 
+  /// Tests pass zero retry units so no test waits on real time.
   init(
     processingRoot: URL,
+    audibleRetryUnitNanoseconds: UInt64 = 200_000_000,
     transcribeMeeting: @escaping MeetingTranscriber,
     transientRetryUnitNanoseconds: UInt64 = 1_000_000_000
   ) {
     self.transcribeMeeting = transcribeMeeting
     self.processingRoot = processingRoot
     self.transientRetryUnitNanoseconds = transientRetryUnitNanoseconds
+    self.audibleRetryUnitNanoseconds = audibleRetryUnitNanoseconds
   }
 
   /// - Parameter resumable: persist per-window progress in the session's
@@ -416,7 +423,7 @@ actor MeetingLocalProcessor {
           guard attempt + 1 < Self.audibleChunkRetryCount else { break }
           // A short retry gives the model time to release a transient
           // decoder/VAD failure without allowing overlapping model work.
-          try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 200_000_000)
+          try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * audibleRetryUnitNanoseconds)
         }
       }
       if decoded == nil, retry.containsAudibleActivity {
@@ -442,7 +449,7 @@ actor MeetingLocalProcessor {
               break
             } catch TranscriptionError.emptyTranscript {
               guard attempt + 1 < Self.audibleChunkRetryCount else { break }
-              try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 200_000_000)
+              try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * audibleRetryUnitNanoseconds)
             }
           }
           if let subwindowDecoded = decoded {

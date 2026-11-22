@@ -4,15 +4,23 @@ public enum AsyncTimeoutError: Error, Equatable, Sendable {
     case timedOut
 }
 
+/// Waits out a deadline; returns early when cancelled. The app uses
+/// `Task.sleep`; tests pass a sleep they can end on demand.
+public typealias DeadlineSleep = @Sendable (_ nanoseconds: UInt64) async -> Void
+
+public let systemDeadlineSleep: DeadlineSleep = { try? await Task.sleep(nanoseconds: $0) }
+
 public func withTimeout<T: Sendable>(
     seconds: TimeInterval,
+    sleep: @escaping DeadlineSleep = systemDeadlineSleep,
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in
         group.addTask { try await operation() }
         group.addTask {
             let nanoseconds = UInt64(max(0, seconds) * 1_000_000_000)
-            try await Task.sleep(nanoseconds: nanoseconds)
+            await sleep(nanoseconds)
+            try Task.checkCancellation()
             throw AsyncTimeoutError.timedOut
         }
         guard let result = try await group.next() else {
@@ -31,9 +39,10 @@ public func withTimeout<T: Sendable>(
 /// throws `CancellationError` immediately.
 public func withAbandoningDeadline<T: Sendable>(
     seconds: TimeInterval,
+    sleep: @escaping DeadlineSleep = systemDeadlineSleep,
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
-    try await abandoningWait(seconds: seconds, operation: operation)
+    try await abandoningWait(seconds: seconds, sleep: sleep, operation: operation)
 }
 
 /// Await `operation` with no deadline, but stop waiting as soon as the caller
@@ -42,11 +51,12 @@ public func withAbandoningDeadline<T: Sendable>(
 public func withAbandoningCancellation<T: Sendable>(
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
-    try await abandoningWait(seconds: nil, operation: operation)
+    try await abandoningWait(seconds: nil, sleep: systemDeadlineSleep, operation: operation)
 }
 
 private func abandoningWait<T: Sendable>(
     seconds: TimeInterval?,
+    sleep: @escaping DeadlineSleep,
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
     // The work and timer are unstructured so a non-cooperative operation can be
@@ -55,7 +65,7 @@ private func abandoningWait<T: Sendable>(
     let wait = AbandonableWait<T>()
     return try await withTaskCancellationHandler {
         try await withCheckedThrowingContinuation { continuation in
-            wait.start(continuation: continuation, seconds: seconds, operation: operation)
+            wait.start(continuation: continuation, seconds: seconds, sleep: sleep, operation: operation)
         }
     } onCancel: {
         wait.cancel()
@@ -72,6 +82,7 @@ private final class AbandonableWait<T: Sendable>: @unchecked Sendable {
     func start(
         continuation: CheckedContinuation<T, Error>,
         seconds: TimeInterval?,
+        sleep: @escaping DeadlineSleep,
         operation: @escaping @Sendable () async throws -> T
     ) {
         lock.lock()
@@ -91,7 +102,7 @@ private final class AbandonableWait<T: Sendable>: @unchecked Sendable {
         if let seconds {
             timer = Task {
                 let nanoseconds = UInt64(max(0, seconds) * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: nanoseconds)
+                await sleep(nanoseconds)
                 guard !Task.isCancelled else { return }
                 self.resume(with: .failure(AsyncTimeoutError.timedOut))
             }

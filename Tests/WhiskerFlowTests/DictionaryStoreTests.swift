@@ -84,7 +84,8 @@ final class DictionaryStoreTests: XCTestCase {
         }
         state.updateText(record, to: "Ask Zorblet to share the file.")
         XCTAssertTrue(state.dictionary.entries.isEmpty, "no synchronous heuristic learning")
-        try await waitForLearning { !state.dictionary.entries.isEmpty }
+        await learningSettles(state)
+        XCTAssertFalse(state.dictionary.entries.isEmpty)
         XCTAssertEqual(state.dictionary.entries.map(\.written), ["Zorblet"])
         XCTAssertEqual(DictionaryStore(fileURL: dictionaryURL).entries, state.dictionary.entries)
         state.undoDictionaryNotice()
@@ -98,7 +99,8 @@ final class DictionaryStoreTests: XCTestCase {
         var assessed = false
         let state = makeState(store: history) { _ in assessed = true; return [] }
         state.updateText(record, to: "That was fine work.")
-        try await waitForLearning { assessed }
+        await learningSettles(state)
+        XCTAssertTrue(assessed)
         XCTAssertTrue(state.dictionary.entries.isEmpty)
     }
 
@@ -108,13 +110,16 @@ final class DictionaryStoreTests: XCTestCase {
         try history.add(record)
         let state = makeState(store: history) { $0.candidates }
         state.updateText(record, to: "Ask Zorb about it.")
-        try await waitForLearning { state.dictionary.entries.first?.written == "Zorb" }
+        await learningSettles(state)
+        XCTAssertEqual(state.dictionary.entries.first?.written, "Zorb")
         state.dictionary.update { $0.entries[0].useCount = 2; $0.entries[0].lastUsedAt = Date() }
         state.updateText(try XCTUnwrap(state.records.first), to: "Ask Zorblet about it.")
-        try await waitForLearning { state.dictionary.entries.first?.written == "Zorblet" }
+        await learningSettles(state)
+        XCTAssertEqual(state.dictionary.entries.first?.written, "Zorblet")
         XCTAssertEqual(state.dictionary.entries.count, 1)
         state.updateText(try XCTUnwrap(state.records.first), to: record.text)
-        try await waitForLearning { state.dictionary.entries.isEmpty }
+        await learningSettles(state)
+        XCTAssertTrue(state.dictionary.entries.isEmpty)
     }
 
     func testUndoingOneEditKeepsACorrectionConfirmedInAnotherSession() async throws {
@@ -126,11 +131,13 @@ final class DictionaryStoreTests: XCTestCase {
         var calls = 0
         let state = makeState(store: history) { edit in calls += 1; return edit.candidates }
         state.updateText(first, to: "Ask Zorblet about it.")
-        try await waitForLearning { calls == 1 && !state.dictionary.entries.isEmpty }
+        await learningSettles(state)
+        XCTAssertTrue(calls == 1 && !state.dictionary.entries.isEmpty)
         state.updateText(second, to: "Ask Zorblet about it.")
-        try await waitForLearning { calls == 2 }
+        await learningSettles(state)
+        XCTAssertEqual(calls, 2)
         state.updateText(try XCTUnwrap(state.records.first { $0.id == first.id }), to: first.text)
-        try await Task.sleep(for: .milliseconds(2200))
+        await learningSettles(state)
         XCTAssertEqual(state.dictionary.entries.map(\.written), ["Zorblet"])
     }
 
@@ -158,7 +165,8 @@ final class DictionaryStoreTests: XCTestCase {
         try history.add(record)
         let state = makeState(store: history, dictionary: dictionary) { $0.candidates }
         state.updateText(record, to: "Ask Zorblet about it.")
-        try await waitForLearning { !dictionary.entries.isEmpty }
+        await learningSettles(state)
+        XCTAssertFalse(dictionary.entries.isEmpty)
         XCTAssertNotNil(dictionary.errorMessage)
         XCTAssertFalse(try XCTUnwrap(state.dictionaryNotice).isSaved)
         let entry = try XCTUnwrap(dictionary.entries.first)
@@ -167,12 +175,9 @@ final class DictionaryStoreTests: XCTestCase {
         XCTAssertTrue(dictionary.dictionary.isRejected(.init(heard: "zorbit", written: "Zorblet")))
     }
 
-    private func waitForLearning(_ finished: () -> Bool) async throws {
-        for _ in 0..<80 {
-            if finished() { return }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        XCTFail("Learning did not finish")
+    /// Waits until every queued edit has been assessed and applied.
+    private func learningSettles(_ state: AppState) async {
+        while let assessment = state.automaticCorrections.task { await assessment.value }
     }
 
     private func makeState(store: TranscriptStore,
@@ -181,7 +186,11 @@ final class DictionaryStoreTests: XCTestCase {
         let name = "WhiskerFlow.dictionary-tests.\(UUID().uuidString)"
         let settings = AppSettings(defaults: UserDefaults(suiteName: name)!, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         settings.cleanupEnabled = true
-        return AppState(settings: settings, store: store,
-                        dictionaryStore: dictionary ?? DictionaryStore(), correctionAssessor: assess)
+        let state = AppState(settings: settings, store: store,
+                             dictionaryStore: dictionary ?? DictionaryStore(), correctionAssessor: assess)
+        // The 2 s settle time is the learner's own concern; here edits are
+        // assessed as soon as they are queued.
+        state.automaticCorrections.debounce = .zero
+        return state
     }
 }

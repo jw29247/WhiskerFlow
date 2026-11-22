@@ -27,7 +27,7 @@ final class MeetingSpeakerAttributionIntegrationTests: XCTestCase {
         let raw = try Data(contentsOf: XCTUnwrap(files.first))
         XCTAssertFalse(String(decoding: raw, as: UTF8.self).contains(text))
         XCTAssertFalse(String(decoding: raw, as: UTF8.self).contains("Example Person"))
-        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), transcribeMeeting: { _,_ in
+        let processor = MeetingLocalProcessor(processingRoot: root.appendingPathComponent("processing"), audibleRetryUnitNanoseconds: 0, transcribeMeeting: { _,_ in
             TranscriptionResult(text: text, segments: [.init(text: text, start: 0, end: 1)])
         })
         let result = try await processor.process(manifest: store.loadManifest(sessionID: id), store: store, language: "en")

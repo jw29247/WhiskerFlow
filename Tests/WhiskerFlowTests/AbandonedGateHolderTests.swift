@@ -7,13 +7,19 @@ import WhiskerFlowCore
 /// forever, and every later dictation joined that load until the app restarted.
 final class AbandonedGateHolderTests: XCTestCase {
     func testUnboundedLoadFailsFastBehindAnAbandonedDecode() async throws {
-        let gate = ModelDecodeGate()
+        let deadline = ManualDeadline()
+        let gate = ModelDecodeGate(sleep: deadline.sleep)
         let release = HolderLatch()
-        do {
-            _ = try await gate.run(seconds: 0.01) {
+        let wedged = Task {
+            try await gate.run(seconds: 0.01) {
                 await release.wait()
                 return "late"
             }
+        }
+        await deadline.untilRequested(1)
+        deadline.fire()
+        do {
+            _ = try await wedged.value
             XCTFail("Expected timeout")
         } catch AsyncTimeoutError.timedOut {}
 
@@ -23,19 +29,19 @@ final class AbandonedGateHolderTests: XCTestCase {
         } catch ModelDecodeGateError.occupied {}
 
         await release.open()
-        for _ in 0..<200 {
-            if await !(gate.isOccupied) { break }
-            try await Task.sleep(nanoseconds: 1_000_000)
-        }
+        await gate.settling?.value
         try await gate.runQueued(waitingUpTo: nil) {}
     }
 
     /// Callers that queued before the holder was abandoned are released too.
     func testQueuedLoadIsReleasedWhenTheHolderIsAbandoned() async throws {
-        let gate = ModelDecodeGate()
+        let deadline = ManualDeadline()
+        let gate = ModelDecodeGate(sleep: deadline.sleep)
         let release = HolderLatch()
         let holder = Task {
-            try await gate.run(seconds: 0.2) {
+            // Long enough that the deadline's real-time backstop cannot end
+            // it before the load below is queued; the test fires it.
+            try await gate.run(seconds: 30) {
                 await release.wait()
                 return "late"
             }
@@ -44,6 +50,11 @@ final class AbandonedGateHolderTests: XCTestCase {
         let load = Task {
             try await gate.runQueued(waitingUpTo: nil) { XCTFail("Must not run beside the wedged decode") }
         }
+        // The load is queued before the holder's deadline passes.
+        let queued = await yieldUntil { await gate.queuedCount >= 1 }
+        guard queued else { return XCTFail("The load never queued") }
+        await deadline.untilRequested(1)
+        deadline.fire()
         do {
             _ = try await holder.value
             XCTFail("Expected timeout")

@@ -237,10 +237,10 @@ final class CallPromptAndCoachingTests: XCTestCase {
             feed(controller, from: block * 10 + 5, count: 5, own: false, system: true)
         }
         controller.recordOwnSpeech(Array(repeating: "fine", count: 80).joined(separator: " "), from: 180, to: 200)
-        for _ in 0..<50 where controller.livePrompt == nil {
-            try await Task.sleep(nanoseconds: 10_000_000)
-            feed(controller, from: 200, count: 1, own: false, system: true)
-        }
+        // The next second asks the model; the one after shows its answer.
+        feed(controller, from: 200, count: 1, own: false, system: true)
+        await controller.suggestionTask?.value
+        feed(controller, from: 201, count: 1, own: false, system: true)
         XCTAssertEqual(controller.livePrompt, MeetingCoachAdvice.acknowledgeConcerns.message(goal: ""))
         XCTAssertTrue(controller.livePromptIsAI)
         controller.rateSuggestion(helpful: true)

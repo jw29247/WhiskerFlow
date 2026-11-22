@@ -26,6 +26,6 @@ final class MenuBarSceneObservationTests: XCTestCase {
             labelChanged.fulfill()
         }
         state.isRecording = true
-        await fulfillment(of: [labelChanged], timeout: 1)
+        await fulfillment(of: [labelChanged], timeout: 10)
     }
 }

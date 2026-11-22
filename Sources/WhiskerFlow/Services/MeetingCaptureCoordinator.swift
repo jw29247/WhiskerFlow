@@ -311,13 +311,15 @@ final class MeetingCaptureCoordinator {
     retryTask?.cancel()
   }
 
-  func toggleManualCapture() {
-    guard !captureTransitionInProgress else { return }
+  /// Returns the start or stop, so tests can await it.
+  @discardableResult
+  func toggleManualCapture() -> Task<Void, Never>? {
+    guard !captureTransitionInProgress else { return nil }
     if activeSessionID != nil {
-      Task { @MainActor [weak self] in await self?.stopCapture(userInitiated: true) }
+      return Task { @MainActor [weak self] in await self?.stopCapture(userInitiated: true) }
     } else {
       suppressedEvents.removeAll()
-      Task { @MainActor [weak self] in await self?.startCapture(intent: nil) }
+      return Task { @MainActor [weak self] in await self?.startCapture(intent: nil) }
     }
   }
 
@@ -360,17 +362,19 @@ final class MeetingCaptureCoordinator {
   }
 
   /// Retry pressed on one meeting in the library.
-  func retryRecording(sessionID: UUID) {
-    guard sessionID != activeSessionID else { return }
+  /// Returns the retry when it starts now, so tests can await it.
+  @discardableResult
+  func retryRecording(sessionID: UUID) -> Task<Void, Never>? {
+    guard sessionID != activeSessionID else { return nil }
     guard activeSessionID == nil, !captureTransitionInProgress, uploadTask == nil, deliveringSessions.isEmpty else {
       retryPendingRecordings()
-      return
+      return nil
     }
     let store = self.store
     retryBackoff.succeeded(sessionID)
     heldSessionIDs.remove(sessionID)
     library.setStatus(sessionID, .queued, detail: "Retrying…")
-    _ = startRecoveryOperation { [weak self] in
+    return startRecoveryOperation { [weak self] in
       _ = try? await Task.detached(priority: .utility) { try store.releaseManualRetryHold(sessionID: sessionID) }.value
       await self?.deliver(sessionID: sessionID)
     }

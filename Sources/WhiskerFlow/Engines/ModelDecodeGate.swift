@@ -16,10 +16,20 @@ actor ModelDecodeGate {
     /// possibly wedged prediction). Waiters, bounded or not, fail fast instead
     /// of sitting out their wait behind something that may never return.
     private var abandonedOperationID: UUID?
+    /// Waits out run deadlines and queue waits; tests end them on demand.
+    private let sleep: DeadlineSleep
+    /// The wait for an abandoned or failed operation to settle, readable so
+    /// tests can await it instead of polling.
+    private(set) var settling: Task<Void, Never>?
+
+    init(sleep: @escaping DeadlineSleep = systemDeadlineSleep) {
+        self.sleep = sleep
+    }
 
     var isOccupied: Bool { activeOperationID != nil }
     /// A timed-out operation still holds the gate.
     var isHeldByAbandonedOperation: Bool { abandonedOperationID != nil }
+    var queuedCount: Int { waiters.count }
 
     /// Fails with `occupied` instead of waiting when anything holds the gate.
     func runExclusive(
@@ -53,7 +63,7 @@ actor ModelDecodeGate {
         let operationID = try await acquire(waitingUpTo: queueSeconds)
         let work = Task { try await operation() }
         do {
-            let value = try await withAbandoningDeadline(seconds: seconds) {
+            let value = try await withAbandoningDeadline(seconds: seconds, sleep: sleep) {
                 try await work.value
             }
             finish(operationID)
@@ -82,9 +92,11 @@ actor ModelDecodeGate {
         // unbounded load: it may never return, and every later caller would join it.
         if abandonedOperationID != nil { throw ModelDecodeGateError.occupied }
         if let seconds, seconds <= 0 { throw ModelDecodeGateError.occupied }
+        let sleep = sleep
         let expiry = seconds.map { seconds in
             Task { [weak self] in
-                try await Task.sleep(nanoseconds: UInt64(min(seconds, 86_400) * 1_000_000_000))
+                await sleep(UInt64(min(seconds, 86_400) * 1_000_000_000))
+                guard !Task.isCancelled else { return }
                 await self?.dropWaiter(operationID, error: ModelDecodeGateError.occupied)
             }
         }
@@ -120,7 +132,7 @@ actor ModelDecodeGate {
             waiters.removeAll()
             queued.forEach { $0.continuation.resume(throwing: ModelDecodeGateError.occupied) }
         }
-        Task { [weak self] in
+        settling = Task { [weak self] in
             _ = try? await work.value
             await self?.finish(operationID)
         }

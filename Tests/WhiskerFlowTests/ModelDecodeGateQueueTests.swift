@@ -21,7 +21,8 @@ final class ModelDecodeGateQueueTests: XCTestCase {
         let second = Task {
             try await gate.runQueued(waitingUpTo: nil) { await order.append("second") }
         }
-        try await Task.sleep(nanoseconds: 20_000_000)
+        let queued = await yieldUntil { await gate.queuedCount >= 1 }
+        guard queued else { return XCTFail("The second caller never queued") }
 
         // A fail-fast caller cannot jump the queue while it is held.
         do {
@@ -39,13 +40,18 @@ final class ModelDecodeGateQueueTests: XCTestCase {
     }
 
     func testBoundedQueueWaitGivesUpWithOccupied() async throws {
-        let gate = ModelDecodeGate()
+        let deadline = ManualDeadline()
+        let gate = ModelDecodeGate(sleep: deadline.sleep)
         let release = GateLatch()
         let holder = Task { try await gate.runQueued(waitingUpTo: nil) { await release.wait() } }
         while await !(gate.isOccupied) { await Task.yield() }
 
+        let queued = Task { try await gate.run(seconds: 1, waitingUpTo: 0.05) { "must not start" } }
+        await deadline.untilRequested(1)
+        XCTAssertEqual(deadline.requested, [50_000_000], "only the queue wait is running")
+        deadline.fire()
         do {
-            _ = try await gate.run(seconds: 1, waitingUpTo: 0.05) { "must not start" }
+            _ = try await queued.value
             XCTFail("The queued decode should give up after its wait")
         } catch ModelDecodeGateError.occupied {}
 
@@ -58,17 +64,23 @@ final class ModelDecodeGateQueueTests: XCTestCase {
     /// Behind a timed-out (possibly wedged) prediction a bounded waiter fails
     /// at once so the caller can fall back, rather than sitting out its wait.
     func testBoundedWaiterFailsFastBehindAnAbandonedDecode() async throws {
-        let gate = ModelDecodeGate()
+        let deadline = ManualDeadline()
+        let gate = ModelDecodeGate(sleep: deadline.sleep)
         let release = GateLatch()
-        do {
-            _ = try await gate.run(seconds: 0.01) {
+        let wedged = Task {
+            try await gate.run(seconds: 0.01) {
                 await release.wait()
                 return "late"
             }
+        }
+        await deadline.untilRequested(1)
+        deadline.fire()
+        do {
+            _ = try await wedged.value
             XCTFail("Expected timeout")
         } catch AsyncTimeoutError.timedOut {}
-        let wedged = await gate.isHeldByAbandonedOperation
-        XCTAssertTrue(wedged)
+        let held = await gate.isHeldByAbandonedOperation
+        XCTAssertTrue(held)
 
         let started = Date()
         do {
@@ -78,10 +90,7 @@ final class ModelDecodeGateQueueTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(started), 5)
 
         await release.open()
-        for _ in 0..<200 {
-            if await !(gate.isOccupied) { break }
-            try await Task.sleep(nanoseconds: 1_000_000)
-        }
+        await gate.settling?.value
         let stillWedged = await gate.isHeldByAbandonedOperation
         XCTAssertFalse(stillWedged)
         let value = try await gate.run(seconds: 1, waitingUpTo: 1) { "next" }
@@ -94,7 +103,8 @@ final class ModelDecodeGateQueueTests: XCTestCase {
         let holder = Task { try await gate.runQueued(waitingUpTo: nil) { await release.wait() } }
         while await !(gate.isOccupied) { await Task.yield() }
         let waiter = Task { try await gate.runQueued(waitingUpTo: nil) { XCTFail("Cancelled waiter must not run") } }
-        try await Task.sleep(nanoseconds: 20_000_000)
+        let queued = await yieldUntil { await gate.queuedCount >= 1 }
+        guard queued else { return XCTFail("The second caller never queued") }
         waiter.cancel()
         do {
             try await waiter.value

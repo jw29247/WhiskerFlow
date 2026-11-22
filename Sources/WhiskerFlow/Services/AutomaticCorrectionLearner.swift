@@ -15,11 +15,13 @@ final class AutomaticCorrectionLearner {
     var assess: (CorrectionEdit) async throws -> [VocabularyCorrection] = { _ in [] }
     var onValidated: (Pending, [VocabularyCorrection]) -> Void = { _, _ in }
     private var pending: [Pending] = []
-    private var task: Task<Void, Never>?
+    /// The assessment under way; readable so tests can await it instead of sleeping.
+    private(set) var task: Task<Void, Never>?
     private var activeSession: UUID?
     private var busy = false
     private var enabled = false
-    private let debounce: Duration
+    /// How long an edit settles before it is assessed. Tests set it to zero.
+    var debounce: Duration
 
     init(debounce: Duration = .seconds(2)) { self.debounce = debounce }
 
