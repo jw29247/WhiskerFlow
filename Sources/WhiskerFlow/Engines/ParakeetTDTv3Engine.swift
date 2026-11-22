@@ -53,12 +53,6 @@ actor ParakeetTDTv3Engine: Sendable {
         self.loadManager = loadManager
     }
 
-    /// True while a timed-out (possibly wedged) decode still holds the model,
-    /// so any further decode would fail the same way.
-    var isDecodeWedged: Bool {
-        get async { await decodeGate.isHeldByAbandonedOperation }
-    }
-
     func prepare() async throws {
         guard SystemInfo.isAppleSilicon else {
             throw TranscriptionError.engineUnavailable(.parakeetTDTv3)
