@@ -405,6 +405,27 @@ final class AtlasSignOutTests: XCTestCase {
         XCTAssertNil(coordinator.library.entry(sessionID)?.atlasInsights, "The earlier sign-in's summary is not restored")
     }
 
+    func testAScheduleThatArrivesAfterSignOutIsNotCachedOrShown() async {
+        let client = HeldMeetingAtlasStub()
+        let (coordinator, settings) = heldCoordinator(client, defaults: makeDefaults())
+        // `refreshSchedule()` runs this in a task nothing cancels.
+        let poll = Task { await coordinator.pollSchedule() }
+        await client.heldSchedule.untilStarted()
+
+        // What `AppState.signOutOfAtlas()` does to the schedule.
+        settings.removeCachedMeetingSchedule()
+        coordinator.requiresSignIn = { true }
+        coordinator.signOut()
+        client.heldSchedule.release([AtlasCaptureScheduleIntent(
+            eventID: "event", title: "Old account's client call", startMs: 1_790_000_000_000, endMs: 1_790_003_600_000,
+            meetingURL: nil, location: nil, existingMeetingID: nil, overlapsPrevious: false
+        )])
+        await poll.value
+
+        XCTAssertTrue(coordinator.scheduleIntents.isEmpty, "Not shown")
+        XCTAssertTrue(settings.cachedMeetingSchedule().isEmpty, "Not cached for the next account")
+    }
+
     func testMeetingCaptureStopsWhileSignedOutAndResumesAfterSignIn() async throws {
         let defaults = makeDefaults()
         let settings = AppSettings(defaults: defaults, meetingTokenStore: MemoryKeychain(token: nil).store(service: "AtlasSignOutTests"))

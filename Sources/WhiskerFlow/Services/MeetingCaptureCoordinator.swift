@@ -502,6 +502,10 @@ final class MeetingCaptureCoordinator {
     }
     let intents: [AtlasCaptureScheduleIntent]
     var scheduleFetchFailed = false
+    // A refresh can be in flight when the user signs out (`refreshSchedule()`
+    // is not cancelled by `stopMonitoring()`): its answer must not be cached
+    // or shown afterwards.
+    let generation = signOutGeneration
     if let client = await atlasClient() {
       do {
         let window = MeetingScheduleWindow.automaticCapture(
@@ -512,9 +516,11 @@ final class MeetingCaptureCoordinator {
           fromMs: window.fromMs,
           toMs: window.toMs
         )
+        guard generation == signOutGeneration else { return }
         settings.cacheMeetingSchedule(fresh)
         intents = fresh
       } catch {
+        guard generation == signOutGeneration else { return }
         scheduleFetchFailed = true
         lastFailureCode = "schedule"
         intents = cachedSchedule(now: now)
