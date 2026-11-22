@@ -4,31 +4,106 @@ import Observation
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
-struct CleanupResult: Sendable {
-    let text: String
-    let outcome: String
+/// What a Cleanup run or correction assessment ended with. The raw value is
+/// the `cleanup_outcome` log value; old logs and `script/review_diagnostics.py`
+/// depend on it, so never change one.
+enum CleanupOutcome: String, Sendable, CaseIterable {
+    case cleaned, partial, unchanged, formatted, rejected, cancelled
+    case tooLong = "too_long"
+    case unavailable, skipped, fallback, approved, failed
 
+    /// The value logged as `cleanup_outcome`.
+    var logValue: String { rawValue }
+
+    /// The words shown to the person for the last transcript.
     var summary: String {
-        switch outcome {
-        case "cleaned": return "Cleaned up the transcript"
-        case "partial": return "Cleaned up the transcript. Kept some wording to preserve your meaning."
-        case "unchanged": return "Checked the transcript. No changes needed."
-        case "formatted": return "Formatted numbers. Kept the rest of the recognised wording."
-        case "rejected": return "Kept the original because the proposed edit changed too much."
-        case "cancelled": return "Cleanup was interrupted. Kept the original."
-        case "too_long": return "Transcript exceeds the preview limit. Kept the original."
-        case "unavailable": return "Cleanup is paused or the model isn't ready. Kept the original."
-        case "skipped": return "Cleanup is off or busy. Kept the original."
-        default: return "Cleanup couldn't finish in time. Kept the original."
+        switch self {
+        case .cleaned: "Cleaned up the transcript"
+        case .partial: "Cleaned up the transcript. Kept some wording to preserve your meaning."
+        case .unchanged: "Checked the transcript. No changes needed."
+        case .formatted: "Formatted numbers. Kept the rest of the recognised wording."
+        case .rejected: "Kept the original because the proposed edit changed too much."
+        case .cancelled: "Cleanup was interrupted. Kept the original."
+        case .tooLong: "Transcript exceeds the preview limit. Kept the original."
+        case .unavailable: "Cleanup is paused or the model isn't ready. Kept the original."
+        case .skipped: "Cleanup is off or busy. Kept the original."
+        case .fallback, .approved, .failed: "Cleanup couldn't finish in time. Kept the original."
         }
     }
+
+    /// Shown before any transcript has been checked.
+    static let noRunSummary = "No transcript checked yet"
+}
+
+/// Cleanup's state, as shown on the Status row in Settings.
+enum CleanupStatus: Equatable, Sendable {
+    case off
+    case readyOnNextDictation
+    case downloadNeeded
+    case warmingUp
+    case warmAndReady
+    case backgroundWarmingPaused
+    case modelCouldNotLoad
+    case cleaningUp
+    case pausedToSaveResources
+    case usedOriginalTranscript
+    case downloading(model: String)
+    case resumingDownload(model: String)
+    case restartingDownload(model: String)
+    case checkingDownload
+    case downloaded
+    case downloadCancelled
+    case downloadPaused
+    case downloadMismatch
+    case downloadStoppedResumable
+    case downloadFailed
+    case sleeping
+    case pausedForMemory
+
+    /// The words shown to the person.
+    var text: String {
+        switch self {
+        case .off: "Off"
+        case .readyOnNextDictation: "Ready on next dictation"
+        case .downloadNeeded: "Download needed"
+        case .warmingUp: "Warming up"
+        case .warmAndReady: "Warm and ready"
+        case .backgroundWarmingPaused: "Ready on next dictation. Background warming is paused."
+        case .modelCouldNotLoad: "Model couldn't load. Dictation still works."
+        case .cleaningUp: "Cleaning up"
+        case .pausedToSaveResources: "Paused to save resources"
+        case .usedOriginalTranscript: "Used original transcript"
+        case let .downloading(model): "Downloading \(model)"
+        case let .resumingDownload(model): "Resuming \(model) download"
+        case let .restartingDownload(model): "Starting the \(model) download again"
+        case .checkingDownload: "Checking download"
+        case .downloaded: "Downloaded"
+        case .downloadCancelled: "Download cancelled"
+        case .downloadPaused: "Download paused"
+        case .downloadMismatch: "The download didn't match the expected file and was deleted. Try again."
+        case .downloadStoppedResumable: "Download stopped. Resume to carry on where it left off."
+        case .downloadFailed: "Download failed. Try again."
+        case .sleeping: "Sleeping to save memory"
+        case .pausedForMemory: "Paused while your Mac needs memory"
+        }
+    }
+}
+
+struct CleanupResult: Sendable {
+    let text: String
+    let outcome: CleanupOutcome
+
+    var summary: String { outcome.summary }
 }
 
 @MainActor
 @Observable
 final class CleanupService {
-    private(set) var status = "Off"
-    private(set) var lastRun = "No transcript checked yet"
+    private(set) var status: CleanupStatus = .off
+    /// The outcome of the last transcript checked, or nil before the first.
+    private(set) var lastOutcome: CleanupOutcome?
+    /// The words shown for the last transcript checked.
+    var lastRun: String { lastOutcome?.summary ?? CleanupOutcome.noRunSummary }
     private(set) var downloading = false
     private(set) var running = false
     private(set) var downloadProgress: Double = 0
@@ -59,7 +134,7 @@ final class CleanupService {
         #if DEBUG
         // `--ui-state=cleanup-partial` and `cleanup-downloading` preview an interrupted download.
         if UIPreview.mode == "cleanup-partial" { resumableFraction = 0.42 }
-        if UIPreview.mode == "cleanup-downloading" { downloading = true; downloadProgress = 0.42; status = "Resuming Gemma 4 E2B download" }
+        if UIPreview.mode == "cleanup-downloading" { downloading = true; downloadProgress = 0.42; status = .resumingDownload(model: CleanupModel.gemma4E2B.name) }
         #endif
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
         source.setEventHandler { [weak self] in
@@ -77,7 +152,7 @@ final class CleanupService {
         warmTask?.cancel()
         idleTask?.cancel()
         worker.unload()
-        status = next.map { CleanupWorker.isInstalled($0) ? "Ready on next dictation" : "Download needed" } ?? "Off"
+        status = next.map { CleanupWorker.isInstalled($0) ? .readyOnNextDictation : .downloadNeeded } ?? .off
     }
 
     func installed(_ model: CleanupModel) -> Bool {
@@ -90,7 +165,7 @@ final class CleanupService {
         guard configuredModel == model, warmTask == nil, !running, canRun(model), installed(model) else { return }
         let identifier = configurationID
         needsShutdown = true
-        status = "Warming up"
+        status = .warmingUp
         warmTask = Task { [weak self] in
             guard let self else { return }
             defer { self.warmTask = nil }
@@ -98,13 +173,12 @@ final class CleanupService {
                 try await self.worker.prepare(model, foreground: foreground)
                 guard !Task.isCancelled, self.configurationID == identifier else { return }
                 if !self.running {
-                    self.status = "Warm and ready"
+                    self.status = .warmAndReady
                     self.scheduleSleep(model, prewarming: true)
                 }
             } catch {
                 guard self.configurationID == identifier else { return }
-                self.status = CleanupWorker.memoryPressure == 2 ? "Ready on next dictation. Background warming is paused."
-                    : "Model couldn't load. Dictation still works."
+                self.status = CleanupWorker.memoryPressure == 2 ? .backgroundWarmingPaused : .modelCouldNotLoad
             }
         }
     }
@@ -115,27 +189,30 @@ final class CleanupService {
         guard configuredModel == model, !running, !downloading, canRun(model), installed(model),
               !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               original.count <= TranscriptCleanup.maximumCharacters else {
-            let outcome = original.count > TranscriptCleanup.maximumCharacters ? "too_long"
-                : configuredModel != model || running || downloading ? "skipped" : "unavailable"
-            let result = CleanupResult(text: original, outcome: original != raw ? "formatted" : outcome)
-            lastRun = result.summary
-            logger.info("Cleanup skipped", metadata: ["event": "cleanup_finished", "cleanup_outcome": "\(outcome)"])
+            let outcome: CleanupOutcome = original.count > TranscriptCleanup.maximumCharacters ? .tooLong
+                : configuredModel != model || running || downloading ? .skipped : .unavailable
+            let result = CleanupResult(text: original, outcome: original != raw ? .formatted : outcome)
+            lastOutcome = result.outcome
+            logger.info("Cleanup skipped", metadata: ["event": "cleanup_finished", "cleanup_outcome": "\(outcome.logValue)"])
             return result
         }
         running = true
         needsShutdown = true
         idleTask?.cancel()
-        status = "Cleaning up"
+        status = .cleaningUp
         let identifier = configurationID
         let started = ProcessInfo.processInfo.systemUptime
         let result = await runCleanup(original, raw: raw, model: model, vocabulary: vocabulary, variety: variety,
                                       identifier: identifier, started: started)
         running = false
-        lastRun = result.summary
+        lastOutcome = result.outcome
         if configurationID == identifier {
-            status = result.outcome == "unavailable" ? "Paused to save resources"
-                : result.outcome == "formatted" ? "Ready on next dictation"
-                : result.outcome == "fallback" ? "Used original transcript" : "Warm and ready"
+            status = switch result.outcome {
+            case .unavailable: .pausedToSaveResources
+            case .formatted: .readyOnNextDictation
+            case .fallback: .usedOriginalTranscript
+            default: .warmAndReady
+            }
             scheduleSleep(model)
         }
         return result
@@ -143,9 +220,9 @@ final class CleanupService {
 
     private func runCleanup(_ original: String, raw: String, model: CleanupModel, vocabulary: Vocabulary,
                             variety: CleanupEnglishVariety, identifier: UUID, started: TimeInterval) async -> CleanupResult {
-        var outcome = "failed"
+        var outcome = CleanupOutcome.failed
         defer {
-            logger.info("Cleanup finished", metadata: ["event": "cleanup_finished", "cleanup_outcome": "\(outcome)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - started) * 1000)"])
+            logger.info("Cleanup finished", metadata: ["event": "cleanup_finished", "cleanup_outcome": "\(outcome.logValue)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - started) * 1000)"])
         }
         do {
             let worker = self.worker
@@ -154,21 +231,21 @@ final class CleanupService {
                 try await worker.cleanTranscript(original, model: model, seconds: seconds, vocabulary: vocabulary, variety: variety)
             }
             guard configurationID == identifier, !Task.isCancelled else {
-                outcome = "cancelled"
-                return CleanupResult(text: original, outcome: original != raw ? "formatted" : outcome)
+                outcome = .cancelled
+                return CleanupResult(text: original, outcome: original != raw ? .formatted : outcome)
             }
             let text = attempt.text
-            outcome = text == raw ? (attempt.rejectedSegments > 0 ? "rejected" : "unchanged")
-                : (attempt.rejectedSegments > 0 ? "partial" : "cleaned")
-            if text == raw && attempt.incomplete { outcome = "fallback" }
+            outcome = text == raw ? (attempt.rejectedSegments > 0 ? .rejected : .unchanged)
+                : (attempt.rejectedSegments > 0 ? .partial : .cleaned)
+            if text == raw && attempt.incomplete { outcome = .fallback }
             return CleanupResult(text: text, outcome: outcome)
         } catch {
             switch error {
-            case is CancellationError: outcome = "cancelled"
-            case CleanupFailure.unavailable: outcome = "unavailable"
-            default: outcome = "fallback"
+            case is CancellationError: outcome = .cancelled
+            case CleanupFailure.unavailable: outcome = .unavailable
+            default: outcome = .fallback
             }
-            return CleanupResult(text: original, outcome: original != raw ? "formatted" : outcome)
+            return CleanupResult(text: original, outcome: original != raw ? .formatted : outcome)
         }
     }
 
@@ -182,9 +259,9 @@ final class CleanupService {
         needsShutdown = true
         idleTask?.cancel()
         defer { if configurationID == identifier { scheduleSleep(model) } }
-        var outcome = "failed"
+        var outcome = CleanupOutcome.failed
         defer {
-            logger.info("Correction assessment finished", metadata: ["event": "correction_assessed", "cleanup_outcome": "\(outcome)"])
+            logger.info("Correction assessment finished", metadata: ["event": "correction_assessed", "cleanup_outcome": "\(outcome.logValue)"])
         }
         do {
             var approved: [VocabularyCorrection] = []
@@ -196,10 +273,10 @@ final class CleanupService {
                 if CorrectionAssessment.approved(response) { approved.append(candidate) }
             }
             try Task.checkCancellation()
-            outcome = approved.isEmpty ? "unchanged" : "approved"
+            outcome = approved.isEmpty ? .unchanged : .approved
             return approved
         } catch {
-            outcome = error is CancellationError ? "cancelled" : "unavailable"
+            outcome = error is CancellationError ? .cancelled : .unavailable
             throw error
         }
     }
@@ -220,7 +297,7 @@ final class CleanupService {
         needsShutdown = true
         activeDownload = download
         downloadProgress = resumed
-        status = resumed > 0 ? "Resuming \(model.name) download" : "Downloading \(model.name)"
+        status = resumed > 0 ? .resumingDownload(model: model.name) : .downloading(model: model.name)
         downloadTask = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -233,28 +310,27 @@ final class CleanupService {
                 // The finished file is checked against the pinned SHA-256
                 // before it replaces anything; a mismatch is deleted.
                 try await download.install(verify: { try CleanupWorker.validate($0, model: model) },
-                                           verifying: { @MainActor [weak self] in self?.status = "Checking download" },
+                                           verifying: { @MainActor [weak self] in self?.status = .checkingDownload },
                                            progress: { [weak self] progress in
                                                Task { @MainActor in
                                                    guard let self, self.downloading else { return }
                                                    // A clear drop means the server no longer had the same
                                                    // file and the download began again: show that.
                                                    if progress + 0.01 < self.downloadProgress {
-                                                       self.status = "Starting the \(model.name) download again"
+                                                       self.status = .restartingDownload(model: model.name)
                                                    }
                                                    self.downloadProgress = progress
                                                }
                                            })
-                self.status = "Downloaded"
+                self.status = .downloaded
                 completion()
             } catch {
                 if Task.isCancelled {
-                    self.status = self.discardingDownload ? "Download cancelled" : "Download paused"
+                    self.status = self.discardingDownload ? .downloadCancelled : .downloadPaused
                 } else if (error as? ResumableModelDownloadError) == .verificationFailed {
-                    self.status = "The download didn't match the expected file and was deleted. Try again."
+                    self.status = .downloadMismatch
                 } else {
-                    self.status = download.resumableBytes > 0 ? "Download stopped. Resume to carry on where it left off."
-                        : "Download failed. Try again."
+                    self.status = download.resumableBytes > 0 ? .downloadStoppedResumable : .downloadFailed
                 }
             }
         }
@@ -273,7 +349,7 @@ final class CleanupService {
         let download = Self.modelDownload(model, transport: downloadTransport)
         download.discardPartial()
         resumableFraction = download.resumableFraction
-        status = "Download cancelled"
+        status = .downloadCancelled
     }
 
     func shutdown() async {
@@ -287,7 +363,7 @@ final class CleanupService {
     func sleepNow() {
         idleTask?.cancel()
         worker.unload()
-        if configuredModel != nil { status = "Sleeping to save memory" }
+        if configuredModel != nil { status = .sleeping }
     }
 
     private func canRun(_ model: CleanupModel) -> Bool {
@@ -300,7 +376,7 @@ final class CleanupService {
     private func memoryPressureChanged() {
         guard let event = pressure?.data else { return }
         if !event.contains(.warning), !event.contains(.critical) {
-            if configuredModel != nil && !running { status = "Ready on next dictation" }
+            if configuredModel != nil && !running { status = .readyOnNextDictation }
             return
         }
         let critical = event.contains(.critical) || !CleanupWorker.hasEmergencyReserve
@@ -311,7 +387,7 @@ final class CleanupService {
         configurationID = UUID()
         warmTask?.cancel()
         sleepNow()
-        if configuredModel != nil { status = "Paused while your Mac needs memory" }
+        if configuredModel != nil { status = .pausedForMemory }
     }
 
     private func scheduleSleep(_ model: CleanupModel, prewarming: Bool = false) {

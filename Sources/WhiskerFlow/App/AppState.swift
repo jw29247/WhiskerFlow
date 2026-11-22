@@ -2733,7 +2733,7 @@ final class AppState {
 
     private func cleanupText(_ text: String, configuration: TranscriptionJobConfiguration) async -> CleanupResult {
         guard let model = configuration.cleanupModel, configuration.writing.tone != .literal,
-              configuration.purpose != .selectionInstruction else { return CleanupResult(text: text, outcome: "skipped") }
+              configuration.purpose != .selectionInstruction else { return CleanupResult(text: text, outcome: .skipped) }
         return await cleanup.clean(text, model: model, vocabulary: configuration.vocabulary, variety: configuration.cleanupVariety)
     }
 

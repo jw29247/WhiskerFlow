@@ -50,7 +50,7 @@ struct CleanupSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Selected", value: model.name)
                 LabeledContent("Download", value: ByteCountFormatter.string(fromByteCount: model.byteCount, countStyle: .file))
-                LabeledContent("Status", value: appState.cleanup.status)
+                LabeledContent("Status", value: appState.cleanup.status.text)
                 LabeledContent("Last transcript", value: appState.cleanup.lastRun)
                 if appState.cleanup.downloading {
                     ProgressView(value: appState.cleanup.downloadProgress)

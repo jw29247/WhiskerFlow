@@ -11,7 +11,7 @@ final class CleanupServiceTests: XCTestCase {
         let input = "Pay four hundred and fifty-one pounds and fifty-one pence. " + String(repeating: "Other wording. ", count: 400)
         let result = await service.clean(input, model: .gemma4E2B)
         XCTAssertEqual(result.text, "Pay £451.51. " + String(repeating: "Other wording. ", count: 400))
-        XCTAssertEqual(result.outcome, "formatted")
+        XCTAssertEqual(result.outcome, .formatted)
         XCTAssertFalse(service.needsShutdown)
     }
 
@@ -32,9 +32,9 @@ final class CleanupServiceTests: XCTestCase {
         let input = "Um, don't change one pound and five pence yet."
         let result = await service.clean(input, model: .gemma4E2B)
         XCTAssertEqual(result.text, input)
-        XCTAssertEqual(result.outcome, "skipped")
+        XCTAssertEqual(result.outcome, .skipped)
         XCTAssertFalse(service.needsShutdown)
-        XCTAssertEqual(service.status, "Off")
+        XCTAssertEqual(service.status, .off)
     }
 
     func testOversizedTranscriptKeepsOriginalWithoutLoading() async {
@@ -43,7 +43,7 @@ final class CleanupServiceTests: XCTestCase {
         let input = String(repeating: "A", count: TranscriptCleanup.maximumCharacters + 1)
         let result = await service.clean(input, model: .gemma4E2B)
         XCTAssertEqual(result.text, input)
-        XCTAssertEqual(result.outcome, "too_long")
+        XCTAssertEqual(result.outcome, .tooLong)
         XCTAssertFalse(service.needsShutdown)
     }
 
