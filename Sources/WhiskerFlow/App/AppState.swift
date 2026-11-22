@@ -191,6 +191,11 @@ final class AppState {
     static let selectionShortcut = KeyCombo(keyCode: 14, modifiers: [.command, .option, .shift])
     static let quickCaptureShortcut = KeyCombo(keyCode: 45, modifiers: [.command, .option, .shift])
     static let bookmarkShortcut = KeyCombo(keyCode: 11, modifiers: [.command, .option, .shift])
+    /// ⌥⇧⌘R, the same as the "Toggle Meeting Capture" menu command.
+    static let meetingShortcut = KeyCombo(keyCode: 15, modifiers: [.command, .option, .shift])
+    private var hotKeyRegistrar: CarbonHotKeyRegistrar?
+    private var registeredShortcuts: RegisteredShortcutController?
+    private var meetingShortcutPresses = ShortcutPressDeduplicator()
     private var meetingCoachHUD: MeetingCoachHUDController?
     private var callPromptHUD: CallPromptHUDController?
     private var hudController: RecordingHUDController?
@@ -746,6 +751,7 @@ final class AppState {
             self.hotkeyReadinessActivity = nil
         }
         correctionMonitor.stop()
+        stopRegisteredShortcuts()
         hotkeyMonitor?.stop()
         assistantHotkeyMonitors.forEach { $0.stop() }
         assistantHotkeyMonitors = []
@@ -868,6 +874,7 @@ final class AppState {
         guard !UIPreview.isEnabled, let hotkeyMonitor else { return }
         configureGlobeKeyShortcut()
         hotkeyMonitor.update(combo: settings.activeHotkeyCombo)
+        registeredShortcuts?.setDictationCombo(settings.activeHotkeyCombo)
     }
 
     func warmUpMeetingEngine() {
@@ -902,6 +909,7 @@ final class AppState {
     func setHotkeyCaptureActive(_ active: Bool) {
         hotkeyMonitor?.setSuspended(active)
         assistantHotkeyMonitors.forEach { $0.setSuspended(active) }
+        registeredShortcuts?.setSuspended(active)
     }
 
     /// The team glossary plus the user's personal rules, applied to every
@@ -1115,6 +1123,19 @@ final class AppState {
     func toggleMeetingCapture() {
         guard !UIPreview.isEnabled else { return }
         meetingCapture.toggleManualCapture()
+    }
+
+    /// The "Toggle Meeting Capture" menu command. Chosen from the menu with
+    /// the mouse it always toggles; by its key equivalent it toggles unless the
+    /// registered ⌥⇧⌘R already did for that same key press.
+    func toggleMeetingCaptureFromMenu() {
+        let event = NSApp.currentEvent
+        toggleMeetingCapture(keyPressedAt: event?.type == .keyDown ? event?.timestamp : nil)
+    }
+
+    private func toggleMeetingCapture(keyPressedAt eventTime: TimeInterval?) {
+        guard meetingShortcutPresses.shouldAct(eventTime: eventTime) else { return }
+        toggleMeetingCapture()
     }
 
   func refreshMeetingConfiguration() {
@@ -1587,6 +1608,7 @@ final class AppState {
         monitor.onDiscardKey = { [weak self] in self?.discardDictation() }
         monitor.start()
         hotkeyMonitor = monitor
+        startRegisteredShortcuts()
         for (combo, purpose) in [(Self.selectionShortcut, AssistantController.CapturePurpose.selectionInstruction),
                                  (Self.quickCaptureShortcut, AssistantController.CapturePurpose.quickCapture)] {
             let shortcut = HotkeyMonitor(combo: combo) { [weak self] pressed in
@@ -1614,6 +1636,54 @@ final class AppState {
             self.bookmarkMeeting()
         }
         bookmark.start(); assistantHotkeyMonitors.append(bookmark)
+    }
+
+    /// Registers the dictation shortcut (when it is a key or combination),
+    /// ⌥⇧⌘R, and Esc while a dictation can be discarded, so the system
+    /// consumes them; see `RegisteredShortcutController`. Whatever is not
+    /// registered keeps the observing monitors above.
+    private func startRegisteredShortcuts() {
+        let registrar = CarbonHotKeyRegistrar()
+        let shortcuts = RegisteredShortcutController(
+            registrar: registrar, dictationCombo: settings.activeHotkeyCombo, meetingCombo: Self.meetingShortcut
+        )
+        registrar.onEvent = { [weak self] shortcut, pressed, eventTime in
+            guard let self, let action = self.registeredShortcuts?.handle(shortcut, pressed: pressed) else { return }
+            switch action {
+            case .dictation(let pressed): self.hotkeyMonitor?.handleRegisteredHotKey(pressed: pressed, eventTime: eventTime)
+            case .toggleMeeting: self.toggleMeetingCapture(keyPressedAt: eventTime)
+            case .discard: self.discardDictation()
+            }
+        }
+        shortcuts.onChange = { [weak self, weak shortcuts] in
+            self?.hotkeyMonitor?.setRegistered(shortcuts?.isRegistered(.dictation) ?? false)
+        }
+        recordingCoordinator.onPhaseChange = { [weak self] phase in
+            guard phase.isDiscardable else {
+                self?.registeredShortcuts?.setDiscardWindowOpen(false)
+                return
+            }
+            // Registering Esc waits one main-queue turn so it never delays
+            // opening the microphone; the phase is read again by then.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.registeredShortcuts?.setDiscardWindowOpen(self.recordingCoordinator.phase.isDiscardable)
+                }
+            }
+        }
+        hotKeyRegistrar = registrar
+        registeredShortcuts = shortcuts
+        shortcuts.start()
+    }
+
+    private func stopRegisteredShortcuts() {
+        recordingCoordinator.onPhaseChange = nil
+        registeredShortcuts?.stop()
+        registeredShortcuts = nil
+        hotKeyRegistrar?.invalidate()
+        hotKeyRegistrar = nil
+        hotkeyMonitor?.setRegistered(false)
     }
 
     private func startSecureInputMonitor() {
