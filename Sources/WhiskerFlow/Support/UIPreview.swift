@@ -65,6 +65,7 @@ enum UIPreview {
     /// Settings window beside the main snapshot as `-settings.png`.
     static func writeSettingsSnapshotIfRequested() {
         guard settingsCategory != nil, let path = argument("--ui-snapshot=") else { return }
+        resizeWindowIfRequested { $0.title.hasSuffix("Settings") }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title.hasSuffix("Settings") }),
                   let view = window.contentView?.superview ?? window.contentView,
@@ -72,6 +73,15 @@ enum UIPreview {
             view.cacheDisplay(in: view.bounds, to: bitmap)
             try? bitmap.representation(using: .png, properties: [:])?
                 .write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-settings.png")))
+        }
+    }
+    /// `--ui-window-height=<points>` resizes the Settings or setup window before
+    /// its snapshot; a height below the window's minimum shows that minimum.
+    private static func resizeWindowIfRequested(_ matches: @escaping (NSWindow) -> Bool) {
+        guard let height = argument("--ui-window-height=").flatMap(Double.init) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && matches($0) }) else { return }
+            window.setContentSize(NSSize(width: window.contentLayoutRect.width, height: max(height, window.contentMinSize.height)))
         }
     }
     static var isPaired: Bool { mode != "disconnected" && mode != "setup" && onboardingStep == nil }
@@ -92,7 +102,8 @@ enum UIPreview {
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
             // A floating meeting panel (call prompt, reminder or coach) is
             // written beside it as `-panel.png`.
-            if let panel = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.nonactivatingPanel) }),
+            // A HUD message hides itself before this runs: take it anyway.
+            if let panel = NSApp.windows.first(where: { ($0.isVisible || mode.hasPrefix("hud-")) && $0.styleMask.contains(.nonactivatingPanel) }),
                let content = panel.contentView, let panelRep = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
                 content.cacheDisplay(in: content.bounds, to: panelRep)
                 try? panelRep.representation(using: .png, properties: [:])?
@@ -182,11 +193,21 @@ enum UIPreview {
             state.hasScreenRecordingPermission = mode != "setup"
             if mode != "empty" && mode != "setup" && onboardingStep == nil { addSampleInsights(to: state) }
             if mode == "error" { state.status = .failure("The microphone disconnected. Choose an available microphone in Settings.") }
-            // The floating HUD's failure state: `hud-failure` and `hud-failure-long`.
-            if mode.hasPrefix("hud-failure") {
-                state.status = .failure(mode == "hud-failure-long"
-                    ? "Couldn’t reach the app. Your text is on the clipboard. Click into the app you were using and paste."
-                    : "Couldn’t paste. Your text is on the clipboard.")
+            // The floating HUD: `hud-failure`, `hud-failure-long`, `hud-recording`,
+            // `hud-recording-quiet`, `hud-transcribing` and `hud-success`.
+            if mode.hasPrefix("hud-") {
+                if mode.hasPrefix("hud-failure") {
+                    state.status = .failure(mode == "hud-failure-long"
+                        ? "Couldn’t reach the app. Your text is on the clipboard. Click into the app you were using and paste."
+                        : "Couldn’t paste. Your text is on the clipboard.")
+                }
+                if mode.hasPrefix("hud-recording") {
+                    state.isRecording = true; state.status = .recording; state.audioLevel = 0.16
+                    state.liveText = "This is a preview of your words as you speak."
+                    if mode == "hud-recording-quiet" { state.signalQuality = .tooQuiet }
+                }
+                if mode == "hud-transcribing" { state.isTranscribing = true; state.status = .transcribing }
+                if mode == "hud-success" { state.status = .success("Pasted") }
                 // The panel follows the app's appearance, not the main window's;
                 // NSApp exists from the next turn.
                 DispatchQueue.main.async {
@@ -354,6 +375,7 @@ enum UIPreview {
         guard isEnabled, onboardingStep != nil,
               let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--ui-snapshot=") }) else { return }
         let path = String(argument.dropFirst("--ui-snapshot=".count))
+        resizeWindowIfRequested { $0.title == "Set Up WhiskerFlow" }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             writeSnapshot(to: URL(fileURLWithPath: path))
             // A preview holds no data; an open sheet would stall a normal terminate.
