@@ -112,7 +112,7 @@ struct FlowKeycap: View {
 
 struct FlowStatus: View {
     let title: String
-    var color: Color = .green
+    var color: Color = FlowStyle.success
 
     var body: some View {
         HStack(spacing: 7) {
