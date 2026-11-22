@@ -38,7 +38,6 @@ final class ToggleAutoStopDeliveryTests: XCTestCase {
         settings.allowAppleFallback = false
         settings.cleanupEnabled = false
         settings.delivery = delivery
-        settings.historyRetention = retention
         settings.playSounds = false
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -48,6 +47,8 @@ final class ToggleAutoStopDeliveryTests: XCTestCase {
         let paste = RecordingDeliveryService()
         let transcription = TranscriptionService(recognizerOverride: { _, _ in TranscriptionResult(text: try recognizer()) })
         let state = AppState(settings: settings, store: store, pasteService: paste, transcription: transcription)
+        // The store only follows the setting once it is applied through the app.
+        if retention != settings.historyRetention { state.setHistoryRetention(retention) }
         return Harness(state: state, paste: paste, audio: audio) {
             defaults.removePersistentDomain(forName: name)
             try? FileManager.default.removeItem(at: root)
