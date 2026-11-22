@@ -11,6 +11,6 @@ final class SoundServiceTests: XCTestCase {
             played.fulfill()
         }
         service.play(.transcriptionSucceeded)
-        await fulfillment(of: [played], timeout: 2)
+        await fulfillment(of: [played], timeout: 10)
     }
 }

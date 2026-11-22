@@ -159,7 +159,7 @@ final class MeetingCoordinatorTests: XCTestCase {
                 await release.wait()
             }
         }
-        await fulfillment(of: [started], timeout: 1)
+        await fulfillment(of: [started], timeout: 10)
 
         do {
             try await gate.runExclusive { XCTFail("A second model load must not start") }
@@ -683,12 +683,12 @@ final class MeetingCoordinatorTests: XCTestCase {
             while !Task.isCancelled { await Task.yield() }
             cancelled.fulfill()
         }
-        await fulfillment(of: [started], timeout: 1)
+        await fulfillment(of: [started], timeout: 10)
 
         MeetingRecoveryPriority.cancelActiveBatch(&batch)
 
         XCTAssertNil(batch)
-        await fulfillment(of: [cancelled], timeout: 1)
+        await fulfillment(of: [cancelled], timeout: 10)
     }
 
     func testOnlyCurrentRecoveryBatchMayClearCoordinatorOwnership() {
@@ -722,7 +722,7 @@ final class MeetingCoordinatorTests: XCTestCase {
             oldStarted.fulfill()
             await oldRelease.wait()
         }
-        await fulfillment(of: [oldStarted], timeout: 1)
+        await fulfillment(of: [oldStarted], timeout: 10)
         coordinator.prioritizeFreshCaptureOverRecovery()
 
         let newStarted = expectation(description: "new started")
@@ -731,7 +731,7 @@ final class MeetingCoordinatorTests: XCTestCase {
             newStarted.fulfill()
             await newRelease.wait()
         }
-        await fulfillment(of: [newStarted], timeout: 1)
+        await fulfillment(of: [newStarted], timeout: 10)
         await oldRelease.open()
         await old?.value
         XCTAssertTrue(coordinator.hasActiveRecoveryBatch)

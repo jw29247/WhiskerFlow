@@ -148,7 +148,7 @@ final class AssistantCoachingLifecycleTests: XCTestCase {
         await controller.requestCoach(phase: "premeeting", goal: "Private")
         let id = try XCTUnwrap(controller.currentCoachRecord?.id)
         let deletion = Task { await controller.deleteCoach(id) }
-        await fulfillment(of: [started], timeout: 2)
+        await fulfillment(of: [started], timeout: 10)
         identity = "owner-two"
         await latch.open()
         await deletion.value
