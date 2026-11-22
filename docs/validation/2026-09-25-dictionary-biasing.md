@@ -38,8 +38,8 @@ RecognizerBiasingEvaluationTests`).
 **Audio.** Ten clips, all synthetic, so no user audio is involved:
 
 - Five sentences packed with dictionary terms. These use the ten shared-library
-  client names (BPerfect, Cleens, Comfybedss, Firma Stella, Manukora, Nuve, Otty,
-  Travlfi, Vivamn, Water2) plus Siobhan, Niamh, WhiskerFlow, Kubernetes,
+  client names (BReady, Kwick, Cosyroomss, Terma Velia, Lumarova, Juvo, Itty,
+  Hotlfi, Solamn, Coffee2) plus Siobhan, Niamh, WhiskerFlow, Kubernetes,
   Superlog and Figma. They are spoken by the macOS `Daniel` (en-GB) and
   `Samantha` (en-US) voices at 16 kHz.
 - One prose control with no dictionary terms.
@@ -89,24 +89,24 @@ failure: the bounded WhisperKit file path fails on "Yes." either way.
 
 | Hints off | Hints on |
 | --- | --- |
-| the travel fee launch moved. So Nive will update the firmest telebreath. | The Travlfi launch moved. So Niamh will update the Firma Stella brief. |
-| Comforbeds and cleans both asked about the B perfect bundle. | Comfybedss and Cleens both asked about the BPerfect bundle. |
+| the hotel fee launch moved. So Nive will update the thermal velibreath. | The Hotlfi launch moved. So Niamh will update the Terma Velia brief. |
+| Cosierooms and quick both asked about the B ready bundle. | Cosyroomss and Kwick both asked about the BReady bundle. |
 | Deploy Whisker float a Cuban eats and log it in Superlog. | The Play WhiskerFlow to Kubernetes and Logit in Superlog. |
 
 **WhisperKit small.en, file path**
 
 | Hints off | Hints on |
 | --- | --- |
-| Send the Manukoro and Oti reports to Shavon before Friday. | Send the Manukora and Otty reports to Siobhan before Friday. |
-| Vivum wants the new landing page in Figma by Tuesday. | Vivamn wants the Nuve landing page in Figma by Tuesday. |
+| Send the Lumarovo and Iti reports to Shavon before Friday. | Send the Lumarova and Itty reports to Siobhan before Friday. |
+| Solum wants the new landing page in Figma by Tuesday. | Solamn wants the Juvo landing page in Figma by Tuesday. |
 
 **Parakeet TDT v3**
 
 | Hints off | Hints on |
 | --- | --- |
-| Send the Manupura and Oti reports to Shavan before Friday. | Send the Manukora and Oti reports to Shavan before Friday. |
-| Comfabeds and cleans both asked about the be perfect bundle. | Comfybedss and Cleens both asked about the be BPerfect bundle. |
-| The travel fee launch moved, so Neve will update the firm's telebrief. | The Travlfi launch moved, so **Nuve** will update the firm's telebrief. |
+| Send the Lumapova and Iti reports to Shavan before Friday. | Send the Lumarova and Iti reports to Shavan before Friday. |
+| Cozarooms and quick both asked about the be ready bundle. | Cosyroomss and Kwick both asked about the be BReady bundle. |
+| The hotel fee launch moved, so Neve will update the therm's velibrief. | The Hotlfi launch moved, so **Juvo** will update the therm's velibrief. |
 
 ## Findings
 
@@ -165,8 +165,8 @@ unchanged:
 **Errors.** It made two:
 
 - It replaced "Neve" (really "Niamh") with a *different* dictionary term,
-  "Nuve". That's a wrong substitution the user would not expect.
-- It left the spurious "be" of "be perfect" before "BPerfect".
+  "Juvo". That's a wrong substitution the user would not expect.
+- It left the spurious "be" of "be ready" before "BReady".
 
 **Other limits:**
 

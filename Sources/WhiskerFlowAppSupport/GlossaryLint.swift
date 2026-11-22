@@ -69,8 +69,8 @@ public enum GlossaryLint {
     }
 
     private static func isCommonEnglish(_ token: String) -> Bool {
-        // Only edge punctuation is ignored: a token carrying a digit ("water 2",
-        // "water2") is not everyday English even when the rest of the phrase is, so
+        // Only edge punctuation is ignored: a token carrying a digit ("coffee 2",
+        // "coffee2") is not everyday English even when the rest of the phrase is, so
         // it keeps the rule alive.
         let trimmed = token.trimmingCharacters(in: edgePunctuation)
         guard !trimmed.isEmpty, trimmed.allSatisfy(\.isLetter) else { return false }
