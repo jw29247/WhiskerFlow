@@ -27,6 +27,12 @@ public enum LocalDiagnostics {
     public static func setAudioCaptureActive(_ active: Bool, source: String) {
         MainThreadHealthMonitor.shared.setAudioCaptureActive(active, source: source)
     }
+
+    /// Marks a dictation as in flight, from key press to delivery, so stall
+    /// detection runs at its fast cadence then and slowly while idle.
+    public static func setDictationActive(_ active: Bool) {
+        MainThreadHealthMonitor.shared.setDictationActive(active)
+    }
 }
 
 private struct UnifiedLogHandler: LogHandler {

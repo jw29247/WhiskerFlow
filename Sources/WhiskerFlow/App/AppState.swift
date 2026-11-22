@@ -1861,9 +1861,11 @@ final class AppState {
                 options: [.userInitiated, .latencyCritical],
                 reason: "Dictation in progress"
             )
+            LocalDiagnostics.setDictationActive(true)
         } else if !active, let activity = dictationActivity {
             ProcessInfo.processInfo.endActivity(activity)
             dictationActivity = nil
+            LocalDiagnostics.setDictationActive(false)
         }
     }
 

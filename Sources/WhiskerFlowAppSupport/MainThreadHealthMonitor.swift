@@ -7,7 +7,9 @@ final class MainThreadHealthMonitor: @unchecked Sendable {
     private let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.DictationLifecycle")
     private var timer: DispatchSourceTimer?
     private var probe = ResponsivenessProbe()
-    private var ticks = 0
+    private var tickInterval: TimeInterval = 0
+    private var logSchedule = MainThreadHealthLogSchedule(start: 0)
+    private var dictationActive = false
     private let resources = ResourceDiagnosticSampler()
     private let stacks = StallStackCapture()
     private var pressureSource: DispatchSourceMemoryPressure?
@@ -21,6 +23,16 @@ final class MainThreadHealthMonitor: @unchecked Sendable {
     func setAudioCaptureActive(_ active: Bool, source: String) {
         queue.async { [self] in
             if active { audioCaptureSources.insert(source) } else { audioCaptureSources.remove(source) }
+            updateCadence()
+        }
+    }
+
+    /// Called while a dictation is in flight, from key press to delivery, so
+    /// the watchdog ticks at its fast cadence then and slowly while idle.
+    func setDictationActive(_ active: Bool) {
+        queue.async { [self] in
+            dictationActive = active
+            updateCadence()
         }
     }
 
@@ -57,23 +69,38 @@ final class MainThreadHealthMonitor: @unchecked Sendable {
             pressureSource = memory
             memory.resume()
             logResources()
+            logSchedule = MainThreadHealthLogSchedule(start: ProcessInfo.processInfo.systemUptime)
             let source = DispatchSource.makeTimerSource(queue: queue)
-            source.schedule(deadline: .now(), repeating: .milliseconds(250), leeway: .milliseconds(50))
             source.setEventHandler { [weak self] in self?.tick() }
             timer = source
+            updateCadence()
             source.resume()
         }
     }
+
+    /// Reschedules the timer when the cadence changes. The next tick comes one
+    /// interval later, so a key press never gets an extra main-queue probe.
+    private func updateCadence() {
+        guard let timer else { return }
+        let interval = MainThreadHealthCadence.tick(active: dictationActive || !audioCaptureSources.isEmpty)
+        guard interval != tickInterval else { return }
+        tickInterval = interval
+        let milliseconds = Int(interval * 1000)
+        timer.schedule(deadline: .now() + .milliseconds(milliseconds), repeating: .milliseconds(milliseconds),
+                       leeway: .milliseconds(Int(MainThreadHealthCadence.leeway(forTick: interval) * 1000)))
+    }
+
     private func tick() {
         guard !isSleeping else { return }
-        ticks += 1
-        if ticks % 60 == 0 { logResources() }
-        if ticks % 240 == 0 {
+        let now = ProcessInfo.processInfo.systemUptime
+        let due = logSchedule.due(at: now)
+        if due.resources { logResources() }
+        if due.heartbeat {
             var fields = contextFields()
             fields["event"] = "heartbeat"
             logger.info("Main thread health heartbeat", metadata: fields.mapValues { .string($0) })
         }
-        handle(probe.tick(at: ProcessInfo.processInfo.systemUptime), captureStacks: true)
+        handle(probe.tick(at: now), captureStacks: true)
     }
 
     private func handle(_ events: [ResponsivenessProbe.Event], captureStacks: Bool) {
