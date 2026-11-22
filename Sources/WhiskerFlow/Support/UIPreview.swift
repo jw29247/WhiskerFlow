@@ -92,7 +92,8 @@ enum UIPreview {
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
             // A floating meeting panel (call prompt, reminder or coach) is
             // written beside it as `-panel.png`.
-            if let panel = NSApp.windows.first(where: { $0.isVisible && $0.styleMask.contains(.nonactivatingPanel) }),
+            // A HUD message hides itself before this runs: take it anyway.
+            if let panel = NSApp.windows.first(where: { ($0.isVisible || mode.hasPrefix("hud-")) && $0.styleMask.contains(.nonactivatingPanel) }),
                let content = panel.contentView, let panelRep = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
                 content.cacheDisplay(in: content.bounds, to: panelRep)
                 try? panelRep.representation(using: .png, properties: [:])?
@@ -182,11 +183,21 @@ enum UIPreview {
             state.hasScreenRecordingPermission = mode != "setup"
             if mode != "empty" && mode != "setup" && onboardingStep == nil { addSampleInsights(to: state) }
             if mode == "error" { state.status = .failure("The microphone disconnected. Choose an available microphone in Settings.") }
-            // The floating HUD's failure state: `hud-failure` and `hud-failure-long`.
-            if mode.hasPrefix("hud-failure") {
-                state.status = .failure(mode == "hud-failure-long"
-                    ? "Couldn’t reach the app. Your text is on the clipboard. Click into the app you were using and paste."
-                    : "Couldn’t paste. Your text is on the clipboard.")
+            // The floating HUD: `hud-failure`, `hud-failure-long`, `hud-recording`,
+            // `hud-recording-quiet`, `hud-transcribing` and `hud-success`.
+            if mode.hasPrefix("hud-") {
+                if mode.hasPrefix("hud-failure") {
+                    state.status = .failure(mode == "hud-failure-long"
+                        ? "Couldn’t reach the app. Your text is on the clipboard. Click into the app you were using and paste."
+                        : "Couldn’t paste. Your text is on the clipboard.")
+                }
+                if mode.hasPrefix("hud-recording") {
+                    state.isRecording = true; state.status = .recording; state.audioLevel = 0.16
+                    state.liveText = "This is a preview of your words as you speak."
+                    if mode == "hud-recording-quiet" { state.signalQuality = .tooQuiet }
+                }
+                if mode == "hud-transcribing" { state.isTranscribing = true; state.status = .transcribing }
+                if mode == "hud-success" { state.status = .success("Pasted") }
                 // The panel follows the app's appearance, not the main window's;
                 // NSApp exists from the next turn.
                 DispatchQueue.main.async {
