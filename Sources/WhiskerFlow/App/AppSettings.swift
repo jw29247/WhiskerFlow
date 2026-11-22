@@ -92,6 +92,9 @@ final class AppSettings {
     }
     /// Show "Record this meeting?" when a call starts in a call app or browser.
     var askToRecordCalls: Bool { didSet { defaults.set(askToRecordCalls, forKey: Keys.askToRecordCalls) } }
+    /// The user's wording for the recording notice they paste into the meeting
+    /// chat. Stored as typed; empty means the default (`MeetingRecordingNotice`).
+    var meetingRecordingNotice: String { didSet { defaults.set(meetingRecordingNotice, forKey: Keys.meetingRecordingNotice) } }
     /// The private meeting coach. On by default and remembered.
     var coachEnabled: Bool { didSet { defaults.set(coachEnabled, forKey: Keys.coachEnabled) } }
     /// Speaking pace from on-device transcription of your microphone while coaching.
@@ -254,6 +257,7 @@ final class AppSettings {
         meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? false
         meetingModeChoicePending = defaults.bool(forKey: Keys.meetingModeChoicePending)
         askToRecordCalls = defaults.object(forKey: Keys.askToRecordCalls) as? Bool ?? true
+        meetingRecordingNotice = defaults.string(forKey: Keys.meetingRecordingNotice) ?? ""
         coachEnabled = defaults.object(forKey: Keys.coachEnabled) as? Bool ?? true
         coachLiveAnalysis = defaults.object(forKey: Keys.coachLiveAnalysis) as? Bool ?? true
         coachAISuggestions = defaults.object(forKey: Keys.coachAISuggestions) as? Bool ?? true
@@ -448,6 +452,7 @@ final class AppSettings {
         static let meetingModeChoicePending = "meetingModeChoicePending"
         static let meetingTranscriptRetention = "meetingTranscriptRetention"
         static let askToRecordCalls = "askToRecordCalls"
+        static let meetingRecordingNotice = "meetingRecordingNotice"
         static let coachEnabled = "coachEnabled"
         static let coachLiveAnalysis = "coachLiveAnalysis"
         static let coachAISuggestions = "coachAISuggestions"

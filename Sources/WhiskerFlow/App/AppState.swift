@@ -493,6 +493,19 @@ final class AppState {
 
   func declineCallPrompt() { meetingCapture.declineCallPrompt() }
 
+  // MARK: Telling the others they are being recorded
+
+  var recordingReminder: MeetingRecordingReminder { meetingCapture.recordingReminder }
+  var isRecordingReminderVisible: Bool { recordingReminder.isVisible(during: activeMeetingSessionID) }
+  var meetingRecordingNoticeText: String { MeetingRecordingNotice.text(custom: settings.meetingRecordingNotice) }
+
+  /// Puts the notice on the clipboard only when the user clicks Copy.
+  func copyMeetingRecordingNotice() {
+    recordingReminder.copy(meetingRecordingNoticeText, using: copy)
+  }
+
+  func dismissRecordingReminder() { recordingReminder.dismiss() }
+
   func setAskToRecordCalls(_ enabled: Bool) {
     settings.askToRecordCalls = enabled
     meetingCapture.refreshConfiguration()

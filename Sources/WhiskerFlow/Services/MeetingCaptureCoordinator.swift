@@ -36,6 +36,9 @@ final class MeetingCaptureCoordinator {
   let callDetector: CallDetectionService
   /// The "Record this meeting?" question currently shown, if any.
   private(set) var callPrompt: DetectedCallPrompt?
+  /// "Tell the others you're recording", raised for every recording that
+  /// starts: from the call prompt, Record or its shortcut, or the schedule.
+  let recordingReminder = MeetingRecordingReminder()
   /// Calls already asked about; each call is asked about once.
   private var promptedCallIDs: Set<String> = []
   /// Calls answered "Not now", until they end. The schedule poll must not
@@ -708,6 +711,8 @@ final class MeetingCaptureCoordinator {
       self.activeOverlapDetected = intent?.overlapsPrevious ?? false
       self.activeMeetingTitle = captureTitle
       self.activeDetectedCallID = detectedCall?.id
+      // Every start route ends here, once audio is actually being captured.
+      recordingReminder.recordingStarted(sessionID: sessionID)
       assistant.begin(sessionID: sessionID, title: self.activeMeetingTitle ?? "Ad hoc meeting",
                       scheduledEndAt: intent.map { Date(timeIntervalSince1970: Double($0.endMs) / 1_000) })
       let timelineStartMs = capture.captureStartedAtMs ?? Self.nowMs()
