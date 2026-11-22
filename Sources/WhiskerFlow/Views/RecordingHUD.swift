@@ -143,9 +143,12 @@ final class RecordingHUDController {
     private var panel: NSPanel?
     private var hideWorkItem: DispatchWorkItem?
     private var showTask: Task<Void, Never>?
+    /// VoiceOver hears the same outcome the HUD shows, after the state has changed.
+    private let announcements: DictationAnnouncementTracker
 
-    init(appState: AppState) {
+    init(appState: AppState, announcer: DictationAnnouncing? = nil) {
         self.appState = appState
+        announcements = DictationAnnouncementTracker(announcer: announcer ?? VoiceOverAnnouncer())
         observe()
     }
 
@@ -178,6 +181,7 @@ final class RecordingHUDController {
         case .hidden:
             scheduleHide()
         }
+        announcements.observe(appState.hudPresentation)
     }
 
     private func makePanelIfNeeded() -> NSPanel {
