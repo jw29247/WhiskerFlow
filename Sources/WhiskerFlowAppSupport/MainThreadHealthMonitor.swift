@@ -93,7 +93,7 @@ final class MainThreadHealthMonitor: @unchecked Sendable {
     private func tick() {
         guard !isSleeping else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        let due = logSchedule.due(at: now)
+        let due = logSchedule.due(at: now, active: dictationActive || !audioCaptureSources.isEmpty)
         if due.resources { logResources() }
         if due.heartbeat {
             var fields = contextFields()

@@ -19,8 +19,12 @@ enum MainThreadHealthCadence {
 
 /// When the watchdog logs its periodic rows. Measured in time rather than
 /// ticks so a change of tick interval doesn't change them.
+///
+/// Resource snapshots are written every 15 s while a dictation is in flight
+/// or audio is captured, and every 60 s otherwise; a stall row carries its
+/// own snapshot either way.
 struct MainThreadHealthLogSchedule {
-    static let resourceInterval: TimeInterval = 15
+    static func resourceInterval(active: Bool) -> TimeInterval { active ? 15 : 60 }
     static let heartbeatInterval: TimeInterval = 60
 
     private var lastResources: TimeInterval
@@ -32,8 +36,8 @@ struct MainThreadHealthLogSchedule {
         lastHeartbeat = start
     }
 
-    mutating func due(at now: TimeInterval) -> (resources: Bool, heartbeat: Bool) {
-        let resources = now - lastResources >= Self.resourceInterval
+    mutating func due(at now: TimeInterval, active: Bool) -> (resources: Bool, heartbeat: Bool) {
+        let resources = now - lastResources >= Self.resourceInterval(active: active)
         let heartbeat = now - lastHeartbeat >= Self.heartbeatInterval
         if resources { lastResources = now }
         if heartbeat { lastHeartbeat = now }

@@ -81,19 +81,29 @@ final class MainThreadHealthCadenceTests: XCTestCase {
     }
 
     func testPeriodicRowsKeepTheirIntervalsWhateverTheTick() {
-        for tick in [MainThreadHealthCadence.activeTick, MainThreadHealthCadence.idleTick] {
+        // Resource snapshots: every 15 s during a dictation, every 60 s idle.
+        for (active, expectedResources) in [(true, 240), (false, 60)] {
+            let tick = MainThreadHealthCadence.tick(active: active)
             var schedule = MainThreadHealthLogSchedule(start: 100)
             var resources = 0
             var heartbeats = 0
             var now: TimeInterval = 100
             while now < 100 + 3600 {
                 now += tick
-                let due = schedule.due(at: now)
+                let due = schedule.due(at: now, active: active)
                 if due.resources { resources += 1 }
                 if due.heartbeat { heartbeats += 1 }
             }
-            XCTAssertEqual(resources, 240, "tick \(tick)")
-            XCTAssertEqual(heartbeats, 60, "tick \(tick)")
+            XCTAssertEqual(resources, expectedResources, "active \(active)")
+            XCTAssertEqual(heartbeats, 60, "active \(active)")
         }
+    }
+
+    func testADictationStartingAfterAnIdleMinuteGetsASnapshotWithinFifteenSeconds() {
+        var schedule = MainThreadHealthLogSchedule(start: 0)
+        XCTAssertFalse(schedule.due(at: 30, active: false).resources)
+        XCTAssertTrue(schedule.due(at: 30.25, active: true).resources, "Already 30 s since the last snapshot")
+        XCTAssertFalse(schedule.due(at: 45, active: true).resources)
+        XCTAssertTrue(schedule.due(at: 45.25, active: true).resources)
     }
 }
