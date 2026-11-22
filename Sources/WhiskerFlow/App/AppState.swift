@@ -1191,13 +1191,14 @@ final class AppState {
     /// Why signing out has to wait, or nil when it can go ahead.
     var atlasSignOutBlocker: String? {
         if UIPreview.isEnabled {
-            return UIPreview.mode == "sign-out-blocked" ? AtlasSignOut.blocker(recording: false, unsentRecordings: 2) : nil
+            switch UIPreview.mode {
+            case "sign-out-blocked": return AtlasSignOut.blocker(recording: false, unsentRecordings: 2)
+            case "sign-out-checking": return AtlasSignOut.blocker(recording: false, unsentRecordings: 0, recordingCheck: .checking)
+            case "sign-out-check-failed": return AtlasSignOut.blocker(recording: false, unsentRecordings: 0, recordingCheck: .failed)
+            default: return nil
+            }
         }
-        return AtlasSignOut.blocker(
-            recording: meetingCapture.isCapturing || meetingCapture.isCaptureTransitioning,
-            // Also an upload or retry in flight that the library doesn't show yet.
-            unsentRecordings: max(meetingCapture.unsentRecordingCount, meetingCapture.isBusy ? 1 : 0)
-        )
+        return meetingCapture.signOutBlocker
     }
 
     /// Meeting notes and bookmarks saved on this Mac that Atlas doesn't have.

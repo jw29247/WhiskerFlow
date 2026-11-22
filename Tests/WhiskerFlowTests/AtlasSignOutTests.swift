@@ -343,6 +343,8 @@ final class AtlasSignOutTests: XCTestCase {
         XCTAssertTrue(AtlasSignOut.blocker(recording: true, unsentRecordings: 0)!.hasPrefix("A meeting is being recorded."))
         XCTAssertTrue(AtlasSignOut.blocker(recording: false, unsentRecordings: 1)!.hasPrefix("1 meeting recording hasn’t reached Atlas yet."))
         XCTAssertTrue(AtlasSignOut.blocker(recording: false, unsentRecordings: 3)!.hasPrefix("3 meeting recordings haven’t reached Atlas yet."))
+        XCTAssertNil(AtlasSignOut.blocker(recording: false, unsentRecordings: 0, recordingCheck: .notStarted))
+        XCTAssertTrue(AtlasSignOut.blocker(recording: true, unsentRecordings: 0, recordingCheck: .checking)!.hasPrefix("A meeting is being recorded."))
         XCTAssertFalse(AtlasSignOut.confirmation(unsyncedMeetingItems: 0).contains("won’t be sent"))
         XCTAssertTrue(AtlasSignOut.confirmation(unsyncedMeetingItems: 2)
             .contains("2 meeting notes and bookmarks haven’t reached Atlas. They stay on this Mac and won’t be sent after you sign out."))
@@ -424,6 +426,61 @@ final class AtlasSignOutTests: XCTestCase {
 
         XCTAssertTrue(coordinator.scheduleIntents.isEmpty, "Not shown")
         XCTAssertTrue(settings.cachedMeetingSchedule().isEmpty, "Not cached for the next account")
+    }
+
+    private static let recordingKey = SymmetricKey(size: .bits256)
+
+    private func recoveringCoordinator(root: URL) -> MeetingCaptureCoordinator {
+        let settings = AppSettings(defaults: makeDefaults(), meetingTokenStore: MemoryKeychain(token: nil).store(service: "AtlasSignOutTests"))
+        settings.askToRecordCalls = false
+        return MeetingCaptureCoordinator(
+            settings: settings,
+            microphonePermission: MicrophonePermissionController(provider: AVCaptureMicrophoneAuthorizationProvider()),
+            transcription: TranscriptionService(),
+            store: EncryptedMeetingChunkStore(rootURL: root, keyProvider: FixedMeetingChunkKeyProvider(key: Self.recordingKey)),
+            // Signed out: nothing is delivered, so the recording stays pending.
+            clientProvider: { nil },
+            library: .ephemeral(),
+            assistant: MeetingAssistantController(rootURL: temporaryRoot()),
+            diskStateReader: { "ready" }
+        )
+    }
+
+    func testSignOutWaitsUntilStartupHasFoundRecordingsOnThisMac() async throws {
+        let root = temporaryRoot()
+        let seed = EncryptedMeetingChunkStore(rootURL: root, keyProvider: FixedMeetingChunkKeyProvider(key: Self.recordingKey))
+        let sessionID = UUID()
+        try seed.beginSession(sessionID: sessionID, meetingID: nil, expectedChunkCounts: [.mixed: 1], title: "Before the relaunch")
+        _ = try seed.writeChunk(sessionID: sessionID, track: .mixed, sequence: 0, startMs: 0, endMs: 10_000, plaintext: Data("audio".utf8))
+        let coordinator = recoveringCoordinator(root: root)
+
+        coordinator.start()
+        // The library and the scan haven't run yet: nothing is known to be unsent.
+        XCTAssertEqual(coordinator.unsentRecordingCount, 0)
+        XCTAssertEqual(coordinator.signOutBlocker,
+                       "WhiskerFlow is still checking for meeting recordings on this Mac. Try again in a moment.")
+
+        await coordinator.waitForRecovery()
+        XCTAssertEqual(coordinator.recordingCheck, .finished)
+        XCTAssertEqual(coordinator.unsentRecordingCount, 1)
+        XCTAssertTrue(coordinator.signOutBlocker?.hasPrefix("1 meeting recording hasn’t reached Atlas yet.") == true)
+        coordinator.stopMonitoring()
+    }
+
+    func testSignOutStaysBlockedWhenTheStartupScanFails() async throws {
+        // A file where the recordings folder should be: the scan can't list it.
+        let root = temporaryRoot()
+        try Data("not a folder".utf8).write(to: root)
+        let coordinator = recoveringCoordinator(root: root)
+
+        coordinator.start()
+        await coordinator.waitForRecovery()
+
+        XCTAssertEqual(coordinator.recordingCheck, .failed)
+        XCTAssertEqual(coordinator.unsentRecordingCount, 0)
+        XCTAssertEqual(coordinator.signOutBlocker,
+                       "WhiskerFlow couldn’t read the meeting recordings saved on this Mac, so it can’t tell whether any still need to reach Atlas. Quit and reopen WhiskerFlow, then try again.")
+        coordinator.stopMonitoring()
     }
 
     func testMeetingCaptureStopsWhileSignedOutAndResumesAfterSignIn() async throws {

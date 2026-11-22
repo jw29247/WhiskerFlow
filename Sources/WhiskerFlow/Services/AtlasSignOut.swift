@@ -9,9 +9,22 @@ import Foundation
 enum AtlasSignOut {
     /// Why sign-out has to wait, or nil when it can go ahead. A recording, or
     /// one waiting to be sent, could otherwise only reach the next account.
-    static func blocker(recording: Bool, unsentRecordings: Int) -> String? {
+    /// Until startup has checked this Mac for recordings (`recordingCheck`),
+    /// the unsent count may be missing some.
+    static func blocker(
+        recording: Bool, unsentRecordings: Int,
+        recordingCheck: MeetingCaptureCoordinator.RecordingCheck = .finished
+    ) -> String? {
         if recording {
             return "A meeting is being recorded. Stop the recording and let it reach Atlas before you sign out."
+        }
+        switch recordingCheck {
+        case .checking:
+            return "WhiskerFlow is still checking for meeting recordings on this Mac. Try again in a moment."
+        case .failed:
+            return "WhiskerFlow couldn’t read the meeting recordings saved on this Mac, so it can’t tell whether any still need to reach Atlas. Quit and reopen WhiskerFlow, then try again."
+        case .notStarted, .finished:
+            break
         }
         guard unsentRecordings > 0 else { return nil }
         let count = unsentRecordings == 1 ? "1 meeting recording hasn’t" : "\(unsentRecordings) meeting recordings haven’t"

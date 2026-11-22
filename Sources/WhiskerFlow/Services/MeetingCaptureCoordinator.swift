@@ -116,6 +116,13 @@ final class MeetingCaptureCoordinator {
   /// after sign-out never writes the old account's data back.
   private var signOutGeneration = 0
 
+  /// Whether startup has established which recordings on this Mac haven't
+  /// reached Atlas: the library has loaded and the retained recordings have
+  /// been scanned. Until then `unsentRecordingCount` can miss some, so
+  /// sign-out waits.
+  enum RecordingCheck: Equatable { case notStarted, checking, finished, failed }
+  private(set) var recordingCheck: RecordingCheck = .notStarted
+
   private(set) var status: MeetingMenuBarStatus = .uncovered
   private(set) var statusDetail = "Pair a healthy Mac with Atlas to cover meetings."
   private(set) var speakerDetectionDetail = "Speaker names use native Meet activity when available."
@@ -193,6 +200,21 @@ final class MeetingCaptureCoordinator {
     return unsent.count
   }
 
+  /// Why signing out of Atlas has to wait, or nil when it can go ahead.
+  var signOutBlocker: String? {
+    AtlasSignOut.blocker(
+      recording: isCapturing || isCaptureTransitioning,
+      // Also an upload or retry in flight that the library doesn't show yet.
+      unsentRecordings: max(unsentRecordingCount, isBusy ? 1 : 0),
+      // Before `start()` (tests) there is no scan to wait for; the app
+      // always starts the coordinator before its window can sign out.
+      recordingCheck: recordingCheck
+    )
+  }
+
+  /// Waits for the recovery started by `start()` or a sign-in.
+  func waitForRecovery() async { await recoveryTask?.value }
+
   /// True after an explicit sign-out, until the next sign-in. Recording is
   /// then unavailable: a recording made signed out would later be sent to
   /// whichever account signs in next. A token that can't be read for a
@@ -209,6 +231,7 @@ final class MeetingCaptureCoordinator {
   func start() {
     guard !didStart else { return }
     didStart = true
+    recordingCheck = .checking
     library.load()
     updateCallDetection()
     recoveryTask = Task { @MainActor [weak self] in
@@ -1179,6 +1202,9 @@ final class MeetingCaptureCoordinator {
     // transcripts with empty entries.
     await library.waitUntilLoaded()
     library.reconcile(retained: sessions, activeSessionID: activeSessionID, delivering: deliveringSessions)
+    // Every retained recording now has a library entry and held ones are
+    // known, so the unsent count is complete.
+    recordingCheck = .finished
     return sessions
   }
 
@@ -1203,6 +1229,7 @@ final class MeetingCaptureCoordinator {
     } catch is CancellationError {
       return
     } catch {
+      if recordingCheck != .finished { recordingCheck = .failed }
       if activeSessionID == nil {
         status = .attention
         statusDetail = "Pending local recordings need attention."
