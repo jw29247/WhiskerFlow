@@ -73,6 +73,7 @@ final class AppState {
         var writing = WritingStyleResolution(category: .other, tone: .formal, source: .fallback)
         var recognizeCorrections = false
         var cleanupModel: CleanupModel?
+        var cleanupVariety: CleanupEnglishVariety = .british
         var hints: RecognizerHints = .none
         var purpose: AssistantController.CapturePurpose = .dictation
         var quickKind: AssistantRecordKind = .note
@@ -2840,6 +2841,7 @@ final class AppState {
             writing: writing,
             recognizeCorrections: assistant.saved.recognizeCorrections,
             cleanupModel: usesCleanup ? .gemma4E2B : nil,
+            cleanupVariety: settings.cleanupVariety,
             hints: recognizerHints,
             purpose: assistant.capturePurpose,
             quickKind: assistant.quickCaptureKind,
@@ -2857,7 +2859,7 @@ final class AppState {
     private func cleanupText(_ text: String, configuration: TranscriptionJobConfiguration) async -> CleanupResult {
         guard let model = configuration.cleanupModel, configuration.writing.tone != .literal,
               configuration.purpose != .selectionInstruction else { return CleanupResult(text: text, outcome: "skipped") }
-        return await cleanup.clean(text, model: model, vocabulary: configuration.vocabulary)
+        return await cleanup.clean(text, model: model, vocabulary: configuration.vocabulary, variety: configuration.cleanupVariety)
     }
 
     /// Apple's speech model for the chosen language, if it isn't Parakeet's.

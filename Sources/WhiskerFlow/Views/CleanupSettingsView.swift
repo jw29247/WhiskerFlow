@@ -25,7 +25,10 @@ struct CleanupSettingsView: View {
                                                              enabled: appState.settings.cleanupEnabled, downloading: appState.cleanup.downloading) {
                     Text(reason).font(.caption).foregroundStyle(.secondary)
                 }
-                Text("Corrects recognition mistakes, spelling and grammar into British English, removes hesitations and resolves spoken self-corrections while keeping your meaning. Runs entirely on this Mac after transcription. The original stays in History when history is enabled.")
+                Picker("Spelling", selection: $appState.settings.cleanupVariety) {
+                    ForEach(CleanupEnglishVariety.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                }
+                Text("Corrects recognition mistakes, spelling and grammar into \(appState.settings.cleanupVariety.displayName), removes hesitations and resolves spoken self-corrections while keeping your meaning. Runs entirely on this Mac after transcription. The original stays in History when history is enabled.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Cleanup is a preview. Check names, numbers and corrections before sending important text. Literal writing style and voice editing instructions skip Cleanup.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -84,8 +87,9 @@ struct CleanupSettingsView: View {
                     let input = sample
                     let selected = model
                     let vocabulary = appState.effectiveVocabulary
+                    let variety = appState.settings.cleanupVariety
                     Task { @MainActor in
-                        result = await appState.cleanup.clean(input, model: selected, vocabulary: vocabulary)
+                        result = await appState.cleanup.clean(input, model: selected, vocabulary: vocabulary, variety: variety)
                         testing = false
                         appState.automaticCorrections.setBusy(appState.isRecording || appState.isTranscribing)
                     }
