@@ -50,7 +50,7 @@
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/appcast.xml</string>
+	<string>https://github.com/jw29247/WhiskerFlow/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>SbsHwrrXtfgDoJaOa+GfIroSpUjyMn+Z9+Odq1qGj/Y=</string>
 	<key>SUScheduledCheckInterval</key>
