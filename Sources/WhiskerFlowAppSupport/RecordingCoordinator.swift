@@ -69,12 +69,15 @@ public final class RecordingCoordinator {
     public private(set) var phase: RecordingPhase = .idle
     public private(set) var stopReason: CaptureStopReason?
 
+    private var discardedWhilePreparing: UUID?
+
     public init() {}
 
     public func requestStart() -> UUID? {
         guard phase == .idle else { return nil }
         let sessionID = UUID()
         stopReason = nil
+        discardedWhilePreparing = nil
         phase = .preparing(sessionID)
         return sessionID
     }
@@ -107,8 +110,9 @@ public final class RecordingCoordinator {
     /// What `requestDiscard()` stopped, so the caller knows whether a live
     /// capture has to be torn down.
     public enum Discard: Equatable, Sendable {
-        /// The microphone was still opening; the session is already over, and
-        /// the start in flight sees a stale token and backs out.
+        /// The microphone was still opening. The session moves to `finishing`
+        /// so no new dictation can start on the shared capture until the start
+        /// in flight has backed out and called `completeDiscard`.
         case preparing(UUID)
         /// The microphone is live; the caller stops it without transcribing,
         /// then completes the session with `didFinish`.
@@ -123,7 +127,8 @@ public final class RecordingCoordinator {
         switch phase {
         case .preparing(let sessionID):
             stopReason = .cancelled
-            phase = .idle
+            phase = .finishing(sessionID)
+            discardedWhilePreparing = sessionID
             return .preparing(sessionID)
         case .recording(let sessionID):
             stopReason = .cancelled
@@ -132,6 +137,17 @@ public final class RecordingCoordinator {
         case .finishing, .idle:
             return nil
         }
+    }
+
+    /// Called when a start returns, however it ended. Releases a session that
+    /// was discarded while preparing; does nothing otherwise.
+    @discardableResult
+    public func completeDiscard(_ sessionID: UUID) -> Bool {
+        guard discardedWhilePreparing == sessionID else { return false }
+        discardedWhilePreparing = nil
+        guard phase == .finishing(sessionID) else { return false }
+        phase = .idle
+        return true
     }
 
     /// Recover from a stuck phase when no session token is trustworthy any more

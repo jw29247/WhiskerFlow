@@ -148,13 +148,42 @@ final class RecordingCoordinatorTests: XCTestCase {
         XCTAssertTrue(coordinator.didFinish(next))
     }
 
-    func testDiscardWhilePreparingEndsTheSessionSoTheStartInFlightBacksOut() {
+    func testDiscardWhilePreparingHoldsTheSessionUntilTheStartInFlightCleansUp() {
         let coordinator = RecordingCoordinator()
         let session = coordinator.requestStart()!
         XCTAssertEqual(coordinator.requestDiscard(), .preparing(session))
+        XCTAssertEqual(coordinator.phase, .finishing(session))
+        XCTAssertEqual(coordinator.stopReason, .cancelled)
+        XCTAssertNil(coordinator.requestStart(), "A new press must wait until the discarded start has cleaned up")
+        XCTAssertFalse(coordinator.didStart(session), "The microphone that finishes opening must see its session ended")
+        XCTAssertFalse(coordinator.requestFinish(session))
+        XCTAssertTrue(coordinator.completeDiscard(session))
         XCTAssertEqual(coordinator.phase, .idle)
-        XCTAssertFalse(coordinator.didStart(session), "The microphone that finishes opening must see a stale session")
+        XCTAssertFalse(coordinator.completeDiscard(session))
         XCTAssertNotNil(coordinator.requestStart())
+    }
+
+    func testCompleteDiscardDoesNotEndANormalSession() {
+        let coordinator = RecordingCoordinator()
+        let session = coordinator.requestStart()!
+        XCTAssertFalse(coordinator.completeDiscard(session))
+        XCTAssertTrue(coordinator.didStart(session))
+        XCTAssertTrue(coordinator.requestFinish(session))
+        XCTAssertFalse(coordinator.completeDiscard(session), "A normal finish is completed by didFinish only")
+        XCTAssertEqual(coordinator.phase, .finishing(session))
+        XCTAssertTrue(coordinator.didFinish(session))
+    }
+
+    func testDiscardedStartThatFailsStillLeavesTheCoordinatorUsable() {
+        let coordinator = RecordingCoordinator()
+        let session = coordinator.requestStart()!
+        coordinator.requestDiscard()
+        XCTAssertTrue(coordinator.fail(session))
+        XCTAssertFalse(coordinator.completeDiscard(session))
+        XCTAssertEqual(coordinator.phase, .idle)
+        let next = coordinator.requestStart()!
+        XCTAssertFalse(coordinator.completeDiscard(session), "A stale discard must not end the next session")
+        XCTAssertEqual(coordinator.phase, .preparing(next))
     }
 
     func testDiscardDoesNothingWhenIdleOrTranscribing() {

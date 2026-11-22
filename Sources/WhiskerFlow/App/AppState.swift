@@ -1511,7 +1511,8 @@ final class AppState {
         liveText = ""
         if case .recording(let sessionID) = discard {
             // While the microphone was still opening, the start in flight sees
-            // its stale session, closes the capture and resumes media itself.
+            // its session ended, closes the capture, resumes media and then
+            // releases the session.
             let captured = live.finish(reason: .cancelled)
             discardCapturedAudio(captured.audioURL)
             activeRecordingConfiguration = nil
@@ -1657,6 +1658,9 @@ final class AppState {
     }
 
     private func beginRecording(sessionID: UUID) async {
+        // Esc while the microphone opened holds the session until this start
+        // has cleaned up, so its cleanup can never touch a newer dictation.
+        defer { recordingCoordinator.completeDiscard(sessionID) }
         // Before the microphone: the warm-up runs on the Neural Engine while
         // capture starts on the main actor.
         startDictationWarmUp(sessionID: sessionID)
