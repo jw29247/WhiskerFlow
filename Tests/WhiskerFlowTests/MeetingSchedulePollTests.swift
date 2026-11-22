@@ -61,7 +61,7 @@ final class MeetingSchedulePollTests: XCTestCase {
         let name = "MeetingSchedulePollTests.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         addTeardownBlock { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let coordinator = MeetingCaptureCoordinator(

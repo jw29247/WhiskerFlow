@@ -132,9 +132,9 @@ final class OnboardingIntegrationTests: XCTestCase {
         let name = "WhiskerFlow.onboarding-tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let first = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let first = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         XCTAssertFalse(first.hadPreviousLaunch)
-        let second = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let second = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         XCTAssertTrue(second.hadPreviousLaunch)
     }
 }

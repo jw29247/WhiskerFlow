@@ -18,7 +18,7 @@ final class HistoryRetentionAppTests: XCTestCase {
     @MainActor
     private func makeSettings(_ name: String) throws -> (AppSettings, UserDefaults) {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
-        return (AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name)), defaults)
+        return (AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name)), defaults)
     }
 
     @MainActor
@@ -32,7 +32,7 @@ final class HistoryRetentionAppTests: XCTestCase {
 
         settings.historyRetention = .forever
         settings.typingWordsPerMinute = 65
-        let relaunched = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let relaunched = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         XCTAssertEqual(relaunched.historyRetention, .forever)
         XCTAssertEqual(relaunched.typingWordsPerMinute, 65)
     }

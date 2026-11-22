@@ -12,7 +12,7 @@ final class DictationDiscardTests: XCTestCase {
         let name = "WhiskerFlow.discard-tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         let store = TranscriptStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         let state = AppState(settings: settings, store: store)
         state.status = .success("Pasted")

@@ -53,7 +53,7 @@ final class TranscriptEditingTests: XCTestCase {
     @MainActor
     private func makeState(store: TranscriptStore) -> AppState {
         let name = "WhiskerFlow.editor-tests.\(UUID().uuidString)"
-        let settings = AppSettings(defaults: UserDefaults(suiteName: name)!, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: UserDefaults(suiteName: name)!, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         let state = AppState(settings: settings, store: store)
         state.records = store.records
         return state

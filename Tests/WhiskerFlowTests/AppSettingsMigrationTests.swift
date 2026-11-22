@@ -16,18 +16,18 @@ final class AppSettingsMigrationTests: XCTestCase {
 
     func testCleanupVarietyComesFromTheRegionOnceThenStays() {
         withDefaults { defaults, name in
-            let first = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name), region: "US")
+            let first = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name), region: "US")
             XCTAssertEqual(first.cleanupVariety, .american)
             // A later region change doesn't flip an existing choice.
-            let moved = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name), region: "GB")
+            let moved = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name), region: "GB")
             XCTAssertEqual(moved.cleanupVariety, .american)
             moved.cleanupVariety = .british
-            XCTAssertEqual(AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name), region: "US").cleanupVariety,
+            XCTAssertEqual(AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name), region: "US").cleanupVariety,
                            .british)
         }
         for region in ["GB", "IE", "AU", "NZ", "IN", "ZA", nil] {
             withDefaults { defaults, name in
-                XCTAssertEqual(AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name), region: region).cleanupVariety,
+                XCTAssertEqual(AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name), region: region).cleanupVariety,
                                .british, region ?? "no region")
             }
         }
@@ -41,7 +41,7 @@ final class AppSettingsMigrationTests: XCTestCase {
     }
 
     private func settings(_ defaults: UserDefaults, _ name: String) -> AppSettings {
-        AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
     }
 
     func testAutomaticMeetingRecordingIsOffOnAFreshInstallAndNotAsked() {

@@ -56,7 +56,7 @@ final class RetranscribeLifecycleStatusTests: XCTestCase {
             defaults.removePersistentDomain(forName: name)
             try? FileManager.default.removeItem(at: root)
         }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         settings.allowAppleFallback = false
         settings.playSounds = false
         let store = TranscriptStore(fileURL: root.appendingPathComponent("transcripts.json"))
