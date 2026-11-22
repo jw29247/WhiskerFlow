@@ -102,16 +102,20 @@ CONFIGURATION=release SIGN_IDENTITY="$SIGN_IDENTITY" \
 echo "==> Built & signed $APP_BUNDLE"
 
 # The app is what users download, so nothing inside it may carry this Mac's
-# home-directory path. (2.1.0 shipped one in a generated resource accessor.)
-# /usr/bin/grep by path: this must search binary files, whatever `grep` a
-# shell profile has substituted.
+# home-directory path. (Releases up to 2.1.0 shipped the linker's debug map in
+# the executable and an absolute install name in the Now Playing helper;
+# script/bundle_app.sh now removes both.) /usr/bin/grep by path: this must
+# search whole binary files, whatever `grep` a shell profile has substituted.
+# `strings` is no substitute: it skips the symbol table.
 LEAKED_FILES="$(LC_ALL=C /usr/bin/grep -rlF -e "$HOME/" "$APP_BUNDLE" || true)"
 if [[ -n "$LEAKED_FILES" ]]; then
   echo "ERROR: The built app contains a local home-directory path in:" >&2
   echo "$LEAKED_FILES" >&2
   exit 1
 fi
-xcrun dsymutil "$APP_BUNDLE/Contents/MacOS/$PRODUCT" -o "$DSYM_PATH"
+# The bundled executable no longer has a debug map, so the dSYM comes from the
+# unstripped build product. The UUID check below proves they are the same link.
+xcrun dsymutil "$ROOT_DIR/.build/release/$PRODUCT" -o "$DSYM_PATH"
 APP_UUIDS="$(xcrun dwarfdump --uuid "$APP_BUNDLE/Contents/MacOS/$PRODUCT" | awk '{print $2}' | sort)"
 DSYM_UUIDS="$(xcrun dwarfdump --uuid "$DSYM_PATH" | awk '{print $2}' | sort)"
 if [[ -z "$APP_UUIDS" || "$APP_UUIDS" != "$DSYM_UUIDS" ]]; then
