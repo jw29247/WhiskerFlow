@@ -314,7 +314,7 @@ final class AppState {
         if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "coach" {
             meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant, appState: self)
         }
-        if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "call-prompt" {
+        if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "call-prompt" || UIPreview.mode.hasPrefix("recording-notice") {
             callPromptHUD = CallPromptHUDController(appState: self)
         }
         applyCoachSettings()
