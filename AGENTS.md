@@ -131,7 +131,10 @@ For a real release:
    `WhiskerFlow-Notary` notarytool profile, the Sparkle private key available
    to `sign_update`, and an authenticated `gh`. It also writes a matching
    dSYM to `dist/` for local symbolication. The dSYM is never uploaded or
-   attached to a release; keep it on the release Mac.
+   attached to a release; keep it on the release Mac. Copy it out of the
+   checkout straight away (for example to `~/WhiskerFlow-releases/<version>/`):
+   `dist/` is ignored by git and is deleted with the worktree, which is how
+   the 2.1.1 dSYM was lost.
 3. Create the GitHub release as a **draft** at that commit, with all three
    assets. A draft is invisible to every feed:
 
