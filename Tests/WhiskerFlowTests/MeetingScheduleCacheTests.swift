@@ -8,7 +8,7 @@ final class MeetingScheduleCacheTests: XCTestCase {
         let name = "ScheduleCache.\(UUID())"
         let defaults = CountingScheduleDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         let intent = AtlasCaptureScheduleIntent(eventID: "test", title: "Test", startMs: 1, endMs: 2,
             meetingURL: nil, location: nil, existingMeetingID: nil, overlapsPrevious: false)
         defaults.dataWrites = 0

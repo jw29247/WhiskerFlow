@@ -24,6 +24,37 @@ glossary terms, in code, tests, fixtures, preview data, docs or commit and PR
 text. Tests, fixtures and sample data use invented names. The shared glossary
 lives in Atlas, not here.
 
+## Running tests on a developer's Mac
+
+`swift test` with no filter is safe on a Mac with WhiskerFlow installed and in
+use. Tests keep their data in temporary folders and their own `UserDefaults`
+suites, use in-memory Keychain items (`MeetingCaptureTokenStore.inMemory`) and
+fixed encryption keys, stub every Atlas request, and never start audio
+capture, register a login item or write the system clipboard. They do read
+the microphone's permission status, which never prompts.
+
+One thing tests cannot prevent: loading the app's test bundle makes XCTest
+enumerate every Objective-C class, and macOS's `ContactsUICore` (loaded by
+Translation's SwiftUI support) then opens the address book, which may ask for
+Contacts access. On the owner's Mac, run tests through
+`script/swift_test_isolated.sh [--filter …]`. It runs `swift test` with
+WhiskerFlow's Application Support, Logs and preferences, the Keychain,
+Contacts, privacy prompts and the network blocked. It is not used in CI.
+
+Tests that deliberately read real data or run real models are skipped unless
+their opt-in variable is set; run them only on purpose, one at a time:
+
+- Real meeting recordings and the Keychain key:
+  `WHISKERFLOW_ACTIVITY_PROBE_SESSION`, `WHISKERFLOW_LOCAL_REPLAY_SESSION`,
+  `WHISKERFLOW_LIBRARY_PROBE=1`.
+- Other local probes and benchmarks: `WHISKERFLOW_CALL_PROBE=1`,
+  `WHISKERFLOW_TRANSLATION_PROBE=1`, `WHISKERFLOW_COACH_MODEL_EVAL=1`,
+  `WHISKERFLOW_BIAS_EVAL_OUTPUT` (and `WHISKERFLOW_BIAS_EVAL_APPLE=1`),
+  `WHISKERFLOW_BENCHMARK_MANIFEST`/`WHISKERFLOW_BENCHMARK_OUTPUT`,
+  `WHISKERFLOW_BENCHMARK_IDLE_AUDIO`, `WHISKERFLOW_RECOVERY_AUDIO`,
+  `WHISKERFLOW_ASSISTANT_ACCEPTANCE_FILE`, `WF_VISUAL_FIXTURE`,
+  `WF_VISUAL_SECOND_FIXTURE`.
+
 ## Delivery policy
 
 This is the canonical workflow policy for this repository. Read it for routine,

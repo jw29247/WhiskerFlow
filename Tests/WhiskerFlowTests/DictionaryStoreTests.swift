@@ -22,7 +22,7 @@ final class DictionaryStoreTests: XCTestCase {
         let legacy = Vocabulary(rules: [VocabularyRule(find: "clawed", replaceWith: "Claude"),
                                         VocabularyRule(find: "iphone", replaceWith: "iPhone")])
         defaults.set(try JSONEncoder().encode(legacy), forKey: "vocabulary")
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
 
         let url = root.appendingPathComponent("dictionary.json")
         let store = DictionaryStore(fileURL: url, legacyVocabulary: settings.vocabulary)
@@ -179,7 +179,7 @@ final class DictionaryStoreTests: XCTestCase {
                            dictionary: DictionaryStore? = nil,
                            assess: @escaping (CorrectionEdit) async throws -> [VocabularyCorrection] = { $0.candidates }) -> AppState {
         let name = "WhiskerFlow.dictionary-tests.\(UUID().uuidString)"
-        let settings = AppSettings(defaults: UserDefaults(suiteName: name)!, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: UserDefaults(suiteName: name)!, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         settings.cleanupEnabled = true
         return AppState(settings: settings, store: store,
                         dictionaryStore: dictionary ?? DictionaryStore(), correctionAssessor: assess)

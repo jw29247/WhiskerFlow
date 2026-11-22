@@ -11,7 +11,7 @@ final class MenuBarSceneObservationTests: XCTestCase {
         let name = "MenuBarObservation.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         let state = AppState(settings: settings, store: TranscriptStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(name)))
         let scene = WhiskerFlowMenuBarScene(appState: state, updaterService: UpdaterService(startingUpdater: false))
         withObservationTracking {

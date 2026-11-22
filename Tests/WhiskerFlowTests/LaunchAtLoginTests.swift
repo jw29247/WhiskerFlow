@@ -118,7 +118,7 @@ final class LaunchAtLoginTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name) }
         defaults.set(true, forKey: "launchAtLogin")
         let service = FakeLoginItemService(status: .notRegistered)
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name),
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name),
                                    loginItemService: service)
         settings.launchAtLogin.refresh()
         XCTAssertFalse(settings.launchAtLogin.isOn)

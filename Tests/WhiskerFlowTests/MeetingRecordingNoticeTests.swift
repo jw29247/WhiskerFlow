@@ -25,7 +25,7 @@ final class MeetingRecordingNoticeTests: XCTestCase {
         let name = "MeetingRecordingNoticeTests.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         addTeardownBlock { defaults.removePersistentDomain(forName: name) }
-        return (AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name)), defaults, name)
+        return (AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name)), defaults, name)
     }
 
     // MARK: Notice text
@@ -53,7 +53,7 @@ final class MeetingRecordingNoticeTests: XCTestCase {
         XCTAssertEqual(settings.meetingRecordingNotice, "", "a fresh install uses the default wording")
         settings.meetingRecordingNotice = "Recording for the notes."
         XCTAssertEqual(defaults.string(forKey: "meetingRecordingNotice"), "Recording for the notes.")
-        let relaunched = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let relaunched = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         XCTAssertEqual(relaunched.meetingRecordingNotice, "Recording for the notes.")
         relaunched.meetingRecordingNotice = ""
         XCTAssertEqual(MeetingRecordingNotice.text(custom: relaunched.meetingRecordingNotice), MeetingRecordingNotice.defaultText)

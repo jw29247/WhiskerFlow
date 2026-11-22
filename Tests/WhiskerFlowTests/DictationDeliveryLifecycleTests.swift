@@ -58,7 +58,7 @@ final class DictationDeliveryLifecycleTests: XCTestCase {
     private func makeState(_ paste: any TextDeliveryService) -> (AppState, () -> Void) {
         let name = "WhiskerFlow.delivery-tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         let state = AppState(settings: settings, store: TranscriptStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)), pasteService: paste)
         return (state, { defaults.removePersistentDomain(forName: name) })
     }
@@ -90,7 +90,7 @@ final class DictationDeliveryLifecycleTests: XCTestCase {
         let name = "WhiskerFlow.delivery-tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         let paste = SuspendedPasteService()
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let state = AppState(settings: settings, store: TranscriptStore(fileURL: root), pasteService: paste)
@@ -111,7 +111,7 @@ final class DictationDeliveryLifecycleTests: XCTestCase {
         let name = "WhiskerFlow.delivery-tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         let paste = PostedPasteService()
         let state = AppState(settings: settings, store: TranscriptStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)), pasteService: paste)
         let posted = expectation(description: "Keystroke posted, verification pending")
@@ -130,7 +130,7 @@ final class DictationDeliveryLifecycleTests: XCTestCase {
         let name = "WhiskerFlow.delivery-tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         let paste = SuspendedPasteService()
         let state = AppState(settings: settings, store: TranscriptStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)), pasteService: paste)
         let entered = expectation(description: "Old delivery waiting")

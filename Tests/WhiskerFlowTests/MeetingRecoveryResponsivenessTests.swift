@@ -16,12 +16,14 @@ final class MeetingRecoveryResponsivenessTests: XCTestCase {
             try? FileManager.default.removeItem(at: root)
         }
         let coordinator = MeetingCaptureCoordinator(
-            settings: AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name)),
+            settings: AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name)),
             microphonePermission: MicrophonePermissionController(provider: AVCaptureMicrophoneAuthorizationProvider()),
             transcription: TranscriptionService(),
             store: EncryptedMeetingChunkStore(rootURL: root,
                 keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256)),
-                fileManager: BackgroundCheckingFileManager()))
+                fileManager: BackgroundCheckingFileManager()),
+            // Never the real Atlas token or Application Support folder.
+            tokenReader: { nil }, diskStateReader: { "ready" })
         let sessions = try await coordinator.scanRecoverySessions()
         XCTAssertTrue(sessions.isEmpty)
     }

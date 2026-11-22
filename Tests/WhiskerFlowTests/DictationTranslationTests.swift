@@ -27,7 +27,7 @@ final class DictationTranslationTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set("appleDictation", forKey: "engine")
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: suite))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: suite))
         XCTAssertTrue(settings.translateToEnglish)
         XCTAssertNotEqual(settings.engine, .appleDictation)
         settings.language = "hi"

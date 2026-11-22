@@ -33,7 +33,7 @@ final class ToggleAutoStopDeliveryTests: XCTestCase {
                              recognizer: @escaping @Sendable () throws -> String) throws -> Harness {
         let name = "WhiskerFlow.toggle-auto-stop-tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         settings.recordingMode = .toggle
         settings.allowAppleFallback = false
         settings.cleanupEnabled = false

@@ -10,7 +10,7 @@ final class DictationAudioPreferencesTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name) }
         defaults.set(true, forKey: "ignoreSpeakerAudio")
         defaults.set(["mic": 1.0], forKey: "voiceProcessingHungInputs")
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         XCTAssertTrue(settings.liveTranscription, "The HUD shows live text by default")
         XCTAssertNil(defaults.object(forKey: "ignoreSpeakerAudio"))
         XCTAssertNil(defaults.object(forKey: "voiceProcessingHungInputs"))

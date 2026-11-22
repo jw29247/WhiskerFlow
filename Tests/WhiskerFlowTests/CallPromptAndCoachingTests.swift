@@ -14,12 +14,13 @@ final class CallPromptAndCoachingTests: XCTestCase {
     private func coordinator(
         ask: Bool = true, detector: CallDetectionService? = nil,
         joinedMeetingProvider: (@Sendable (String?) async -> Bool)? = nil,
-        diskStateReader: @escaping @Sendable () -> String = { MeetingCaptureCoordinator.readLocalDiskState() }
+        // Never the real Application Support folder.
+        diskStateReader: @escaping @Sendable () -> String = { "ready" }
     ) -> (MeetingCaptureCoordinator, AppSettings) {
         let name = "CallPromptTests.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         addTeardownBlock { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         settings.askToRecordCalls = ask
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -337,13 +338,13 @@ final class CoachSettingsDefaultsTests: XCTestCase {
         let name = "CoachSettingsDefaults.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         XCTAssertTrue(settings.coachEnabled, "The coach is on by default")
         XCTAssertTrue(settings.coachAISuggestions)
         XCTAssertTrue(settings.coachLiveAnalysis)
         XCTAssertTrue(settings.askToRecordCalls)
         settings.coachAISuggestions = false
-        XCTAssertFalse(AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name)).coachAISuggestions,
+        XCTAssertFalse(AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name)).coachAISuggestions,
                        "Turning tips off is remembered")
     }
 }
