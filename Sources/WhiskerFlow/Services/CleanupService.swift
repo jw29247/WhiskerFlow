@@ -100,7 +100,8 @@ final class CleanupService {
         }
     }
 
-    func clean(_ raw: String, model: CleanupModel, vocabulary: Vocabulary = Vocabulary()) async -> CleanupResult {
+    func clean(_ raw: String, model: CleanupModel, vocabulary: Vocabulary = Vocabulary(),
+               variety: CleanupEnglishVariety = .british) async -> CleanupResult {
         let original = configuredModel == model ? DictatedNumberFormatter.format(raw) : raw
         guard configuredModel == model, !running, !downloading, canRun(model), installed(model),
               !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -118,7 +119,7 @@ final class CleanupService {
         status = "Cleaning up"
         let identifier = configurationID
         let started = ProcessInfo.processInfo.systemUptime
-        let result = await runCleanup(original, raw: raw, model: model, vocabulary: vocabulary,
+        let result = await runCleanup(original, raw: raw, model: model, vocabulary: vocabulary, variety: variety,
                                       identifier: identifier, started: started)
         running = false
         lastRun = result.summary
@@ -132,7 +133,7 @@ final class CleanupService {
     }
 
     private func runCleanup(_ original: String, raw: String, model: CleanupModel, vocabulary: Vocabulary,
-                            identifier: UUID, started: TimeInterval) async -> CleanupResult {
+                            variety: CleanupEnglishVariety, identifier: UUID, started: TimeInterval) async -> CleanupResult {
         var outcome = "failed"
         defer {
             logger.info("Cleanup finished", metadata: ["event": "cleanup_finished", "cleanup_outcome": "\(outcome)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - started) * 1000)"])
@@ -141,7 +142,7 @@ final class CleanupService {
             let worker = self.worker
             let seconds: TimeInterval = original.count > 800 ? 8 : 3
             let attempt = try await withAbandoningDeadline(seconds: seconds) {
-                try await worker.cleanTranscript(original, model: model, seconds: seconds, vocabulary: vocabulary)
+                try await worker.cleanTranscript(original, model: model, seconds: seconds, vocabulary: vocabulary, variety: variety)
             }
             guard configurationID == identifier, !Task.isCancelled else {
                 outcome = "cancelled"
