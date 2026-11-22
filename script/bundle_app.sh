@@ -48,6 +48,13 @@ fi
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$BINARY" "$APP_BINARY"
+if [[ "$CONFIGURATION" == "release" ]]; then
+  # The linker leaves a debug map in the symbol table: the absolute path of
+  # every object file and source directory on the build Mac. Drop it from the
+  # copy that ships. The unstripped product stays at $BINARY, where
+  # script/notarize.sh reads it to make the dSYM (stripping keeps the UUID).
+  strip -S "$APP_BINARY"
+fi
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 BUILD_REVISION="$(git rev-parse --short=12 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
 /usr/libexec/PlistBuddy -c "Add :WhiskerFlowBuildRevision string $BUILD_REVISION" "$APP_BUNDLE/Contents/Info.plist"
@@ -108,9 +115,12 @@ fi
 
 # The Now Playing helper: MediaRemote answers only Apple-signed processes, so
 # WhiskerFlow loads this into /usr/bin/perl (see NowPlayingBridge.swift).
+# It is loaded by file path, so the install name is only a label: set one, or
+# the linker records the absolute output path on the build Mac.
 mkdir -p "$APP_BUNDLE/Contents/Frameworks"
 clang -fblocks -dynamiclib -O2 -arch arm64 -arch x86_64 -mmacosx-version-min=14.0 \
   -framework CoreFoundation \
+  -install_name "@rpath/libWhiskerFlowNowPlaying.dylib" \
   -o "$APP_BUNDLE/Contents/Frameworks/libWhiskerFlowNowPlaying.dylib" \
   "$ROOT_DIR/Support/NowPlaying/WhiskerFlowNowPlaying.c"
 
