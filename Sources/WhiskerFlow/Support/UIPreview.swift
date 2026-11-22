@@ -194,6 +194,23 @@ enum UIPreview {
                     previewHUD = RecordingHUDController(appState: state)
                 }
             }
+            // The recording HUD with a signal warning (`hud-quiet`,
+            // `hud-clipping`) and the brief success notice (`hud-success`).
+            if ["hud-quiet", "hud-clipping", "hud-success"].contains(mode) {
+                if mode != "hud-success" {
+                    state.isRecording = true; state.status = .recording; state.audioLevel = 0.16
+                    state.signalQuality = mode == "hud-quiet" ? .tooQuiet : .clipping
+                }
+                DispatchQueue.main.async {
+                    NSApp.appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua)
+                    previewHUD = RecordingHUDController(appState: state)
+                }
+                // The notice hides after about a second: show it just before
+                // the snapshot is taken.
+                if mode == "hud-success" {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { state.status = .success("Pasted") }
+                }
+            }
             if mode == "recording" { state.isRecording = true; state.status = .recording; state.audioLevel = 0.16; state.liveText = "This is a preview of your words as you speak." }
             if mode == "secure-input" { state.isShortcutPausedBySecureInput = true }
             if mode == "transcribing" { state.isTranscribing = true; state.status = .transcribing }
