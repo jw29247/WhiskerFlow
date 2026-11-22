@@ -1258,15 +1258,17 @@ final class AppState {
     /// Re-transcribes a saved recording with `engine` and replaces the transcript
     /// only if that succeeds; a failure leaves the existing text untouched. Never
     /// pastes, and is not a new dictation, so Insights don't count it.
-    func retranscribe(_ record: TranscriptRecord, with engine: TranscriptionEngineKind) {
+    @discardableResult
+    func retranscribe(_ record: TranscriptRecord, with engine: TranscriptionEngineKind) -> Task<Void, Never>? {
         guard !UIPreview.isEnabled, record.status == .transcribed, hasRecording(record), !isRecording,
-              !activeTranscriptionIDs.contains(record.id) else { return }
+              !activeTranscriptionIDs.contains(record.id) else { return nil }
         let configuration = makeTranscriptionConfiguration()
         let audioURL = URL(fileURLWithPath: record.audioFilePath)
         activeTranscriptionIDs.insert(record.id)
         isTranscribing = true
-        status = .transcribing
-        Task { @MainActor [weak self] in
+        // Not a dictation: a live one's status always wins.
+        if canUpdateLifecycleUI(for: nil) { status = .transcribing }
+        return Task { @MainActor [weak self] in
             guard let self else { return }
             defer {
                 self.activeTranscriptionIDs.remove(record.id)
@@ -1292,12 +1294,16 @@ final class AppState {
                                                model: outcome.engine.modelIdentifier, engine: outcome.engine.rawValue,
                                                language: outcome.result.language, rawRecognition: outcome.result.text)
                 self.records = self.store.records
-                self.status = .success("Transcribed again with \(engine.displayName)")
+                if self.canUpdateLifecycleUI(for: nil) {
+                    self.status = .success("Transcribed again with \(engine.displayName)")
+                }
             } catch {
                 self.logger.warning("Re-transcription failed", metadata: [
                     "error.code": "\((error as NSError).code)", "transcription.engine": "\(engine.rawValue)"
                 ])
-                self.status = .failure("\(engine.displayName) couldn’t transcribe this recording. Your transcript is unchanged.")
+                if self.canUpdateLifecycleUI(for: nil) {
+                    self.status = .failure("\(engine.displayName) couldn’t transcribe this recording. Your transcript is unchanged.")
+                }
             }
         }
     }
@@ -2129,7 +2135,7 @@ final class AppState {
         } catch {
             // Best-effort, like every history write on this path: the decode only
             // needs the audio file.
-            noteHistoryFailure(error)
+            noteHistoryFailure(error, updatesUI: canUpdateLifecycleUI(for: sessionID))
         }
         records = store.records
         if canUpdateLifecycleUI(for: sessionID) {
@@ -2220,7 +2226,7 @@ final class AppState {
             } catch {
                 // A recognized transcript is still delivered; only History missed it.
                 historySaved = false
-                noteHistoryFailure(error)
+                noteHistoryFailure(error, updatesUI: canUpdateLifecycleUI(for: sessionID))
             }
             lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "history_save", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - history_saveStarted) * 1000)"])
             let ui_updateStarted = ProcessInfo.processInfo.systemUptime
@@ -2276,7 +2282,7 @@ final class AppState {
             do {
                 try store.delete(id: record.id)
             } catch {
-                noteHistoryFailure(error)
+                noteHistoryFailure(error, updatesUI: canUpdateLifecycleUI(for: sessionID))
             }
             // The record may never have reached History; the audio still goes.
             discardCapturedAudio(URL(fileURLWithPath: record.audioFilePath))
@@ -2291,7 +2297,8 @@ final class AppState {
             do {
                 try store.markFailed(id: record.id, message: error.localizedDescription)
             } catch {
-                handleStorageError(error, message: "Could not update failed transcript")
+                handleStorageError(error, message: "Could not update failed transcript",
+                                   updatesUI: canUpdateLifecycleUI(for: sessionID))
             }
             records = store.records
             let mayUpdateUI = canUpdateLifecycleUI(for: sessionID)
@@ -2567,6 +2574,21 @@ final class AppState {
         return latestRecordingSessionID == sessionID
     }
 
+    #if DEBUG
+    /// Tests only: stands in for a live dictation without a microphone. It is
+    /// recording, or (`finishing`) released and still transcribing or pasting.
+    func holdLiveDictationForTesting(finishing: Bool) {
+        if finishing {
+            let sessionID = UUID()
+            latestRecordingSessionID = sessionID
+            finishWorkTokens[sessionID] = UUID()
+        } else if let sessionID = recordingCoordinator.requestStart() {
+            latestRecordingSessionID = sessionID
+            _ = recordingCoordinator.didStart(sessionID)
+        }
+    }
+    #endif
+
     /// Budget for one whole recognition call: the sum of every deadline the path
     /// can legitimately spend — a cold model load, the engine's own decode budget,
     /// and the Apple Speech fallback — so the backstop only ever catches a wait no
@@ -2634,7 +2656,8 @@ final class AppState {
 
     /// Reports a history write that failed on the dictation path without failing
     /// the dictation itself: the transcript is still delivered.
-    private func noteHistoryFailure(_ error: Error) {
+    /// `updatesUI: false` logs without touching a live dictation's error.
+    private func noteHistoryFailure(_ error: Error, updatesUI: Bool = true) {
         logger.error(
             "History write failed",
             metadata: ["error.code": "\((error as NSError).code)"]
@@ -2644,10 +2667,10 @@ final class AppState {
             category: "storage",
             code: String((error as NSError).code)
         )
-        lastError = error.localizedDescription
+        if updatesUI { lastError = error.localizedDescription }
     }
 
-    private func handleStorageError(_ error: Error, message: String) {
+    private func handleStorageError(_ error: Error, message: String, updatesUI: Bool = true) {
         logger.error(
             "Storage failure",
             metadata: ["error.code": "\((error as NSError).code)"]
@@ -2657,6 +2680,7 @@ final class AppState {
             category: "storage",
             code: String((error as NSError).code)
         )
+        guard updatesUI else { return }
         lastError = error.localizedDescription
         status = .failure(message)
     }
