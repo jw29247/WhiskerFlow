@@ -25,7 +25,7 @@ Each row has an `event`:
 | `main_thread_recovered` | The same `stall_id` and the full observed delay. A stall without recovery may still be ongoing or the process may have exited. |
 | `monitoring_gap` | The watchdog itself was unscheduled for at least five seconds. This is an observation gap, not proof of a UI freeze. |
 | `interaction_state` | Foreground state, visible app window count, Accessibility trust, Secure Keyboard Entry state, and the macOS Globe-key action. No window titles or unrelated keystrokes are recorded. |
-| `hotkey_transition` | A matched configured shortcut, its local or global source, its pressed state, and dispatch delay. No key values or characters are recorded. |
+| `hotkey_transition` | A matched configured shortcut, its source (`local` or `global` when observed, `registered` when it is a registered system hot key), its pressed state, and dispatch delay. No key values or characters are recorded. |
 | `globe_key_override_applied`, `globe_key_override_restored` | WhiskerFlow reserved Fn for dictation or restored the previous macOS Globe-key action. |
 | `stage_started`, `stage_finished` | Recognition, text processing, persistence, and UI work correlated by `session`. |
 | `finish_returned`, `paste_returned` | End-to-end finish and delivery latency. |
