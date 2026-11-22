@@ -178,6 +178,8 @@ struct PasteDeliveryReceipt {
         case noTextField = "no_text_field"
         /// A text field was focused but the text never appeared in it.
         case insertionNotSeen = "insertion_not_seen"
+        /// WhiskerFlow itself was in front, so the text was copied instead.
+        case ownApp = "own_app"
     }
 }
 

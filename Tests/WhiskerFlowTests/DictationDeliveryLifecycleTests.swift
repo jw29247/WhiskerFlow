@@ -40,7 +40,51 @@ private final class PostedPasteService: TextDeliveryService {
     }
 }
 
+/// Returns a fixed receipt, as PasteService would for that outcome.
+@MainActor
+private final class FixedReceiptPasteService: TextDeliveryService {
+    var hasAccessibilityPermission = true
+    let receipt: PasteDeliveryReceipt
+    init(_ receipt: PasteDeliveryReceipt) { self.receipt = receipt }
+    func requestAccessibilityPermission() {}
+    func copy(_ text: String) {}
+    func paste(_ text: String, into application: NSRunningApplication?, replacing selection: TextFieldSnapshot?) async -> PasteDeliveryReceipt {
+        receipt
+    }
+}
+
 final class DictationDeliveryLifecycleTests: XCTestCase {
+    @MainActor
+    private func makeState(_ paste: any TextDeliveryService) -> (AppState, () -> Void) {
+        let name = "WhiskerFlow.delivery-tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let state = AppState(settings: settings, store: TranscriptStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)), pasteService: paste)
+        return (state, { defaults.removePersistentDomain(forName: name) })
+    }
+
+    @MainActor
+    func testOwnAppDeliveryIsASuccessWithTheCopyMessage() async {
+        let receipt = PasteDeliveryReceipt(state: .copied, text: "Synthetic sentence", message: PasteService.ownAppMessage, detail: .ownApp)
+        let (state, cleanUp) = makeState(FixedReceiptPasteService(receipt))
+        defer { cleanUp() }
+        await state.deliver("Synthetic sentence", pasteTarget: .current, delivery: .pasteAtCursor, mayUpdateStatus: true)
+        XCTAssertEqual(state.status, .success("Copied. Click into any app to paste."))
+        XCTAssertEqual(state.hudPresentation, .notification("Copied. Click into any app to paste."))
+    }
+
+    @MainActor
+    func testFailedPasteShowsTheFailureHUD() async {
+        let message = "Couldn’t paste. Your text is on the clipboard."
+        let receipt = PasteDeliveryReceipt(state: .failed, text: "Synthetic sentence", message: message, detail: .keyFailed)
+        let (state, cleanUp) = makeState(FixedReceiptPasteService(receipt))
+        defer { cleanUp() }
+        await state.deliver("Synthetic sentence", pasteTarget: nil, delivery: .pasteAtCursor, mayUpdateStatus: true)
+        XCTAssertEqual(state.status, .failure(message))
+        XCTAssertEqual(state.hudPresentation, .failure(message))
+        XCTAssertEqual(state.lastPasteReceipt?.text, "Synthetic sentence")
+    }
+
     @MainActor
     func testPasteVerificationDoesNotKeepFinishedRecognitionBusy() async {
         let name = "WhiskerFlow.delivery-tests.\(UUID().uuidString)"
