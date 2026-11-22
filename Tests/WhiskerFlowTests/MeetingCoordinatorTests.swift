@@ -11,11 +11,16 @@ final class MeetingCoordinatorTests: XCTestCase {
         let name = "MeetingSystemProbeTests.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        defer { try? FileManager.default.removeItem(at: root) }
         let coordinator = MeetingCaptureCoordinator(
             settings: settings,
             microphonePermission: MicrophonePermissionController(provider: AVCaptureMicrophoneAuthorizationProvider()),
             transcription: TranscriptionService(),
+            // A temporary store keeps the library and assistant temporary too.
+            store: EncryptedMeetingChunkStore(rootURL: root, keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))),
+            callDetector: CallDetectionService(readSignals: { CallDetectionSignals(inputs: [], windows: []) }),
             tokenReader: {
                 XCTAssertFalse(Thread.isMainThread, "Keychain access must not hold the dictation completion executor")
                 return "fixture"
@@ -599,14 +604,17 @@ final class MeetingCoordinatorTests: XCTestCase {
         let name = "MeetingCoordinatorTests.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         settings.meetingModeEnabled = false
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MeetingScheduleStub.self]
         let client = URLSessionMeetingAtlasClient(baseURL: URL(string: "https://atlas.test")!, token: "fixture", session: URLSession(configuration: config))
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         defer { try? FileManager.default.removeItem(at: root) }
-        let coordinator = MeetingCaptureCoordinator(settings: settings, microphonePermission: MicrophonePermissionController(provider: AVCaptureMicrophoneAuthorizationProvider()), transcription: TranscriptionService(), store: EncryptedMeetingChunkStore(rootURL: root, keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))), clientProvider: { client })
+        let coordinator = MeetingCaptureCoordinator(settings: settings, microphonePermission: MicrophonePermissionController(provider: AVCaptureMicrophoneAuthorizationProvider()), transcription: TranscriptionService(), store: EncryptedMeetingChunkStore(rootURL: root, keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))), clientProvider: { client }, joinedMeetingProvider: { _ in true }, diskStateReader: {
+            XCTFail("Manual mode must never reach recording setup")
+            return "unknown"
+        })
         await coordinator.pollSchedule()
         XCTAssertEqual(coordinator.scheduleIntents.count, 1, "Manual recording must not hide the Atlas calendar")
         XCTAssertFalse(coordinator.isCapturing)
@@ -617,7 +625,7 @@ final class MeetingCoordinatorTests: XCTestCase {
         let name = "MeetingCoordinatorTests.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         settings.meetingModeEnabled = true
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MeetingScheduleStub.self]
@@ -640,7 +648,7 @@ final class MeetingCoordinatorTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name) }
         let settings = AppSettings(
             defaults: defaults,
-            meetingTokenStore: MeetingCaptureTokenStore(service: name)
+            meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name)
         )
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -653,7 +661,10 @@ final class MeetingCoordinatorTests: XCTestCase {
             store: EncryptedMeetingChunkStore(
                 rootURL: root,
                 keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))
-            )
+            ),
+            // Never the real Atlas token or Application Support folder.
+            tokenReader: { nil },
+            diskStateReader: { "ready" }
         )
         coordinator.scheduleUploadRetry()
         XCTAssertTrue(coordinator.hasScheduledUploadRetry)
@@ -736,7 +747,7 @@ final class MeetingCoordinatorTests: XCTestCase {
         let defaults = UserDefaults(suiteName: name)!
         let settings = AppSettings(
             defaults: defaults,
-            meetingTokenStore: MeetingCaptureTokenStore(service: name)
+            meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name)
         )
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(name)
         return MeetingCaptureCoordinator(
@@ -748,7 +759,10 @@ final class MeetingCoordinatorTests: XCTestCase {
             store: EncryptedMeetingChunkStore(
                 rootURL: root,
                 keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256))
-            )
+            ),
+            // Never the real Atlas token or Application Support folder.
+            tokenReader: { nil },
+            diskStateReader: { "ready" }
         )
     }
 }

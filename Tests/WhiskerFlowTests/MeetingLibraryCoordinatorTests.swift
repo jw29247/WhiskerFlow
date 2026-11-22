@@ -41,7 +41,7 @@ final class MeetingLibraryCoordinatorTests: XCTestCase {
         let name = "MeetingLibraryCoordinatorTests.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!
         addTeardownBlock { defaults.removePersistentDomain(forName: name) }
-        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name))
+        let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore.inMemory(service: name))
         let key = SymmetricKey(size: .bits256)
         let store = EncryptedMeetingChunkStore(rootURL: temporaryRoot(), keyProvider: FixedMeetingChunkKeyProvider(key: key))
         let libraryRoot = temporaryRoot()
@@ -56,7 +56,9 @@ final class MeetingLibraryCoordinatorTests: XCTestCase {
             transcription: TranscriptionService(),
             store: store,
             clientProvider: { client },
-            library: library
+            library: library,
+            // Never the real Application Support folder.
+            diskStateReader: { "ready" }
         )
         let sessionID = UUID()
         try store.beginSession(sessionID: sessionID, meetingID: nil, expectedChunkCounts: [.microphone: 1, .system: 1, .mixed: 1],
