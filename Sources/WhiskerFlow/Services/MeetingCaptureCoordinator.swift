@@ -1409,9 +1409,12 @@ final class MeetingCaptureCoordinator {
     await Task.detached(priority: .utility, operation: diskStateReader).value
   }
 
-  nonisolated static func readLocalDiskState() -> String {
-    let root = StorageLocations.applicationSupportRootOrTemporary()
+  /// - Parameter root: tests pass a temporary folder; the app measures its
+  ///   own recordings folder.
+  nonisolated static func readLocalDiskState(
+    root: URL = StorageLocations.applicationSupportRootOrTemporary()
       .appendingPathComponent("MeetingRecordings", isDirectory: true)
+  ) -> String {
     try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     guard
       let values = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]

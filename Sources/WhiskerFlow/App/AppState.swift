@@ -205,6 +205,9 @@ final class AppState {
     let cleanup = CleanupService()
     private var meetingWarmUpTask: Task<Void, Never>?
     private let pendingPersistWork = PendingWorkTracker()
+    /// An injected history outside the UI preview: a test. It never touches
+    /// the user's meetings, Cleanup model or Atlas.
+    private let isTestFixture: Bool
     private var hasStarted = false
     private var recordingIntentActive = false
     private var pasteTargetApplication: NSRunningApplication?
@@ -279,16 +282,28 @@ final class AppState {
         self.microphonePermission = resolvedMicrophonePermission
         self.transcription = transcription
         let atlasTokenStore = resolvedSettings.atlasTokenStore
+        isTestFixture = store != nil && !UIPreview.isEnabled
+        // Tests keep meeting recordings in a temporary folder and never reach Atlas.
+        let meetingTestRoot = isTestFixture
+            ? FileManager.default.temporaryDirectory.appendingPathComponent("WhiskerFlowMeetings-\(UUID().uuidString)")
+            : nil
         self.meetingCapture = MeetingCaptureCoordinator(
             settings: resolvedSettings,
             microphonePermission: resolvedMicrophonePermission,
             transcription: transcription,
+            store: meetingTestRoot.map {
+                EncryptedMeetingChunkStore(rootURL: $0.appendingPathComponent("MeetingRecordings", isDirectory: true),
+                                           keyProvider: FixedMeetingChunkKeyProvider(key: SymmetricKey(size: .bits256)))
+            },
+            clientProvider: meetingTestRoot.map { _ in { nil } },
             // Tests and the UI preview must never read or write the user's meetings.
             library: store == nil && !UIPreview.isEnabled ? .production() : .ephemeral(),
             assistant: store == nil && !UIPreview.isEnabled ? nil : MeetingAssistantController(
                 rootURL: FileManager.default.temporaryDirectory.appendingPathComponent("WhiskerFlowAssistant-\(UUID().uuidString)")),
             // The same Keychain item as the settings, so a sign-out reaches both.
-            tokenReader: { atlasTokenStore.read() }
+            tokenReader: { atlasTokenStore.read() },
+            diskStateReader: meetingTestRoot.map { root in { MeetingCaptureCoordinator.readLocalDiskState(root: root) } }
+                ?? { MeetingCaptureCoordinator.readLocalDiskState() }
         )
         let insights = self.insights
         // Tests and the UI preview never report to Atlas.
@@ -321,7 +336,8 @@ final class AppState {
             self.pasteService = router
             practiceDelivery = router
         }
-        onboarding = OnboardingController(store: onboardingStore ?? UserDefaultsOnboardingStore())
+        // The settings' defaults: `.standard` in the app, a test's own suite in tests.
+        onboarding = OnboardingController(store: onboardingStore ?? UserDefaultsOnboardingStore(defaults: resolvedSettings.userDefaults))
         if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "coach" {
             meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant, appState: self)
         }
@@ -343,7 +359,7 @@ final class AppState {
         }
         if store == nil && !UIPreview.isEnabled { assistant.synchronizeAccount() }
         assistant.requestTransport = { [weak self] in
-            guard let self, !UIPreview.isEnabled, !self.settings.atlasDeviceToken.isEmpty,
+            guard let self, !UIPreview.isEnabled, !self.isTestFixture, !self.settings.atlasDeviceToken.isEmpty,
                   let url = URL(string: self.settings.atlasBaseURL) else { throw AssistantError.message("Connect Atlas in Meeting setup first.") }
             return AssistantAtlasClient(baseURL: url, token: self.settings.atlasDeviceToken)
         }
@@ -645,10 +661,10 @@ final class AppState {
 
     func refreshMeetingStorageAvailability() {
         guard !UIPreview.isEnabled, meetingStorageTask == nil else { return }
+        let meetingCapture = meetingCapture
         meetingStorageTask = Task { @MainActor [weak self] in
-            let state = await Task.detached(priority: .utility) {
-                MeetingCaptureCoordinator.readLocalDiskState()
-            }.value
+            // The coordinator's reader, which runs off the main actor.
+            let state = await meetingCapture.localDiskState()
             guard let self else { return }
             self.meetingStorageTask = nil
             let available = state == "ready"
@@ -2707,7 +2723,7 @@ final class AppState {
     func configureCleanup() {
         cleanup.configure(model: .gemma4E2B, enabled: settings.cleanupEnabled)
         automaticCorrections.configure(enabled: settings.cleanupEnabled && settings.rememberCorrections)
-        if settings.cleanupEnabled && !UIPreview.isEnabled { cleanup.prewarm(.gemma4E2B) }
+        if settings.cleanupEnabled && !UIPreview.isEnabled && !isTestFixture { cleanup.prewarm(.gemma4E2B) }
     }
 
     private func cleanupText(_ text: String, configuration: TranscriptionJobConfiguration) async -> CleanupResult {
