@@ -14,6 +14,25 @@ final class AppSettingsMigrationTests: XCTestCase {
         }
     }
 
+    func testCleanupVarietyComesFromTheRegionOnceThenStays() {
+        withDefaults { defaults, name in
+            let first = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name), region: "US")
+            XCTAssertEqual(first.cleanupVariety, .american)
+            // A later region change doesn't flip an existing choice.
+            let moved = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name), region: "GB")
+            XCTAssertEqual(moved.cleanupVariety, .american)
+            moved.cleanupVariety = .british
+            XCTAssertEqual(AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name), region: "US").cleanupVariety,
+                           .british)
+        }
+        for region in ["GB", "IE", "AU", "NZ", "IN", "ZA", nil] {
+            withDefaults { defaults, name in
+                XCTAssertEqual(AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: name), region: region).cleanupVariety,
+                               .british, region ?? "no region")
+            }
+        }
+    }
+
     private func withDefaults(_ body: (UserDefaults, String) throws -> Void) rethrows {
         let name = "AppSettingsMigration.\(UUID())"
         let defaults = UserDefaults(suiteName: name)!

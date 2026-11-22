@@ -42,6 +42,9 @@ enum CleanupEvaluation {
         let input = URL(fileURLWithPath: CommandLine.arguments[index + 2])
         let output = URL(fileURLWithPath: CommandLine.arguments[index + 3])
         guard let model = CleanupModel(rawValue: choice) else { exit(2) }
+        // Optional fourth argument: `british` (the default) or `american`.
+        let varietyArgument = CommandLine.arguments.count > index + 4 ? CommandLine.arguments[index + 4] : CleanupEnglishVariety.british.rawValue
+        guard let variety = CleanupEnglishVariety(rawValue: varietyArgument) else { exit(2) }
         Task {
             do {
                 let fixtures = try JSONDecoder().decode([Fixture].self, from: Data(contentsOf: input))
@@ -72,7 +75,8 @@ enum CleanupEvaluation {
                             delivered = TranscriptCleanup.accepted(candidate, original: input, vocabulary: vocabulary) ?? input
                             failure = nil
                         } else {
-                            let attempt = try await worker.cleanTranscript(input, model: model, seconds: input.count > 800 ? 8 : 3, vocabulary: vocabulary)
+                            let attempt = try await worker.cleanTranscript(input, model: model, seconds: input.count > 800 ? 8 : 3,
+                                                                           vocabulary: vocabulary, variety: variety)
                             candidate = attempt.candidate
                             delivered = attempt.text
                             failure = attempt.incomplete ? "incomplete" : nil
