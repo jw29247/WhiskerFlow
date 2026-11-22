@@ -205,7 +205,7 @@ struct ContentView: View {
         }
         .frame(width: 210)
         .frame(maxHeight: .infinity)
-        .background(.ultraThinMaterial)
+        .flowSidebarBackground()
     }
 
     private func navigate(_ action: @escaping () -> Void) {
