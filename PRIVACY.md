@@ -150,15 +150,22 @@ Every request carries your device token, which tells Atlas who you are.
 WhiskerFlow a device token, which is kept in your Keychain. Until you sign in,
 WhiskerFlow will not dictate.
 
-**Status check.** While you are signed in, WhiskerFlow tells Atlas once a
-minute the app version, whether Microphone and Screen Recording permission are
-granted, whether disk space is low, whether a meeting is recording or
-uploading, and the code of the last meeting error. No audio or text.
+**Status check.** While you are signed in, WhiskerFlow tells Atlas the app
+version, whether Microphone and Screen Recording permission are granted,
+whether disk space is low, whether a meeting is recording or uploading, and
+the code of the last meeting error. No audio or text. It sends this every
+5 minutes while nothing changes, within a minute when a permission, the
+recording state or the last error changes, and every minute while a meeting is
+recording or uploading.
 
 **Meeting schedule.** While you are signed in, WhiskerFlow fetches your next
-seven days of meetings from Atlas once a minute (title, times, meeting link
-and location), whether or not automatic recording is on. It uses them to
-name recordings and, if you turned it on, to start automatic recording.
+seven days of meetings from Atlas (title, times, meeting link and location),
+whether or not automatic recording is on. It uses them to name recordings
+and, if you turned it on, to start automatic recording. It fetches every
+10 minutes, and every minute while automatic recording is on, while a meeting
+is recording, or when a meeting starts or ends within 15 minutes. It also
+fetches when you open Meetings or press Refresh, and when a call starts that
+matches nothing on the list.
 
 **Meeting recordings and transcripts.** When a meeting recording ends,
 WhiskerFlow uploads it to Atlas: the audio from your microphone, the audio
@@ -184,13 +191,13 @@ later fetches the notes Atlas writes for the meeting.
 and terms) when it starts and every 4 hours. The request contains no text or
 personal data. The last copy is kept in `shared-vocabulary.json`.
 
-**Leaderboard.** Every 15 minutes, and when you open the leaderboard,
-WhiskerFlow sends Atlas your daily totals: words, dictations, seconds spoken,
-estimated time saved, meetings recorded and meeting minutes. The first report
-sends every day Insights holds. Never any text. Colleagues with leaderboard
-access see your name, picture and these counts, plus your streaks. There
-is no switch to turn this off yet. Pictures on the board are loaded from
-the address Atlas gives for each person.
+**Leaderboard.** Every 15 minutes if your totals have changed, and when you
+open the leaderboard, WhiskerFlow sends Atlas your daily totals: words,
+dictations, seconds spoken, estimated time saved, meetings recorded and
+meeting minutes. The first report sends every day Insights holds. Never any
+text. Colleagues with leaderboard access see your name, picture and these
+counts, plus your streaks. There is no switch to turn this off yet. Pictures
+on the board are loaded from the address Atlas gives for each person.
 
 ### Apple
 
@@ -317,6 +324,9 @@ leaderboard counts) stays in Atlas. Ask That Works about it.
   `agency.thatworks.WhiskerFlow.meeting-capture`).
 - **2.1.1 and earlier** do not remind you to tell other participants that you
   are recording.
+- **2.1.1 and earlier** contact Atlas more often: the status check and the
+  meeting schedule every minute, and the leaderboard report every 15 minutes
+  whether or not anything changed.
 - **2.0.0 to 2.1.0** switched automatic meeting recording on without asking.
   2.1.1 switches it back off and asks once.
 - **Versions before 2.1.1** could let macOS send Apple Speech audio to Apple

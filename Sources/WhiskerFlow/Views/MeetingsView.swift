@@ -175,6 +175,9 @@ struct MeetingsView: View {
             }.font(FlowStyle.caption).foregroundStyle(FlowStyle.muted).padding(.horizontal, 32).padding(.vertical, 21)
         }
         .task {
+            // While idle the schedule is fetched every 10 minutes; opening
+            // this screen brings it up to date.
+            appState.refreshMeetingScheduleIfStale()
             // Free space changes slowly; poll only while this screen is visible.
             while !Task.isCancelled {
                 appState.refreshMeetingStorageAvailability()

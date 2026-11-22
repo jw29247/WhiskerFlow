@@ -97,6 +97,18 @@ final class MeetingSchedulePollTests: XCTestCase {
         XCTAssertFalse(poll(intents: [intent(startMs: now + 16 * minute, endMs: now + 46 * minute)]))
     }
 
+    func testOpeningMeetingsFetchesOnlyWhenTheListIsOverAMinuteOld() async {
+        let client = ScheduleStub()
+        let (coordinator, settings) = coordinator(client: client)
+        settings.meetingModeEnabled = false
+        XCTAssertFalse(coordinator.refreshScheduleIfStale(), "Before the first fetch the loop already fetches every minute")
+        await coordinator.pollSchedule()
+        XCTAssertEqual(client.fetches, 1)
+        let fetchedAt = coordinator.lastScheduleFetchMs ?? MeetingCaptureCoordinator.nowMs()
+        XCTAssertFalse(coordinator.refreshScheduleIfStale(nowMs: fetchedAt + minute - 1), "A list under a minute old is current")
+        XCTAssertTrue(coordinator.refreshScheduleIfStale(nowMs: fetchedAt + minute), "An older list is fetched as the screen opens")
+    }
+
     func testIdleTicksFetchEveryTenMinutesWithAutomaticRecordingOff() async {
         let client = ScheduleStub()
         let (coordinator, settings) = coordinator(client: client)

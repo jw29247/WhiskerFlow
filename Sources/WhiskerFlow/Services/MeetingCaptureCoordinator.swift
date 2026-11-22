@@ -336,6 +336,19 @@ final class MeetingCaptureCoordinator {
     Task { @MainActor [weak self] in await self?.pollSchedule() }
   }
 
+  /// Fetches the schedule if the last fetch is over a minute old. The
+  /// Meetings screen calls it as it opens, so its list is never the one from
+  /// up to `MeetingSchedulePollPolicy.idleFetchIntervalMs` ago. Without a
+  /// successful fetch to go by, the schedule loop is already fetching every
+  /// minute. Returns whether it started a fetch.
+  @discardableResult
+  func refreshScheduleIfStale(nowMs: Int64 = MeetingCaptureCoordinator.nowMs()) -> Bool {
+    guard let last = lastScheduleFetchMs,
+          nowMs - last >= MeetingSchedulePollPolicy.activeFetchIntervalMs else { return false }
+    refreshSchedule()
+    return true
+  }
+
   func retryPendingRecordings() {
     guard uploadTask == nil, deliveringSessions.isEmpty else { return }
     retryBackoff.reset()

@@ -1118,6 +1118,13 @@ final class AppState {
     meetingCapture.refreshSchedule()
   }
 
+  /// For the Meetings screen as it opens: fetches only if the list is over a
+  /// minute old.
+  func refreshMeetingScheduleIfStale() {
+        guard !UIPreview.isEnabled else { return }
+    meetingCapture.refreshScheduleIfStale()
+  }
+
   func recordScheduledMeeting(_ intent: AtlasCaptureScheduleIntent) {
         guard !UIPreview.isEnabled else { return }
     meetingCapture.startScheduledCapture(intent)

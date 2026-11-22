@@ -143,6 +143,9 @@ final class CallDetectionService {
     private func pollAndPlan(woken: Bool) async -> TimeInterval {
         let idleBefore = nextPollInterval == CallDetectionCadence.idleSeconds
         await poll(now: now())
+        // A poll still in flight when detection was stopped (and perhaps
+        // started again) must not switch the new run's listener off.
+        guard !Task.isCancelled else { return nextPollInterval }
         if observesMicrophone, idleBefore, !woken, otherAppsUseMicrophone {
             // The safety-net poll found microphone use that no change
             // reported. Stop trusting the listener until detection restarts,
