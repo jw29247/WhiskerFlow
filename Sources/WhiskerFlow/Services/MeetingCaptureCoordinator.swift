@@ -112,6 +112,8 @@ final class MeetingCaptureCoordinator {
   /// When the schedule was last fetched from Atlas successfully; nil after a
   /// failure, without a client and after sign-out.
   private(set) var lastScheduleFetchMs: Int64?
+  /// The last heartbeat Atlas accepted; nil after a failure.
+  private var lastHeartbeat: (atMs: Int64, state: MeetingHeartbeatPolicy.State)?
   private var lastFailureCode: String?
   private var didStart = false
   /// Bumped by `signOut()`. An Atlas request captures it before its await and
@@ -255,6 +257,7 @@ final class MeetingCaptureCoordinator {
   func signOut() {
     signOutGeneration &+= 1
     lastScheduleFetchMs = nil
+    lastHeartbeat = nil
     stopMonitoring()
     stopTask?.cancel()
     stopTask = nil
@@ -1333,9 +1336,9 @@ final class MeetingCaptureCoordinator {
 
   private func heartbeatLoop() async {
     while !Task.isCancelled {
-      await sendHeartbeat()
+      await sendHeartbeatIfDue()
       await stopCaptureIfStorageExhausted()
-      try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+      try? await Task.sleep(for: .seconds(60), tolerance: .seconds(5))
     }
   }
 
@@ -1350,12 +1353,35 @@ final class MeetingCaptureCoordinator {
     Task { @MainActor [weak self] in await self?.stopCapture() }
   }
 
-  private func sendHeartbeat() async {
+  /// The minute tick of the heartbeat loop. Sends as before unless
+  /// `MeetingHeartbeatPolicy` says Atlas already has this state.
+  func sendHeartbeatIfDue(nowMs: Int64 = MeetingCaptureCoordinator.nowMs()) async {
     guard let client = await atlasClient() else { return }
-    let permissionState = [
-      "microphone": microphonePermission.isGranted ? "granted" : "denied",
-      "screenRecording": CGPreflightScreenCaptureAccess() ? "granted" : "denied",
-    ]
+    let state = heartbeatState()
+    guard MeetingHeartbeatPolicy.shouldSend(
+      nowMs: nowMs, lastSent: lastHeartbeat, state: state,
+      busy: isBusy || captureTransitionInProgress
+    ) else { return }
+    let diskState = await localDiskState()
+    let appVersion =
+      Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+    do {
+      try await client.heartbeat(
+        appVersion: appVersion,
+        permissionState: state.permissionState,
+        diskState: diskState,
+        captureState: state.captureState,
+        lastFailureReason: state.lastFailureReason
+      )
+      lastHeartbeat = (nowMs, state)
+    } catch {
+      lastHeartbeat = nil
+    }
+  }
+
+  /// What a heartbeat reports, apart from disk state (an XPC query, read
+  /// only when one is sent).
+  private func heartbeatState() -> MeetingHeartbeatPolicy.State {
     let captureState: String
     switch status {
     case .recording: captureState = "recording"
@@ -1364,13 +1390,11 @@ final class MeetingCaptureCoordinator {
     case .uncovered: captureState = "uncovered"
     case .covered: captureState = "idle"
     }
-    let diskState = await localDiskState()
-    let appVersion =
-      Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
-    try? await client.heartbeat(
-      appVersion: appVersion,
-      permissionState: permissionState,
-      diskState: diskState,
+    return MeetingHeartbeatPolicy.State(
+      permissionState: [
+        "microphone": microphonePermission.isGranted ? "granted" : "denied",
+        "screenRecording": CGPreflightScreenCaptureAccess() ? "granted" : "denied",
+      ],
       captureState: captureState,
       lastFailureReason: lastFailureCode
     )
@@ -1543,6 +1567,27 @@ enum MeetingSchedulePollPolicy {
     guard let lastFetchMs, !automaticRecording, !capturing, nowMs >= lastFetchMs else { return true }
     if nowMs - lastFetchMs >= idleFetchIntervalMs { return true }
     return intents.contains { $0.startMs - nearMeetingMs <= nowMs && nowMs <= $0.endMs + nearMeetingMs }
+  }
+}
+
+/// How often the heartbeat loop reports this Mac's state to Atlas. It ticks
+/// every minute and sends every minute (as it always did) while recording,
+/// uploading or starting a capture, after a failed send, and whenever the
+/// reported state changes. While nothing changes it sends every 5 minutes.
+/// Disk state is read only for a send, so a change there can take 5 minutes
+/// to reach Atlas while idle (every minute while recording, as before).
+enum MeetingHeartbeatPolicy {
+  struct State: Equatable {
+    var permissionState: [String: String]
+    var captureState: String
+    var lastFailureReason: String?
+  }
+
+  static let idleIntervalMs: Int64 = 5 * 60_000
+
+  static func shouldSend(nowMs: Int64, lastSent: (atMs: Int64, state: State)?, state: State, busy: Bool) -> Bool {
+    guard let lastSent, !busy, lastSent.state == state, nowMs >= lastSent.atMs else { return true }
+    return nowMs - lastSent.atMs >= idleIntervalMs
   }
 }
 

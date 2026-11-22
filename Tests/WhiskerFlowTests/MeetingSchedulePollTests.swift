@@ -5,10 +5,12 @@ import XCTest
 @testable import WhiskerFlow
 import WhiskerFlowAppSupport
 
-/// Counts schedule fetches; everything else is unused here.
+/// Counts schedule fetches and heartbeats; everything else is unused here.
 private final class ScheduleStub: MeetingAtlasClient, @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
+    private var beats = 0
+    var heartbeats: Int { lock.withLock { beats } }
     private var result: [AtlasCaptureScheduleIntent] = []
     var fetches: Int { lock.withLock { count } }
     var intents: [AtlasCaptureScheduleIntent] {
@@ -23,7 +25,9 @@ private final class ScheduleStub: MeetingAtlasClient, @unchecked Sendable {
         }
     }
 
-    func heartbeat(appVersion: String, permissionState: [String: String], diskState: String, captureState: String, lastFailureReason: String?) async throws {}
+    func heartbeat(appVersion: String, permissionState: [String: String], diskState: String, captureState: String, lastFailureReason: String?) async throws {
+        lock.withLock { beats += 1 }
+    }
     func createMeeting(captureSessionID: UUID, title: String, occurredAtMs: Int64, eventID: String?) async throws -> MeetingAtlasCreatedMeeting {
         throw URLError(.notConnectedToInternet)
     }
@@ -153,5 +157,36 @@ final class MeetingSchedulePollTests: XCTestCase {
         }
         XCTAssertEqual(client.fetches, 2)
         XCTAssertEqual(coordinator.callPrompt?.title, "Weekly sync")
+    }
+
+    // MARK: Heartbeat
+
+    func testHeartbeatPolicySendsEveryMinuteWhenSomethingHappensAndEveryFiveOtherwise() {
+        let idle = MeetingHeartbeatPolicy.State(permissionState: ["microphone": "granted"], captureState: "idle", lastFailureReason: nil)
+        let now: Int64 = 1_800_000_000_000
+        let last = (atMs: now - minute, state: idle)
+        XCTAssertFalse(MeetingHeartbeatPolicy.shouldSend(nowMs: now, lastSent: last, state: idle, busy: false))
+        XCTAssertTrue(MeetingHeartbeatPolicy.shouldSend(nowMs: now, lastSent: nil, state: idle, busy: false), "First, or after a failure")
+        XCTAssertTrue(MeetingHeartbeatPolicy.shouldSend(nowMs: now, lastSent: last, state: idle, busy: true), "Recording or uploading")
+        var recording = idle
+        recording.captureState = "recording"
+        XCTAssertTrue(MeetingHeartbeatPolicy.shouldSend(nowMs: now, lastSent: last, state: recording, busy: false), "State changed")
+        var failed = idle
+        failed.lastFailureReason = "schedule"
+        XCTAssertTrue(MeetingHeartbeatPolicy.shouldSend(nowMs: now, lastSent: last, state: failed, busy: false))
+        var denied = idle
+        denied.permissionState = ["microphone": "denied"]
+        XCTAssertTrue(MeetingHeartbeatPolicy.shouldSend(nowMs: now, lastSent: last, state: denied, busy: false))
+        XCTAssertTrue(MeetingHeartbeatPolicy.shouldSend(nowMs: now + 4 * minute, lastSent: last, state: idle, busy: false))
+    }
+
+    func testIdleHeartbeatTicksSendEveryFiveMinutes() async {
+        let client = ScheduleStub()
+        let (coordinator, _) = coordinator(client: client)
+        let start = MeetingCaptureCoordinator.nowMs()
+        for tick in 0..<10 {
+            await coordinator.sendHeartbeatIfDue(nowMs: start + Int64(tick) * minute)
+        }
+        XCTAssertEqual(client.heartbeats, 2, "Sent at 0 and 5 minutes, instead of 10 times")
     }
 }
