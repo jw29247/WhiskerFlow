@@ -198,16 +198,6 @@ final class AppSettings {
     /// recognised by any setting or Sparkle key they left behind.
     @ObservationIgnored let hadPreviousLaunch: Bool
 
-    /// Parakeet refuses to run off Apple Silicon; Apple Speech is the only
-    /// engine there.
-    private static var supportsParakeet: Bool {
-        #if arch(arm64)
-        true
-        #else
-        false
-        #endif
-    }
-
     /// Reads the system's login item; the stored default only remembers the
     /// last request.
     @ObservationIgnored let launchAtLogin: LaunchAtLoginController
@@ -222,9 +212,7 @@ final class AppSettings {
         // its model size and command-line settings are dropped.
         let storedEngine = defaults.string(forKey: Keys.engine)
         let storedChoice = TranscriptionEngineKind.engineForStoredPreferences(rawValue: storedEngine)
-        let resolvedEngine = Self.supportsParakeet
-            ? (TranscriptionEngineKind.selectableCases.contains(storedChoice) ? storedChoice : .defaultEngine)
-            : .appleSpeech
+        let resolvedEngine = TranscriptionEngineKind.selectableCases.contains(storedChoice) ? storedChoice : .defaultEngine
         engine = resolvedEngine
         if storedEngine != resolvedEngine.rawValue, storedEngine != nil {
             defaults.set(resolvedEngine.rawValue, forKey: Keys.engine)

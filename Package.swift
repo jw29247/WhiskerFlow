@@ -5,6 +5,9 @@ import PackageDescription
 let package = Package(
     name: "WhiskerFlow",
     platforms: [
+        // The app requires macOS 26 (LSMinimumSystemVersion). Raising this would
+        // also raise the SDK version recorded in the binary from 14.0 and so
+        // change AppKit and SwiftUI linked-on-or-after behaviour.
         .macOS(.v14)
     ],
     products: [
@@ -47,12 +50,7 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "Logging", package: "swift-log")
             ],
-            resources: [.copy("Resources/shared-vocabulary.json"), .copy("Resources/CleanupNotices.txt")],
-            // The on-device coach model ships with macOS 26. Weak-link it so the
-            // app still launches on macOS 14 and 15, where the feature is hidden.
-            // Translation is weak-linked for the same reason (macOS 15 and later).
-            linkerSettings: [.unsafeFlags(["-Xlinker", "-weak_framework", "-Xlinker", "FoundationModels",
-                                           "-Xlinker", "-weak_framework", "-Xlinker", "Translation"])]
+            resources: [.copy("Resources/shared-vocabulary.json"), .copy("Resources/CleanupNotices.txt")]
         ),
         .testTarget(
             name: "WhiskerFlowCoreTests",

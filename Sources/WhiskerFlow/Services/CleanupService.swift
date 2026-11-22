@@ -44,11 +44,7 @@ final class CleanupService {
     @ObservationIgnored private var configurationID = UUID()
 
     static var supported: Bool {
-        #if arch(arm64)
         ProcessInfo.processInfo.physicalMemory >= 8 * 1_073_741_824
-        #else
-        false
-        #endif
     }
 
     init() {

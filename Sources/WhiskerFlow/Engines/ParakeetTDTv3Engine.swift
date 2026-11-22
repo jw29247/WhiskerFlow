@@ -60,9 +60,6 @@ actor ParakeetTDTv3Engine: Sendable {
     }
 
     func prepare() async throws {
-        guard SystemInfo.isAppleSilicon else {
-            throw TranscriptionError.engineUnavailable(.parakeetTDTv3)
-        }
         if manager != nil { return }
 
         // Actors are reentrant at awaits: a first dictation can arrive while

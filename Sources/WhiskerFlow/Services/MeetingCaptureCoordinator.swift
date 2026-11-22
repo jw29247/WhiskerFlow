@@ -61,11 +61,6 @@ final class MeetingCaptureCoordinator {
   private static let retryPollSeconds: TimeInterval = 60
   private static let microphonePendingDetail =
     "Recording Mac audio. The microphone is not delivering audio yet."
-  #if arch(arm64)
-    private static let isSupportedMac = true
-  #else
-    private static let isSupportedMac = false
-  #endif
 
   private let settings: AppSettings
   private let microphonePermission: MicrophonePermissionController
@@ -419,7 +414,7 @@ final class MeetingCaptureCoordinator {
 
   private func updateCallDetection() {
     guard didStart else { return }
-    let asks = settings.askToRecordCalls && Self.isSupportedMac && !requiresSignIn()
+    let asks = settings.askToRecordCalls && !requiresSignIn()
     if MeetingCallDetectionPolicy.shouldDetect(asksToRecordCalls: asks, followsDetectedCall: activeDetectedCallID != nil) {
       callDetector.start()
     } else {
@@ -707,11 +702,6 @@ final class MeetingCaptureCoordinator {
   }
 
   private func startCapture(intent: AtlasCaptureScheduleIntent?, detectedCall: DetectedCall? = nil) async {
-    guard Self.isSupportedMac else {
-      status = .uncovered
-      statusDetail = "Meeting Mode requires an Apple Silicon Mac."
-      return
-    }
     guard activeSessionID == nil, !captureTransitionInProgress else { return }
     guard !requiresSignIn() else {
       status = .uncovered
@@ -1364,11 +1354,6 @@ final class MeetingCaptureCoordinator {
     let diskState = await localDiskState()
     // A new recording may have started while either system service was responding.
     guard !isBusy, !Task.isCancelled else { return }
-    guard Self.isSupportedMac else {
-      status = .uncovered
-      statusDetail = "Meeting Mode requires an Apple Silicon Mac."
-      return
-    }
     guard !requiresSignIn() else {
       status = .uncovered
       statusDetail = "Sign in with Atlas to record meetings."

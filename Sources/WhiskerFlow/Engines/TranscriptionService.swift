@@ -12,7 +12,8 @@ struct TranscriptionOutcome: Sendable {
 actor TranscriptionService {
   private let parakeetTDTv3 = ParakeetTDTv3Engine()
   private let appleSpeech = AppleSpeechEngine()
-  /// `AppleDictationEngine` on macOS 26; stored untyped so the app still runs on 14.
+  /// `AppleDictationEngine`, stored untyped because the package's deployment
+  /// target is still macOS 14 (see Package.swift).
   private let appleDictationEngine: Any? = {
     if #available(macOS 26.0, *) { return AppleDictationEngine() }
     return nil
