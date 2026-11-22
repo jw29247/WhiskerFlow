@@ -23,6 +23,15 @@ BUILD_ROOT="$ROOT_DIR/.build"
 
 cd "$ROOT_DIR"
 
+if [[ "$CONFIGURATION" != "release" && "$OPTIMIZE" == "1" ]]; then
+  BUILD_ROOT="${OPTIMIZED_BUILD_ROOT:-$ROOT_DIR/.build/optimized}"
+fi
+# SwiftPM never removes a resource from an existing bundle when the source
+# drops it, so a reused build directory (CI's cache, an old checkout) would
+# ship a file the source no longer has. Make it rebuild this app's own
+# resource bundle every time; that is only a copy of a few small files.
+rm -rf "$BUILD_ROOT/$CONFIGURATION/${PRODUCT}_${PRODUCT}.bundle"
+
 echo "Building $PRODUCT ($CONFIGURATION)"
 if [[ "$CONFIGURATION" == "release" ]]; then
   # Keep developer/workspace paths out of both the executable and its dSYM.
@@ -31,7 +40,6 @@ if [[ "$CONFIGURATION" == "release" ]]; then
     -Xcc "-fdebug-prefix-map=$ROOT_DIR=." \
     -Xswiftc -Xfrontend -Xswiftc -no-clang-module-breadcrumbs
 elif [[ "$OPTIMIZE" == "1" ]]; then
-  BUILD_ROOT="${OPTIMIZED_BUILD_ROOT:-$ROOT_DIR/.build/optimized}"
   swift build --configuration "$CONFIGURATION" --scratch-path "$BUILD_ROOT" -Xswiftc -O
 else
   swift build --configuration "$CONFIGURATION"

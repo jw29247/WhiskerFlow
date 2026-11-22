@@ -9,7 +9,8 @@ import WhiskerFlowCore
 /// The glossary is read-only and the payload is the same JSON shape as a local
 /// `Vocabulary` (`{ "rules": [ { "find": …, "replaceWith": … } ] }`). The last
 /// good copy is cached to disk so it keeps working offline or when the token
-/// can't be read for a moment. It names clients, so an explicit sign-out
+/// can't be read for a moment. The app ships no copy of its own: until the
+/// first fetch succeeds the glossary is empty. It names clients, so an explicit sign-out
 /// deletes it (`signOut()`).
 /// The request is authorised by the Atlas device token and carries no
 /// arguments, so no transcript or user data is sent. Signed out, nothing is
@@ -84,10 +85,9 @@ final class SharedVocabularyService {
     }
 
     /// Sign-out. Stops refreshing, drops any fetch in flight and deletes the
-    /// copy downloaded from Atlas, leaving the glossary bundled with the app,
-    /// as on an install that has never signed in. A sign-in fetches again
-    /// through `credentialsChanged()`; restart the cadence with
-    /// `startPeriodicRefresh`.
+    /// copy downloaded from Atlas, leaving the glossary empty, as on an install
+    /// that has never signed in. A sign-in fetches again through
+    /// `credentialsChanged()`; restart the cadence with `startPeriodicRefresh`.
     func signOut() {
         generation &+= 1
         fetchTask?.cancel()
@@ -104,7 +104,6 @@ final class SharedVocabularyService {
         }
         rules = []
         status = .idle
-        loadInitialVocabulary()
     }
 
     /// Re-fetch on a slow cadence. The first fetch comes from `start`, so this
@@ -201,46 +200,14 @@ final class SharedVocabularyService {
         return report.vocabulary
     }
 
+    /// Loads the copy last downloaded from Atlas. The app ships no copy, so
+    /// with none on disk (a new install, or after sign-out) the glossary is
+    /// empty and idle until the first fetch succeeds. That is normal, not an
+    /// error: dictation simply runs without glossary rules.
     private func loadInitialVocabulary() {
-        if let cache = try? Data(contentsOf: cacheURL),
-           let vocabulary = try? ingest(cache, source: "cache") {
-            let modified = (try? cacheURL.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate ?? Date()
-            rules = vocabulary.rules
-            status = .loaded(count: rules.count, at: modified)
-            return
-        }
-
-        // The resource bundle name is fixed by SwiftPM, so a rename or a packaging
-        // change silently ships an empty glossary unless the miss is reported.
-        guard let resourcesURL = Bundle.main.resourceURL else {
-            DiagnosticsService.capture(
-                error: CocoaError(.fileNoSuchFile),
-                category: "glossary",
-                code: "seed_missing"
-            )
-            return
-        }
-        let seedURL = resourcesURL
-            .appendingPathComponent("WhiskerFlow_WhiskerFlow.bundle", isDirectory: true)
-            .appendingPathComponent("shared-vocabulary.json")
-        guard let seed = try? Data(contentsOf: seedURL) else {
-            DiagnosticsService.capture(
-                error: CocoaError(.fileNoSuchFile),
-                category: "glossary",
-                code: "seed_missing"
-            )
-            return
-        }
-        guard let vocabulary = try? ingest(seed, source: "seed") else {
-            DiagnosticsService.capture(
-                error: CocoaError(.fileReadCorruptFile),
-                category: "glossary",
-                code: "seed_invalid"
-            )
-            return
-        }
-        let modified = (try? seedURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+        guard let cache = try? Data(contentsOf: cacheURL),
+              let vocabulary = try? ingest(cache, source: "cache") else { return }
+        let modified = (try? cacheURL.resourceValues(forKeys: [.contentModificationDateKey]))?
             .contentModificationDate ?? Date()
         rules = vocabulary.rules
         status = .loaded(count: rules.count, at: modified)
