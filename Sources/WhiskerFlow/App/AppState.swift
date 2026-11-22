@@ -3,7 +3,6 @@ import CoreGraphics
 import CryptoKit
 import Foundation
 import Logging
-import OpenTelemetryApi
 import Observation
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
@@ -178,7 +177,7 @@ final class AppState {
     private let correctionMonitor = PasteCorrectionMonitor()
     private let soundService = SoundService()
     let microphonePermission: MicrophonePermissionController
-    let sharedVocabulary = SharedVocabularyService()
+    let sharedVocabulary: SharedVocabularyService
     private var hotkeyMonitor: HotkeyMonitor?
     private let globeKeyShortcutOverride = GlobeKeyShortcutOverride()
     private var assistantHotkeyMonitors: [HotkeyMonitor] = []
@@ -294,6 +293,11 @@ final class AppState {
             usageDays: { tally in LeaderboardReport.days(buckets: insights.buckets, meetings: tally) },
             defaults: resolvedSettings.userDefaults
         )
+        self.sharedVocabulary = SharedVocabularyService(client: { [resolvedSettings] in
+            guard reportsUsage, !resolvedSettings.atlasDeviceToken.isEmpty,
+                  let url = URL(string: resolvedSettings.atlasBaseURL), url.scheme == "https" else { return nil }
+            return GlossaryAtlasClient(baseURL: url, token: resolvedSettings.atlasDeviceToken)
+        })
         self.live = LiveDictationSession(transcription: transcription)
         enforcesAtlasSignIn = reportsUsage
         var defaultPasteService = PasteService()
@@ -583,6 +587,8 @@ final class AppState {
         guard !UIPreview.isEnabled else { return }
         let token = settings.atlasDeviceToken
         if atlasTokenAvailable != !token.isEmpty { atlasTokenAvailable = !token.isEmpty }
+        // A sign-in or reconnect fetches the glossary now; a sign-out stops using the old token.
+        sharedVocabulary.credentialsChanged()
         // A failed Keychain read (locked keychain, re-signed build, busy securityd)
         // looks exactly like "no token", and the app has no sign-out. Keep the last
         // known account so a transient failure cannot wipe the assistant's
@@ -661,7 +667,7 @@ final class AppState {
         // catalog synchronously while scene restoration is laying it out can
         // re-enter its delegate and crash AppKit; defer one actor turn.
         refreshDevices()
-        sharedVocabulary.configureAgencyLibrary()
+        sharedVocabulary.start()
         sharedVocabulary.startPeriodicRefresh()
         startAudioDeviceMonitor()
         hotkeyReadinessActivity = ProcessInfo.processInfo.beginActivity(
@@ -1558,9 +1564,7 @@ final class AppState {
             lifecycleLogger.notice("Recording request blocked by active capture", metadata: ["event": "recording_rejected"])
             return
         }
-        await Observability.tracer.spanBuilder(spanName: "dictation.start").withActiveSpan { span in
-            await beginRecording(sessionID: sessionID, span: span)
-        }
+        await beginRecording(sessionID: sessionID)
     }
 
     /// Begins or ends `dictationActivity` to match whether any dictation is in flight.
@@ -1598,24 +1602,13 @@ final class AppState {
         }
     }
 
-    private func beginRecording(sessionID: UUID, span: any SpanBase) async {
+    private func beginRecording(sessionID: UUID) async {
         // Before the microphone: the warm-up runs on the Neural Engine while
         // capture starts on the main actor.
         startDictationWarmUp(sessionID: sessionID)
         startWebsiteLookup()
         updateDictationActivity()
         defer { updateDictationActivity() }
-        var telemetryOutcome = "error"
-        defer {
-            span.setAttribute(key: "outcome", value: telemetryOutcome)
-            Observability.dictationSessions.add(
-                value: 1,
-                attributes: [
-                    "state": .string("start"),
-                    "outcome": .string(telemetryOutcome)
-                ]
-            )
-        }
 
         latestRecordingSessionID = sessionID
         latestDeliveryID = nil
@@ -1630,16 +1623,10 @@ final class AppState {
             ? .authorized
             : await microphonePermission.requestIfNeeded()
         guard recordingCoordinator.phase == .preparing(sessionID) else {
-            telemetryOutcome = "cancelled"
             return
         }
         guard microphoneAuthorization == .authorized else {
             _ = recordingCoordinator.fail(sessionID)
-            span.setAttribute(
-                key: "error.type",
-                value: "microphone_permission_\(microphoneAuthorization.rawValue)"
-            )
-            span.status = .error(description: "Microphone permission unavailable")
             DiagnosticsService.breadcrumb(
                 category: "audio",
                 metadata: ["phase": "permission_\(microphoneAuthorization.rawValue)"]
@@ -1664,19 +1651,12 @@ final class AppState {
             }
             refreshDevices()
             guard recordingCoordinator.phase == .preparing(sessionID) else {
-                telemetryOutcome = "cancelled"
                 return
             }
             liveText = ""
             signalAssessor.reset()
             signalQuality = .unknown
             let configuration = makeTranscriptionConfiguration()
-            span.setAttributes([
-                "transcription.engine": .string(configuration.engine.rawValue),
-                "transcription.model": .string(configuration.engine.modelIdentifier),
-                "recording.mode": .string(String(describing: settings.recordingMode)),
-                "writing.category": .string(configuration.writing.category.rawValue)
-            ])
             activeRecordingConfiguration = configuration
             if let model = configuration.cleanupModel { cleanup.prewarm(model, foreground: true) }
             assistant.capturePurpose = .dictation
@@ -1726,13 +1706,8 @@ final class AppState {
                 live.cancel()
                 mediaPauser.dictationEnded()
                 activeRecordingConfiguration = nil
-                telemetryOutcome = "cancelled"
                 return
             }
-            span.setAttribute(
-                key: "audio.input.kind",
-                value: inputSelection == .systemDefault ? "default" : "specific"
-            )
             isRecording = true
             DiagnosticsService.breadcrumb(
                 category: "recording",
@@ -1746,8 +1721,6 @@ final class AppState {
             lastError = nil
             status = .recording
             meetingCapture.dictationStarted()
-            telemetryOutcome = "success"
-            span.status = .ok
             if settings.playSounds { soundService.play(.recordingStarted) }
 
             // Hold mode: if the key was already released while preparing, stop now.
@@ -1761,11 +1734,6 @@ final class AppState {
             activeRecordingConfiguration = nil
             let message = CaptureErrorPresentation.message(for: error)
             lastError = message
-            span.setAttributes([
-                "error.type": .string(String(describing: type(of: error))),
-                "error.code": .int((error as NSError).code)
-            ])
-            span.status = .error(description: "Recording start failed")
             logger.error(
                 "Recording start failed",
                 metadata: ["error.code": "\((error as NSError).code)"]
@@ -1786,20 +1754,10 @@ final class AppState {
         }
         guard case .recording(let sessionID) = recordingCoordinator.phase,
               recordingCoordinator.requestFinish(sessionID, reason: reason) else { return }
-        await Observability.tracer.spanBuilder(spanName: "dictation.finish").withActiveSpan { span in
-            await finishRecording(
-                sessionID: sessionID,
-                reason: reason,
-                span: span
-            )
-        }
+        await finishRecording(sessionID: sessionID, reason: reason)
     }
 
-    private func finishRecording(
-        sessionID: UUID,
-        reason: CaptureStopReason,
-        span: any SpanBase
-    ) async {
+    private func finishRecording(sessionID: UUID, reason: CaptureStopReason) async {
         defer {
             updateDictationActivity()
             scheduleAfterDictationUpkeep()
@@ -1809,31 +1767,6 @@ final class AppState {
         let finishStarted = ProcessInfo.processInfo.systemUptime
         lifecycleLogger.info("Finishing recording", metadata: ["event": "finish_started", "session": "\(sessionID)"])
         defer { lifecycleLogger.info("Recording finish returned", metadata: ["event": "finish_returned", "session": "\(sessionID)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - finishStarted) * 1000)"]) }
-        let capturedDuration = recordingStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-        var telemetryOutcome = "error"
-        defer {
-            span.setAttributes([
-                "outcome": .string(telemetryOutcome),
-                "recording.stop_reason": .string(String(describing: reason))
-            ])
-            Observability.dictationSessions.add(
-                value: 1,
-                attributes: [
-                    "state": .string("finish"),
-                    "outcome": .string(telemetryOutcome),
-                    "stop_reason": .string(String(describing: reason))
-                ]
-            )
-            if capturedDuration > 0 {
-                Observability.recordingDuration.record(
-                    value: capturedDuration,
-                    attributes: [
-                        "outcome": .string(telemetryOutcome),
-                        "stop_reason": .string(String(describing: reason))
-                    ]
-                )
-            }
-        }
 
         // Registered for the whole finish, so a quit landing mid-finish waits for
         // the transcript instead of racing the store write. The watchdog needs to be
@@ -1903,8 +1836,6 @@ final class AppState {
                 fileTimedOutRecording(url: url, totalSampleCount: result.totalSampleCount,
                                       configuration: configuration)
             }
-            span.setAttribute(key: "error.type", value: "finish_timeout")
-            span.status = .error(description: "Finish returned after timeout")
             return
         }
 
@@ -1965,14 +1896,6 @@ final class AppState {
                 ? "Couldn't save the recording — free up disk space and try again"
                 : "Disk full: the recording stopped early and later speech is missing")
         }
-
-        if case .failure = status {
-            span.setAttribute(key: "error.type", value: "dictation_failed")
-            span.status = .error(description: "Dictation failed")
-        } else {
-            telemetryOutcome = "success"
-            span.status = .ok
-        }
     }
 
     /// Off the release-to-paste path: confirm the microphone grant the press
@@ -2004,14 +1927,6 @@ final class AppState {
         logger.error(
             "Finish watchdog fired",
             metadata: ["timeout.seconds": "\(Self.finishWatchdogSeconds)"]
-        )
-        Observability.dictationSessions.add(
-            value: 1,
-            attributes: [
-                "state": .string("watchdog"),
-                "outcome": .string("error"),
-                "error.type": .string("timeout")
-            ]
         )
         DiagnosticsService.breadcrumb(
             category: "recording",
@@ -2192,47 +2107,7 @@ final class AppState {
         capturedSamples: [Float]? = nil
     ) async {
         guard !activeTranscriptionIDs.contains(record.id) else { return }
-        await Observability.tracer.spanBuilder(spanName: "transcription.run").withActiveSpan { span in
-            await transcribeRecording(
-                record,
-                pasteTarget: pasteTarget,
-                configuration: configuration,
-                sessionID: sessionID,
-                span: span,
-                capturedSamples: capturedSamples
-            )
-        }
-    }
-
-    private func transcribeRecording(
-        _ record: TranscriptRecord,
-        pasteTarget: NSRunningApplication?,
-        configuration: TranscriptionJobConfiguration,
-        sessionID: UUID?,
-        span: any SpanBase,
-        capturedSamples: [Float]?
-    ) async {
-        let telemetryStartedAt = Date()
-        var telemetryOutcome = "error"
         let isRetry = sessionID == nil
-        span.setAttributes([
-            "transcription.engine": .string(configuration.engine.rawValue),
-            "transcription.model": .string(configuration.engine.modelIdentifier),
-            "transcription.retry": .bool(isRetry),
-            "transcription.input": .string(capturedSamples == nil ? "file" : "samples")
-        ])
-        defer {
-            let attributes: [String: AttributeValue] = [
-                "engine": .string(configuration.engine.rawValue),
-                "outcome": .string(telemetryOutcome),
-                "retry": .bool(isRetry)
-            ]
-            Observability.transcriptionOperations.add(value: 1, attributes: attributes)
-            Observability.transcriptionDuration.record(
-                value: Date().timeIntervalSince(telemetryStartedAt),
-                attributes: attributes
-            )
-        }
 
         activeTranscriptionIDs.insert(record.id)
         isTranscribing = true
@@ -2241,7 +2116,6 @@ final class AppState {
         } catch {
             // Best-effort, like every history write on this path: the decode only
             // needs the audio file.
-            span.setAttribute(key: "history.error.code", value: (error as NSError).code)
             noteHistoryFailure(error)
         }
         records = store.records
@@ -2351,10 +2225,6 @@ final class AppState {
                 soundService.play(.transcriptionSucceeded)
             lifecycleLogger.info("Dictation stage finished", metadata: ["event": "stage_finished", "stage": "completion_sound", "session": "\(sessionID ?? record.id)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - completion_soundStarted) * 1000)"])
             }
-            telemetryOutcome = "success"
-            span.setAttribute(key: "transcription.actual_engine", value: outcome.engine.rawValue)
-            span.setAttribute(key: "outcome", value: telemetryOutcome)
-            span.status = .ok
             logger.info(
                 "Transcription completed",
                 metadata: [
@@ -2401,8 +2271,6 @@ final class AppState {
             if selectedRecordID == record.id {
                 selectedRecordID = records.first?.id
             }
-            telemetryOutcome = "discarded"
-            span.setAttribute(key: "outcome", value: telemetryOutcome)
             if canUpdateLifecycleUI(for: sessionID) {
                 status = .failure("No speech detected")
             }
@@ -2418,13 +2286,6 @@ final class AppState {
                 selectedRecordID = record.id
                 lastError = error.localizedDescription
             }
-            let errorType = String(describing: type(of: error))
-            span.setAttributes([
-                "error.type": .string(errorType),
-                "error.code": .int((error as NSError).code),
-                "outcome": .string(telemetryOutcome)
-            ])
-            span.status = .error(description: "Transcription failed")
             logger.warning(
                 "Transcription failed; queued for retry",
                 metadata: [

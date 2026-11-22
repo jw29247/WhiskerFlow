@@ -23,7 +23,7 @@ public enum AgencyVocabularyPolicy {
         try decodeReport(data).vocabulary
     }
 
-    /// The glossary is served live from a branch and reaches every user within the
+    /// The glossary is served live from Atlas and reaches every user within the
     /// refresh window, so this decode — the only way the app ingests it — is where
     /// a rule that would rewrite everyday speech gets dropped.
     public static func decodeReport(_ data: Data) throws -> AgencyVocabularyDecodeReport {

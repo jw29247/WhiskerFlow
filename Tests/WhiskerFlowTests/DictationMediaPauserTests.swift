@@ -21,9 +21,38 @@ final class NowPlayingBox: @unchecked Sendable {
     }
 }
 
+/// Stands in for the resume delay: records what was asked for and returns at
+/// once, so no test depends on how long a real sleep takes.
+private final class ResumeDelayLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var delays: [UInt64] = []
+    var requested: [UInt64] { lock.withLock { delays } }
+    func sleep(_ nanoseconds: UInt64) { lock.withLock { delays.append(nanoseconds) } }
+}
+
+/// Holds a call inside the media helper until the test lets it finish.
+private final class HeldCall: @unchecked Sendable {
+    let entered: XCTestExpectation
+    private let release = DispatchSemaphore(value: 0)
+    init(_ entered: XCTestExpectation) { self.entered = entered }
+    func hold() {
+        entered.fulfill()
+        release.wait()
+    }
+    func finish() { release.signal() }
+}
+
+/// Counts calls across threads.
+private final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func next() -> Int { lock.withLock { () -> Int in count += 1; return count } }
+}
+
 @MainActor
 final class DictationMediaPauserTests: XCTestCase {
     private let log = MediaCommandLog()
+    private let delays = ResumeDelayLog()
 
     private func pauser(
         _ status: NowPlayingStatus?,
@@ -39,26 +68,43 @@ final class DictationMediaPauserTests: XCTestCase {
         bundleIDs: [Int32: String] = [:]
     ) -> DictationMediaPauser {
         let log = log
-        return DictationMediaPauser(ownPID: 1, ownBundleID: "agency.thatworks.WhiskerFlow",
-                                    readStatus: { box.status }, readProcesses: { processes },
-                                    bundleIDForPID: { bundleIDs[$0] },
-                                    send: { log.append($0); return true })
+        return pauser(readStatus: { box.status }, processes: processes, bundleIDs: bundleIDs,
+                      send: { log.append($0); return true })
     }
 
-    private func settle(_ seconds: Double = 0.1) async {
-        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+    private func pauser(
+        readStatus: @escaping @Sendable () -> NowPlayingStatus?,
+        processes: [CoreAudioProcesses.Process] = [],
+        bundleIDs: [Int32: String] = [:],
+        send: @escaping @Sendable (DictationMediaPauser.Command) -> Bool
+    ) -> DictationMediaPauser {
+        let delays = delays
+        return DictationMediaPauser(ownPID: 1, ownBundleID: "agency.thatworks.WhiskerFlow",
+                                    readStatus: readStatus, readProcesses: { processes },
+                                    bundleIDForPID: { bundleIDs[$0] }, send: send,
+                                    sleep: { delays.sleep($0) })
+    }
+
+    /// Waits for the check, pause, resume and play already under way, in the
+    /// order each can start the next.
+    private func settle(_ pauser: DictationMediaPauser) async {
+        await pauser.check?.value
+        await pauser.pausing?.value
+        await pauser.resume?.value
+        await pauser.playing?.value
     }
 
     func testPausesWhatIsPlayingAndPlaysItAgainAfterDictation() async {
         let box = NowPlayingBox(NowPlayingStatus(isPlaying: true, pid: 42))
         let pauser = pauser(box)
         pauser.dictationStarted(inCall: false)
-        await settle()
+        await settle(pauser)
         XCTAssertEqual(log.sent, [.pause])
         box.status = NowPlayingStatus(isPlaying: false, pid: 42)
         pauser.dictationEnded()
-        await settle(0.6)
+        await settle(pauser)
         XCTAssertEqual(log.sent, [.pause, .play])
+        XCTAssertEqual(delays.requested, [DictationMediaPauser.resumeDelayNanoseconds])
     }
 
     /// 2 October: the key was pressed with nothing playing, which started Music.
@@ -66,9 +112,9 @@ final class DictationMediaPauserTests: XCTestCase {
         for status in [NowPlayingStatus(isPlaying: false, pid: 42), NowPlayingStatus(isPlaying: false, pid: 0), nil] {
             let pauser = pauser(status)
             pauser.dictationStarted(inCall: false)
-            await settle()
+            await settle(pauser)
             pauser.dictationEnded()
-            await settle(0.6)
+            await settle(pauser)
         }
         XCTAssertEqual(log.sent, [])
     }
@@ -82,9 +128,9 @@ final class DictationMediaPauserTests: XCTestCase {
                                                   isRunningInput: true, isRunningOutput: true)],
                                 bundleIDs: [42: "com.google.Chrome"])
         undetected.dictationStarted(inCall: false)
-        await settle()
+        await settle(detected)
+        await settle(undetected)
         XCTAssertEqual(log.sent, [])
-        withExtendedLifetime((detected, undetected)) {}
     }
 
     /// A webcam app, or WhiskerFlow's own capture, on the microphone used to
@@ -97,7 +143,7 @@ final class DictationMediaPauserTests: XCTestCase {
         let pauser = pauser(NowPlayingStatus(isPlaying: true, pid: 42), processes: processes,
                             bundleIDs: [42: "com.spotify.client"])
         pauser.dictationStarted(inCall: false)
-        await settle()
+        await settle(pauser)
         XCTAssertEqual(log.sent, [.pause])
     }
 
@@ -105,22 +151,28 @@ final class DictationMediaPauserTests: XCTestCase {
         let box = NowPlayingBox(NowPlayingStatus(isPlaying: true, pid: 42))
         let pauser = pauser(box)
         pauser.dictationStarted(inCall: false)
-        await settle()
+        await settle(pauser)
         box.status = NowPlayingStatus(isPlaying: false, pid: 42)
+        // The next dictation starts within the resume delay: the resume is
+        // still pending when it is cancelled.
         pauser.dictationEnded()
+        let pendingResume = pauser.resume
         pauser.dictationStarted(inCall: false)
-        await settle(0.6)
+        await pendingResume?.value
+        await settle(pauser)
         XCTAssertEqual(log.sent, [.pause], "no play between, no second pause")
         pauser.dictationEnded()
-        await settle(0.6)
+        await settle(pauser)
         XCTAssertEqual(log.sent, [.pause, .play])
     }
 
     func testATapThatEndsBeforeTheCheckLeavesMediaAlone() async {
         let pauser = pauser(NowPlayingStatus(isPlaying: true, pid: 42))
         pauser.dictationStarted(inCall: false)
+        let supersededCheck = pauser.check
         pauser.dictationEnded()
-        await settle(0.6)
+        await supersededCheck?.value
+        await settle(pauser)
         XCTAssertEqual(log.sent, [])
     }
 
@@ -128,23 +180,31 @@ final class DictationMediaPauserTests: XCTestCase {
     /// asking macOS what's playing must keep the media paused.
     func testDictationDuringTheResumeCheckStaysPaused() async {
         let box = NowPlayingBox(NowPlayingStatus(isPlaying: true, pid: 42))
+        let resumeRead = HeldCall(expectation(description: "the resume is reading the status"))
+        let reads = CallCounter()
         let log = log
-        let pauser = DictationMediaPauser(
-            ownPID: 1, ownBundleID: "agency.thatworks.WhiskerFlow",
-            readStatus: { Thread.sleep(forTimeInterval: 0.3); return box.status }, readProcesses: { [] },
-            bundleIDForPID: { _ in nil }, send: { log.append($0); return true }
+        let pauser = pauser(
+            // The second read is the first resume's check; it hangs until released.
+            readStatus: {
+                if reads.next() == 2 { resumeRead.hold() }
+                return box.status
+            },
+            send: { log.append($0); return true }
         )
         pauser.dictationStarted(inCall: false)
-        await settle(0.5)
+        await settle(pauser)
         XCTAssertEqual(log.sent, [.pause])
         box.status = NowPlayingStatus(isPlaying: false, pid: 42)
         pauser.dictationEnded()
-        await settle(0.55) // past the 400 ms delay, inside the 300 ms status read
+        let firstResume = pauser.resume
+        await fulfillment(of: [resumeRead.entered], timeout: 10) // past the delay, inside the status read
         pauser.dictationStarted(inCall: false)
-        await settle(1)
+        resumeRead.finish()
+        await firstResume?.value
+        await settle(pauser)
         XCTAssertEqual(log.sent, [.pause], "no play while the second dictation records")
         pauser.dictationEnded()
-        await settle(1.2)
+        await settle(pauser)
         XCTAssertEqual(log.sent, [.pause, .play])
     }
 
@@ -152,26 +212,26 @@ final class DictationMediaPauserTests: XCTestCase {
     /// media as paused and leave it playing into the recording.
     func testDictationWhilePlayIsLandingPausesAgain() async {
         let box = NowPlayingBox(NowPlayingStatus(isPlaying: true, pid: 42))
+        let landing = HeldCall(expectation(description: "the play is sent"))
         let log = log
-        let pauser = DictationMediaPauser(
-            ownPID: 1, ownBundleID: "agency.thatworks.WhiskerFlow",
-            readStatus: { box.status }, readProcesses: { [] }, bundleIDForPID: { _ in nil },
+        let pauser = pauser(
+            readStatus: { box.status },
             send: { command in
                 log.append(command)
-                if command == .play { Thread.sleep(forTimeInterval: 0.3) }
+                if command == .play { landing.hold() }
                 box.status = NowPlayingStatus(isPlaying: command == .play, pid: 42)
                 return true
             }
         )
         pauser.dictationStarted(inCall: false)
-        await settle()
+        await settle(pauser)
         pauser.dictationEnded()
-        await settle(0.5) // the play is sent and has not landed yet
+        await fulfillment(of: [landing.entered], timeout: 10) // the play is sent and has not landed yet
         XCTAssertEqual(log.sent, [.pause, .play])
         pauser.dictationStarted(inCall: false)
-        await settle(0.5)
+        landing.finish()
+        await settle(pauser)
         XCTAssertEqual(log.sent, [.pause, .play, .pause])
-        withExtendedLifetime(pauser) {}
     }
 
     /// The user played something else, or resumed it themselves, while
@@ -182,10 +242,10 @@ final class DictationMediaPauserTests: XCTestCase {
             let box = NowPlayingBox(NowPlayingStatus(isPlaying: true, pid: 42))
             let pauser = pauser(box)
             pauser.dictationStarted(inCall: false)
-            await settle()
+            await settle(pauser)
             box.status = after
             pauser.dictationEnded()
-            await settle(0.6)
+            await settle(pauser)
         }
         XCTAssertEqual(log.sent, [.pause, .pause, .pause])
     }

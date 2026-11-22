@@ -2,9 +2,9 @@ import XCTest
 import WhiskerFlowCore
 @testable import WhiskerFlowAppSupport
 
-/// Guards the two checked-in copies of the agency glossary. The repo-root copy is
-/// what every installed app fetches at runtime, so a bad rule there ships without
-/// a release.
+/// Guards the two checked-in copies of the agency glossary. Current builds fetch
+/// the glossary from Atlas, but installed versions released before that still
+/// fetch the repo-root copy at runtime, so a bad rule there ships without a release.
 final class SharedGlossaryValidationTests: XCTestCase {
     private struct Projection: Equatable, CustomStringConvertible {
         let find: String

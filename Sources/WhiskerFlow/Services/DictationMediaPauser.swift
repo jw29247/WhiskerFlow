@@ -18,10 +18,14 @@ final class DictationMediaPauser {
     enum Command: Sendable { case pause, play }
 
     private var session = MediaPauseSession()
-    private var check: Task<Void, Never>?
-    private var resume: Task<Void, Never>?
+    /// The key-press check. This and the other in-flight work are readable so
+    /// tests can wait for it instead of sleeping for a guessed duration.
+    private(set) var check: Task<Void, Never>?
+    /// The pause command, until the app confirms or the helper gives up.
+    private(set) var pausing: Task<Void, Never>?
+    private(set) var resume: Task<Void, Never>?
     /// The play command, until the app confirms or the helper gives up.
-    private var playing: Task<Void, Never>?
+    private(set) var playing: Task<Void, Never>?
     private var generation = 0
     private let ownPID: Int32
     private let ownBundleID: String?
@@ -30,6 +34,8 @@ final class DictationMediaPauser {
     private let bundleIDForPID: @Sendable (Int32) -> String?
     /// Returns whether the app reported the new state.
     private let send: @Sendable (Command) -> Bool
+    /// Waits out the resume delay; cancellation may end it early.
+    private let sleep: @Sendable (UInt64) async -> Void
 
     init(
         ownPID: Int32 = ProcessInfo.processInfo.processIdentifier,
@@ -44,7 +50,8 @@ final class DictationMediaPauser {
             case .pause: return NowPlayingBridge.pause()
             case .play: return NowPlayingBridge.play()
             }
-        }
+        },
+        sleep: @escaping @Sendable (UInt64) async -> Void = { try? await Task.sleep(nanoseconds: $0) }
     ) {
         self.ownPID = ownPID
         self.ownBundleID = ownBundleID
@@ -52,6 +59,7 @@ final class DictationMediaPauser {
         self.readProcesses = readProcesses
         self.bundleIDForPID = bundleIDForPID
         self.send = send
+        self.sleep = sleep
     }
 
     /// Called at key press. The check runs off the main thread and never
@@ -102,7 +110,7 @@ final class DictationMediaPauser {
             guard decision == .pause else { return }
             self.session.didPause(pid: pid)
             let send = self.send
-            Task.detached(priority: .userInitiated) {
+            self.pausing = Task.detached(priority: .userInitiated) {
                 let confirmed = send(.pause)
                 Self.log("media_paused", confirmed: confirmed)
             }
@@ -119,9 +127,9 @@ final class DictationMediaPauser {
 
     private func scheduleResume() {
         guard session.isPaused, resume == nil else { return }
-        let (send, readStatus) = (send, readStatus)
+        let (send, readStatus, sleep) = (send, readStatus, sleep)
         resume = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: Self.resumeDelayNanoseconds)
+            await sleep(Self.resumeDelayNanoseconds)
             guard let self, !Task.isCancelled, let pausedPID = self.session.pausedPID else { return }
             // Only the app dictation paused, and only if it is still paused.
             let decision = await Task.detached(priority: .userInitiated) {

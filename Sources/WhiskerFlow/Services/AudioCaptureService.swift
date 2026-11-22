@@ -986,7 +986,7 @@ final class AudioCaptureService {
             "elapsed_ms": "\((now - startedAt) * 1000)"
         ])
         active = capture
-        Observability.setAudioCaptureActive(true, source: captureActivitySource)
+        LocalDiagnostics.setAudioCaptureActive(true, source: captureActivitySource)
         started = true
         startInterruptionWatchdog(for: capture, generation: observation)
         logger.info(
@@ -1456,7 +1456,7 @@ final class AudioCaptureService {
         stopObservingConfigurationChanges()
         guard let active else { return }
         self.active = nil
-        Observability.setAudioCaptureActive(false, source: captureActivitySource)
+        LocalDiagnostics.setAudioCaptureActive(false, source: captureActivitySource)
         // Every buffered frame is in the spool before the caller reads it;
         // only CoreAudio's stop is deferred.
         active.finishDelivery()

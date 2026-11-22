@@ -1,6 +1,5 @@
 import Foundation
 import Logging
-import OpenTelemetryApi
 
 final class MainThreadHealthMonitor: @unchecked Sendable {
     static let shared = MainThreadHealthMonitor()
@@ -94,7 +93,6 @@ final class MainThreadHealthMonitor: @unchecked Sendable {
                 fields["elapsed_ms"] = String(elapsed * 1000)
                 fields["stall_id"] = stallID
                 logger.warning("Main thread response delayed", metadata: fields.mapValues { .string($0) })
-                Observability.mainThreadStalls.add(value: 1)
                 if captureStacks {
                     stacks.captureIfNeeded(memoryPressure: pressure, audioCaptureActive: !audioCaptureSources.isEmpty)
                 }
@@ -104,7 +102,6 @@ final class MainThreadHealthMonitor: @unchecked Sendable {
                 fields["elapsed_ms"] = String(elapsed * 1000)
                 fields["stall_id"] = stallID
                 logger.notice("Main thread responding again", metadata: fields.mapValues { .string($0) })
-                Observability.mainThreadStallDuration.record(value: elapsed)
                 stallID = nil
             case let .monitoringGap(elapsed):
                 stallID = nil

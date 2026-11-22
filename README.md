@@ -5,7 +5,7 @@ transcribes locally and pastes the text wherever your cursor is.
 
 - **Fast & private** — dictation uses Parakeet TDT v3 on-device by default. Optional
   Meeting Mode uploads meeting recordings and transcripts to the connected Atlas
-  account. Operational telemetry excludes audio and transcript text.
+  account. No telemetry or crash reports are sent; diagnostics stay on this Mac.
 - **Zero-setup install** — no Python, no Homebrew. The model downloads itself on first use.
 - **Works offline too** — a built-in Apple Speech engine needs no download, for the languages
   macOS can recognise on this Mac. It never sends audio to Apple.
@@ -80,12 +80,6 @@ Whisper CLI) was removed; a build that finds its downloaded models deletes them.
 swift build          # build
 swift test           # run the Core and AppSupport test suites
 swift run WhiskerFlow # run (or use script/build_and_run.sh to run as a .app bundle)
-```
-
-Verify that a span, structured log, and metric reach Superlog:
-
-```sh
-SUPERLOG_LIVE_SMOKE=1 swift test --filter ObservabilitySmokeTests
 ```
 
 Package a distributable DMG + zip:

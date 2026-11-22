@@ -1,16 +1,23 @@
 # Investigate a freeze or delayed dictation
 
-Ask for the time of the incident, the app version, and the diagnostic ID from **Settings → App → Performance diagnostics**.
-The ID is a random identifier for an installation. It contains no account name, hardware identifier, or transcript.
+WhiskerFlow sends no telemetry, crash reports or diagnostics anywhere. Everything below is on the affected Mac, so the evidence has to come from that Mac.
+Ask for the time of the incident and the app version.
 
-## Search fleet telemetry
+## Inspect local evidence
 
-In the existing Superlog environment on Railway, select service `whiskerflow.macos`.
-Filter resource attribute `installation.id` by the diagnostic ID and restrict the time range to the incident.
-Every signal also carries `service.instance.id` for the launch, `service.version`, `app.build`, and `os.version`.
-The signed bundle's build stamp supplies the revision when launch environment variables are absent.
+Run on the affected Mac:
 
-Inspect these log attributes:
+```sh
+python3 script/review_diagnostics.py --hours 2
+```
+
+The script reads only `~/Library/Logs/WhiskerFlow/diagnostics*.jsonl`.
+It summarizes stalls, slow deliveries and hotkeys, recent permission state, and scheduling gaps.
+Every row carries `launch` (a random ID for that launch, not persisted), `build`, `pid`, `timestamp` and `uptime`.
+Three files of at most 2 MB limit local retention, and the write queue is bounded.
+The same events also go to the macOS unified log under the app's bundle identifier.
+
+Each row has an `event`:
 
 | `event` | Evidence |
 | --- | --- |
@@ -24,15 +31,11 @@ Inspect these log attributes:
 | `finish_returned`, `paste_returned` | End-to-end finish and delivery latency. |
 | `resource_snapshot` | App and system CPU, resident memory, swap activity, thermal state, and observed memory pressure. |
 | `system_sleep`, `system_wake` | Sleep boundaries that reset outstanding main queue probes. |
+| `diagnostic_error`, `diagnostic_breadcrumb` | A failure or lifecycle step recorded by the app: an allow-listed `category` (`recording`, `audio`, `model`, `storage`, `glossary`, `network`), an `error_code` where there is one, and fixed-vocabulary fields such as `phase`. Error descriptions are never written. |
 
-Use `app.main_thread.stalls` and `app.main_thread.stall.duration` to compare freeze counts and recovered durations across versions.
-Use `app.operation.duration` and `app.operation.slow`, grouped by `operation`, to find slow stages.
-The slow thresholds are 250 ms for hotkey dispatch, one second for capture startup and most stages, two seconds for finish or paste, and five seconds for recognition.
-Recognition time also depends on recording length; the threshold flags an investigation, not a failed transcription.
-The existing `dictation.finish` and `transcription.run` traces provide operation context.
-
-There is no new backend service or alert rule to deploy. This uses the existing OTLP intake, collector, and storage.
-New fields appear only after users install a release containing these changes.
+The `elapsed_ms` of `hotkey_transition`, `capture_start_timing`, `stage_finished`, `finish_returned` and `paste_returned` gives each operation's duration.
+As a rule of thumb, look into hotkey dispatch over 250 ms, capture startup and most stages over one second, finish or paste over two seconds, and recognition over five seconds.
+Recognition time also depends on recording length; a long recognition is a reason to investigate, not a failed transcription.
 
 ## Distinguish background input failures
 
@@ -48,36 +51,8 @@ The original value is saved before macOS is changed. After a crash or force quit
 
 Inspect `globe_key_action`. A value such as `dictation`, `emoji`, or `change_input_source` while Fn is selected means macOS still assigns a competing action. If the automatic change fails, use **Keyboard settings → Press 🌐 key to → Do Nothing**, or select another WhiskerFlow shortcut. The diagnostics monitor itself only reads this setting.
 
-## Inspect local evidence
-
-Run on the affected Mac:
-
-```sh
-python3 script/review_diagnostics.py --hours 2
-```
-
-The script reads only `~/Library/Logs/WhiskerFlow/diagnostics*.jsonl`.
-It summarizes stalls, slow deliveries and hotkeys, recent permission state, and scheduling gaps.
-Local logs use the same IDs as remote telemetry in `installation_id` and `launch`.
-Three files of at most 2 MB limit local retention. Offline export retries and diagnostic queues remain bounded.
+## Stack excerpts
 
 Stack excerpts remain in `~/Library/Logs/WhiskerFlow/stacks` on the affected Mac.
 Stack capture is rate limited and skipped during audio capture or observed memory pressure because sampling can interrupt audio.
-Raw sample reports, audio, transcripts, account names, and window titles are not added to performance reporting.
-
-## Verify delivery
-
-```sh
-SUPERLOG_LIVE_SMOKE=1 swift test --filter ObservabilitySmokeTests
-```
-
-The live smoke verifies HTTP acceptance of traces, logs, and metrics.
-It does not by itself prove storage or dashboard visibility. Confirm those by querying the emitted `telemetry.verify` trace in Superlog.
-
-To exercise an intentional 2.5-second main queue delay and export synthetic stage timing, run:
-
-```sh
-SUPERLOG_PERFORMANCE_SMOKE=1 swift test --filter ObservabilitySmokeTests
-```
-
-This opt-in test verifies paired local stall and recovery records, installation identity, resource context, and HTTP acceptance of logs and metrics.
+Raw sample reports, audio, transcripts, account names, and window titles are never written to these logs.

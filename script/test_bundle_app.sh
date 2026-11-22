@@ -14,6 +14,14 @@ done
 cmp "$ROOT_DIR/Sources/WhiskerFlow/Resources/shared-vocabulary.json" \
   "$APP_BUNDLE/Contents/Resources/WhiskerFlow_WhiskerFlow.bundle/shared-vocabulary.json"
 test -f "$APP_BUNDLE/Contents/Frameworks/llama.framework/llama"
+# The Now Playing helper must not record where it was built.
+HELPER="$APP_BUNDLE/Contents/Frameworks/libWhiskerFlowNowPlaying.dylib"
+HELPER_NAMES="$(otool -D "$HELPER")"
+[[ "$HELPER_NAMES" == *$'\n'"@rpath/libWhiskerFlowNowPlaying.dylib"* ]]
+if LC_ALL=C /usr/bin/grep -qF -e "$HOME/" "$HELPER"; then
+  echo "FAIL: the Now Playing helper contains a local home-directory path" >&2
+  exit 1
+fi
 cmp "$ROOT_DIR/Sources/WhiskerFlow/Resources/CleanupNotices.txt" \
   "$APP_BUNDLE/Contents/Resources/WhiskerFlow_WhiskerFlow.bundle/CleanupNotices.txt"
 codesign --verify --deep --strict "$APP_BUNDLE"

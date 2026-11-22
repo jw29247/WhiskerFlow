@@ -1,7 +1,7 @@
 import Foundation
 
-/// The first-run setup screens, in order. Raw values are the only thing
-/// telemetry ever records about onboarding, so they must stay fixed words.
+/// The first-run setup screens, in order. Raw values are persisted with the
+/// saved setup progress, so they must stay fixed words.
 public enum OnboardingStep: String, CaseIterable, Codable, Sendable, Comparable {
     case welcome, permissions, microphone, shortcut, language, model, practice, extras, done
 
@@ -95,27 +95,8 @@ public struct OnboardingProgress: Codable, Equatable, Sendable {
     public var isInProgress: Bool { startedAt != nil && finishedAt == nil }
 }
 
-public enum OnboardingOutcome: String, Sendable {
-    case viewed, completed, skipped, dismissed, resumed, finished
-}
-
-/// One anonymous onboarding event: a fixed step name and a fixed outcome word.
-/// It carries no content, device name, shortcut or transcript by construction.
-public struct OnboardingTelemetryEvent: Equatable, Sendable {
-    public let step: OnboardingStep
-    public let outcome: OnboardingOutcome
-
-    public init(step: OnboardingStep, outcome: OnboardingOutcome) {
-        self.step = step
-        self.outcome = outcome
-    }
-
-    /// Keys match `DiagnosticPrivacy`'s allow-list, so these values survive its filter.
-    public var attributes: [String: String] { ["step": step.rawValue, "outcome": outcome.rawValue] }
-}
-
-/// The setup state machine: which screen is showing, which are satisfied, and
-/// what moving between them records. The view owns no step logic of its own.
+/// The setup state machine: which screen is showing and which are satisfied.
+/// The view owns no step logic of its own.
 public struct OnboardingFlow: Equatable, Sendable {
     public private(set) var progress: OnboardingProgress
 
@@ -154,22 +135,20 @@ public struct OnboardingFlow: Equatable, Sendable {
         step <= progress.furthest
     }
 
-    /// Starts (or resumes) a setup run. Returns the events to record.
-    public mutating func begin(now: Date = Date()) -> [OnboardingTelemetryEvent] {
+    /// Starts (or resumes) a setup run.
+    public mutating func begin(now: Date = Date()) {
         if progress.isInProgress {
             progress.dismissedAt = nil
-            return [OnboardingTelemetryEvent(step: current, outcome: .resumed)]
+            return
         }
         progress = OnboardingProgress(startedAt: now)
-        return [OnboardingTelemetryEvent(step: .welcome, outcome: .viewed)]
     }
 
     /// Records that a screen's own check passed (a voice was heard, the shortcut
     /// fired, a practice dictation landed). Idempotent.
-    public mutating func markPassed(_ step: OnboardingStep) -> [OnboardingTelemetryEvent] {
-        guard progress.completed.insert(step).inserted else { return [] }
+    public mutating func markPassed(_ step: OnboardingStep) {
+        guard progress.completed.insert(step).inserted else { return }
         progress.skipped.remove(step)
-        return [OnboardingTelemetryEvent(step: step, outcome: .completed)]
     }
 
     /// A passed check no longer holds (e.g. the shortcut or microphone changed).
@@ -180,23 +159,19 @@ public struct OnboardingFlow: Equatable, Sendable {
     /// Continue, or Skip on an unsatisfied screen. Tested screens are recorded
     /// as completed the moment their check passes; an untested screen counts as
     /// completed when the user moves past it satisfied.
-    public mutating func advance(_ conditions: OnboardingConditions, now: Date = Date()) -> [OnboardingTelemetryEvent] {
-        guard canContinue(conditions) else { return [] }
+    public mutating func advance(_ conditions: OnboardingConditions, now: Date = Date()) {
+        guard canContinue(conditions) else { return }
         let step = current
         if step == .done { return finish(now: now) }
-        var events: [OnboardingTelemetryEvent] = []
         if isSatisfied(step, conditions) || step == .welcome {
             if !Self.testedSteps.contains(step), progress.completed.insert(step).inserted {
                 progress.skipped.remove(step)
-                events.append(OnboardingTelemetryEvent(step: step, outcome: .completed))
             }
-        } else if progress.skipped.insert(step).inserted {
-            events.append(OnboardingTelemetryEvent(step: step, outcome: .skipped))
+        } else {
+            progress.skipped.insert(step)
         }
-        guard let next = step.next else { return events }
+        guard let next = step.next else { return }
         move(to: next)
-        events.append(OnboardingTelemetryEvent(step: next, outcome: .viewed))
-        return events
     }
 
     public mutating func back() {
@@ -204,31 +179,27 @@ public struct OnboardingFlow: Equatable, Sendable {
         progress.current = previous
     }
 
-    public mutating func jump(to step: OnboardingStep) -> [OnboardingTelemetryEvent] {
-        guard canJump(to: step), step != current else { return [] }
+    public mutating func jump(to step: OnboardingStep) {
+        guard canJump(to: step), step != current else { return }
         progress.current = step
-        return [OnboardingTelemetryEvent(step: step, outcome: .viewed)]
     }
 
-    public mutating func finish(now: Date = Date()) -> [OnboardingTelemetryEvent] {
-        guard !progress.isFinished else { return [] }
+    public mutating func finish(now: Date = Date()) {
+        guard !progress.isFinished else { return }
         progress.current = .done
         progress.furthest = .done
         progress.finishedAt = now
-        return [OnboardingTelemetryEvent(step: .done, outcome: .finished)]
     }
 
     /// "Set up later": progress is kept so setup can resume where it stopped.
-    public mutating func dismiss(now: Date = Date()) -> [OnboardingTelemetryEvent] {
-        guard !progress.isFinished else { return [] }
+    public mutating func dismiss(now: Date = Date()) {
+        guard !progress.isFinished else { return }
         progress.dismissedAt = now
-        return [OnboardingTelemetryEvent(step: current, outcome: .dismissed)]
     }
 
     /// "Run setup again" starts over from the welcome screen, keeping nothing.
-    public mutating func restart(now: Date = Date()) -> [OnboardingTelemetryEvent] {
+    public mutating func restart(now: Date = Date()) {
         progress = OnboardingProgress(startedAt: now)
-        return [OnboardingTelemetryEvent(step: .welcome, outcome: .viewed)]
     }
 
     private mutating func move(to step: OnboardingStep) {

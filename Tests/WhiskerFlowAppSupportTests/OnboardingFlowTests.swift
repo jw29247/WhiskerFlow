@@ -12,66 +12,68 @@ final class OnboardingFlowTests: XCTestCase {
         XCTAssertNil(OnboardingStep.welcome.previous)
     }
 
-    func testBeginStartsAtWelcomeAndRecordsTheView() {
+    func testBeginStartsAtWelcome() {
         var flow = OnboardingFlow()
-        let events = flow.begin(now: Date(timeIntervalSince1970: 10))
+        flow.begin(now: Date(timeIntervalSince1970: 10))
         XCTAssertEqual(flow.current, .welcome)
         XCTAssertTrue(flow.progress.isInProgress)
-        XCTAssertEqual(events, [OnboardingTelemetryEvent(step: .welcome, outcome: .viewed)])
+        XCTAssertEqual(flow.progress.startedAt, Date(timeIntervalSince1970: 10))
     }
 
     func testPermissionsGateContinueUntilBothAreGranted() {
         var flow = OnboardingFlow(progress: OnboardingProgress(current: .permissions, startedAt: Date()))
         XCTAssertFalse(flow.canContinue(OnboardingConditions(microphoneGranted: true)))
-        XCTAssertEqual(flow.advance(OnboardingConditions(microphoneGranted: true)), [])
+        flow.advance(OnboardingConditions(microphoneGranted: true))
         XCTAssertEqual(flow.current, .permissions)
+        XCTAssertFalse(flow.progress.completed.contains(.permissions))
 
-        let events = flow.advance(ready)
+        flow.advance(ready)
         XCTAssertEqual(flow.current, .microphone)
-        XCTAssertEqual(events, [
-            OnboardingTelemetryEvent(step: .permissions, outcome: .completed),
-            OnboardingTelemetryEvent(step: .microphone, outcome: .viewed)
-        ])
+        XCTAssertTrue(flow.progress.completed.contains(.permissions))
+        XCTAssertEqual(flow.progress.furthest, .microphone)
     }
 
     func testUnsatisfiedStepsAreSkippableAndRecordedAsSkipped() {
         var flow = OnboardingFlow(progress: OnboardingProgress(current: .microphone, furthest: .microphone, startedAt: Date()))
         XCTAssertTrue(flow.canContinue(ready))
-        let events = flow.advance(ready)
+        flow.advance(ready)
         XCTAssertEqual(flow.current, .shortcut)
-        XCTAssertEqual(events.first, OnboardingTelemetryEvent(step: .microphone, outcome: .skipped))
         XCTAssertTrue(flow.progress.skipped.contains(.microphone))
+        XCTAssertFalse(flow.progress.completed.contains(.microphone))
     }
 
     func testTestedStepIsSatisfiedOnlyAfterItsCheckPasses() {
         var flow = OnboardingFlow(progress: OnboardingProgress(current: .shortcut, furthest: .shortcut, startedAt: Date()))
         XCTAssertFalse(flow.isSatisfied(.shortcut, ready))
-        XCTAssertEqual(flow.markPassed(.shortcut), [OnboardingTelemetryEvent(step: .shortcut, outcome: .completed)])
-        XCTAssertEqual(flow.markPassed(.shortcut), [], "passing twice records once")
+        flow.markPassed(.shortcut)
+        flow.markPassed(.shortcut)
         XCTAssertTrue(flow.isSatisfied(.shortcut, ready))
-        // Continuing from a passed tested step does not record a second completion.
-        XCTAssertEqual(flow.advance(ready), [OnboardingTelemetryEvent(step: .language, outcome: .viewed)])
+        flow.advance(ready)
+        XCTAssertEqual(flow.current, .language)
+        XCTAssertTrue(flow.progress.completed.contains(.shortcut))
+        XCTAssertFalse(flow.progress.skipped.contains(.shortcut))
     }
 
     func testChangingWhatWasTestedRequiresTestingAgain() {
         var flow = OnboardingFlow()
-        _ = flow.markPassed(.shortcut)
+        flow.markPassed(.shortcut)
         flow.invalidate(.shortcut)
         XCTAssertFalse(flow.isSatisfied(.shortcut, ready))
-        XCTAssertEqual(flow.markPassed(.shortcut), [OnboardingTelemetryEvent(step: .shortcut, outcome: .completed)])
+        flow.markPassed(.shortcut)
+        XCTAssertTrue(flow.isSatisfied(.shortcut, ready))
     }
 
     func testPassingAfterSkippingClearsTheSkip() {
         var flow = OnboardingFlow(progress: OnboardingProgress(current: .practice, furthest: .practice, startedAt: Date()))
-        _ = flow.advance(ready)
+        flow.advance(ready)
         XCTAssertTrue(flow.progress.skipped.contains(.practice))
-        _ = flow.markPassed(.practice)
+        flow.markPassed(.practice)
         XCTAssertFalse(flow.progress.skipped.contains(.practice))
     }
 
     func testMicrophoneCheckStopsCountingOnceAccessIsRevoked() {
         var flow = OnboardingFlow()
-        _ = flow.markPassed(.microphone)
+        flow.markPassed(.microphone)
         XCTAssertTrue(flow.isSatisfied(.microphone, ready))
         XCTAssertFalse(flow.isSatisfied(.microphone, OnboardingConditions(accessibilityGranted: true)))
     }
@@ -86,14 +88,15 @@ final class OnboardingFlowTests: XCTestCase {
 
     func testAdvancingFromExtrasReachesDoneAndFromDoneFinishes() {
         var flow = OnboardingFlow(progress: OnboardingProgress(current: .extras, furthest: .extras, startedAt: Date()))
-        _ = flow.advance(ready)
+        flow.advance(ready)
         XCTAssertEqual(flow.current, .done)
         XCTAssertFalse(flow.progress.isFinished)
-        let events = flow.advance(ready, now: Date(timeIntervalSince1970: 99))
-        XCTAssertEqual(events, [OnboardingTelemetryEvent(step: .done, outcome: .finished)], "the last screen is finished, not skipped")
-        XCTAssertFalse(flow.progress.skipped.contains(.done))
+        flow.advance(ready, now: Date(timeIntervalSince1970: 99))
+        XCTAssertFalse(flow.progress.skipped.contains(.done), "the last screen is finished, not skipped")
         XCTAssertTrue(flow.progress.isFinished)
-        XCTAssertEqual(flow.finish(), [], "finishing twice records once")
+        XCTAssertEqual(flow.progress.finishedAt, Date(timeIntervalSince1970: 99))
+        flow.finish(now: Date(timeIntervalSince1970: 200))
+        XCTAssertEqual(flow.progress.finishedAt, Date(timeIntervalSince1970: 99), "finishing twice keeps the first finish")
     }
 
     func testJumpingIsLimitedToScreensAlreadyReached() {
@@ -101,44 +104,40 @@ final class OnboardingFlowTests: XCTestCase {
         XCTAssertTrue(flow.canJump(to: .welcome))
         XCTAssertTrue(flow.canJump(to: .model))
         XCTAssertFalse(flow.canJump(to: .practice))
-        XCTAssertEqual(flow.jump(to: .practice), [])
-        XCTAssertEqual(flow.jump(to: .model), [OnboardingTelemetryEvent(step: .model, outcome: .viewed)])
+        flow.jump(to: .practice)
+        XCTAssertEqual(flow.current, .shortcut)
+        flow.jump(to: .model)
+        XCTAssertEqual(flow.current, .model)
         flow.back()
         XCTAssertEqual(flow.current, .language)
         XCTAssertEqual(flow.progress.furthest, .model, "going back keeps the furthest screen")
     }
 
-    func testResumeReportsTheStepItStoppedOn() {
-        var flow = OnboardingFlow(progress: OnboardingProgress(current: .model, furthest: .model, startedAt: Date()))
-        XCTAssertEqual(flow.begin(), [OnboardingTelemetryEvent(step: .model, outcome: .resumed)])
+    func testResumeKeepsTheStepItStoppedOn() {
+        let started = Date(timeIntervalSince1970: 5)
+        var flow = OnboardingFlow(progress: OnboardingProgress(current: .model, furthest: .model, startedAt: started))
+        flow.begin()
         XCTAssertEqual(flow.current, .model)
+        XCTAssertEqual(flow.progress.startedAt, started)
     }
 
-    func testDismissRecordsDropOffWithoutLosingProgress() {
+    func testDismissKeepsProgress() {
         var flow = OnboardingFlow(progress: OnboardingProgress(current: .shortcut, furthest: .shortcut, startedAt: Date()))
-        XCTAssertEqual(flow.dismiss(), [OnboardingTelemetryEvent(step: .shortcut, outcome: .dismissed)])
+        flow.dismiss()
         XCTAssertEqual(flow.current, .shortcut)
         XCTAssertNotNil(flow.progress.dismissedAt)
-        XCTAssertEqual(flow.begin(), [OnboardingTelemetryEvent(step: .shortcut, outcome: .resumed)])
+        flow.begin()
+        XCTAssertEqual(flow.current, .shortcut)
         XCTAssertNil(flow.progress.dismissedAt, "resuming clears the dismissal")
     }
 
     func testRestartClearsEverything() {
         var flow = OnboardingFlow(progress: OnboardingProgress(current: .done, furthest: .done, completed: [.shortcut],
                                                                startedAt: Date(), finishedAt: Date()))
-        XCTAssertEqual(flow.restart(), [OnboardingTelemetryEvent(step: .welcome, outcome: .viewed)])
+        flow.restart()
         XCTAssertEqual(flow.current, .welcome)
         XCTAssertTrue(flow.progress.completed.isEmpty)
         XCTAssertTrue(flow.progress.isInProgress)
-    }
-
-    func testTelemetryCarriesOnlyAllowListedFixedWords() {
-        for step in OnboardingStep.allCases {
-            let event = OnboardingTelemetryEvent(step: step, outcome: .completed)
-            XCTAssertEqual(DiagnosticPrivacy.safeMetadata(from: event.attributes), event.attributes)
-            XCTAssertEqual(Set(event.attributes.keys), ["step", "outcome"])
-        }
-        XCTAssertTrue(DiagnosticPrivacy.allowsBreadcrumb(category: "onboarding"))
     }
 
     // MARK: - Launch policy

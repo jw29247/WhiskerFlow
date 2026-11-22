@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import OpenTelemetryApi
 import ScreenCaptureKit
 import WhiskerFlowAppSupport
 
@@ -13,7 +12,7 @@ struct MeetingVisualFrame: @unchecked Sendable {
 }
 
 /// Window-scoped, on-device fallback for Meet's visible tile activity.
-/// No pixels or participant names enter logs, telemetry, disk or network.
+/// No pixels or participant names enter logs, disk or network.
 enum MeetingVisualSpeakerReader {
   /// Per-request ScreenCaptureKit budget. Window enumeration alone can take
   /// several hundred milliseconds on a base M1 or Intel Mac.
@@ -44,11 +43,6 @@ enum MeetingVisualSpeakerReader {
       !snapshot.visualTiles.isEmpty, snapshot.visualTiles.count <= 60,
       CGPreflightScreenCaptureAccess()
     else { return nil }
-    let span = Observability.tracer.spanBuilder(spanName: "meeting.observe_visual_activity")
-      .startSpan()
-    defer { span.end() }
-    var succeeded = false
-    defer { if !succeeded { span.status = .error(description: "capture_unavailable") } }
     guard let window = await shareableWindow(pid: pid, frame: frame) else { return nil }
     let config = SCStreamConfiguration()
     let captureScale = min(1, 2048 / max(frame.width, frame.height))
@@ -67,7 +61,6 @@ enum MeetingVisualSpeakerReader {
       return nil
     }
     guard !Task.isCancelled else { return nil }
-    succeeded = true
     return .init(snapshot: snapshot, image: captured.0, capturedAtMs: captured.1)
   }
 

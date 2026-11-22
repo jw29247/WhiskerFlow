@@ -9,6 +9,14 @@
     <language>en</language>
     <!-- RELEASES: script/update_appcast.sh inserts new <item> entries directly below this line, newest first. -->
     <item>
+      <title>2.1.1</title>
+      <pubDate>Sun, 22 Nov 2026 14:32:17 +0000</pubDate>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+      <description><![CDATA[<p>Automatic meeting recording is now off. An earlier update turned it on without asking. If it was on for you, WhiskerFlow asks once whether you want it back. Until you say yes, it only records a meeting when you tell it to.</p><p>Apple Speech now runs only on your Mac. If macOS can't recognise a language offline, WhiskerFlow stops rather than sending audio to Apple.</p><p>Old history backups are removed, so your history retention setting covers every transcript. The one-line installer now checks the app with Gatekeeper and quits WhiskerFlow before replacing it.</p>]]></description>
+      <enclosure url="https://github.com/jw29247/WhiskerFlow/releases/download/v2.1.1/WhiskerFlow-2.1.1.zip" sparkle:version="28" sparkle:shortVersionString="2.1.1" sparkle:edSignature="xtdyXQ8bDpq8kNC0ywq4MwDYgkd2CpADvvmLlPIqqnGLG4xY9VtPltQYB7IRav/L+Avt+NSsCIhLh5tzoZPADg==" length="25615712" type="application/octet-stream"/>
+    </item>
+    <item>
       <title>2.1.0</title>
       <pubDate>Thu, 05 Nov 2026 18:47:47 +0000</pubDate>
       <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>

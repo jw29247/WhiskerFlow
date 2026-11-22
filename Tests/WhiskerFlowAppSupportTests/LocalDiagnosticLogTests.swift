@@ -18,7 +18,7 @@ final class LocalDiagnosticLogTests: XCTestCase {
         sink.flush()
         let lines = try String(contentsOf: root.appendingPathComponent("diagnostics.jsonl"), encoding: .utf8)
         let rows = try lines.split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: String]) }
-        XCTAssertEqual(rows[0]["installation_id"], DiagnosticIdentity.current.installationID)
+        XCTAssertNil(rows[0]["installation_id"])
         XCTAssertEqual(rows[0]["launch"], DiagnosticIdentity.current.launchID)
         XCTAssertEqual(rows[0]["stall_id"], stallID)
         XCTAssertEqual(rows[0]["app_active"], "false")
@@ -205,5 +205,41 @@ final class CallDetectionDiagnosticsTests: XCTestCase {
         XCTAssertTrue(text.contains("\"titles\":\"3\"") && text.contains("\"accessibility\":\"true\"") && text.contains("\"platform\":\"googleMeet\""))
         XCTAssertFalse(text.contains("abc-defg-hij"), "Titles and meeting codes never reach the log")
         XCTAssertFalse(text.contains("com.google.Chrome"))
+    }
+}
+
+final class DiagnosticsServiceLocalLogTests: XCTestCase {
+    /// `DiagnosticsService.capture` and `breadcrumb` log through this label; only
+    /// the allow-listed category, code and metadata may reach the file.
+    func testFailuresAndBreadcrumbsKeepOnlyAllowListedFields() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sink = LocalDiagnosticLog(directory: root)
+        let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.Diagnostics", factory: { LocalDiagnosticLogHandler(label: $0, sink: sink) })
+        logger.error("private error description", metadata: [
+            "event": "diagnostic_error", "category": "audio", "error_code": "-10877",
+            "transcript": "private words", "error_description": "private /Users/person/file.wav"
+        ])
+        logger.info("private message", metadata: [
+            "event": "diagnostic_breadcrumb", "category": "recording", "phase": "finishing",
+            "stop_reason": "private words here", "device_name": "private AirPods"
+        ])
+        logger.error("private", metadata: ["event": "diagnostic_error", "category": "private", "error_code": "1"])
+        sink.flush()
+        let lines = try String(contentsOf: root.appendingPathComponent("diagnostics.jsonl"), encoding: .utf8)
+        let rows = try lines.split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: String]) }
+        XCTAssertEqual(rows.count, 2, "an unknown category is not written")
+        XCTAssertEqual(rows[0]["event"], "diagnostic_error")
+        XCTAssertEqual(rows[0]["category"], "audio")
+        XCTAssertEqual(rows[0]["error_code"], "-10877")
+        XCTAssertEqual(rows[0]["level"], "error")
+        XCTAssertEqual(rows[1]["event"], "diagnostic_breadcrumb")
+        XCTAssertEqual(rows[1]["category"], "recording")
+        XCTAssertEqual(rows[1]["phase"], "finishing")
+        XCTAssertNil(rows[1]["stop_reason"])
+        let expected: Set = ["event", "category", "error_code", "level", "timestamp", "uptime", "pid", "launch", "build"]
+        XCTAssertTrue(Set(rows[0].keys).isSubset(of: expected), "unexpected keys: \(rows[0].keys)")
+        XCTAssertFalse(lines.contains("private"))
+        XCTAssertFalse(lines.contains("transcript"))
     }
 }
