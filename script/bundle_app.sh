@@ -104,7 +104,27 @@ if [[ -z "$LLAMA_FRAMEWORK" || ! -d "$LLAMA_FRAMEWORK" ]]; then
   exit 1
 fi
 mkdir -p "$APP_BUNDLE/Contents/Frameworks"
-ditto "$LLAMA_FRAMEWORK" "$APP_BUNDLE/Contents/Frameworks/llama.framework"
+# The XCFramework's macOS slice is universal, but the app runs only on Apple
+# Silicon: thin the copy in the app to arm64 (the cached artifact is untouched).
+# lipo rewrites only the binary inside Versions/A, so the framework layout and
+# its symlinks stay as ditto copied them, and the framework is signed below.
+# (`ditto --arch arm64` does not thin this binary; it leaves both slices.)
+LLAMA_BUNDLED="$APP_BUNDLE/Contents/Frameworks/llama.framework"
+ditto "$LLAMA_FRAMEWORK" "$LLAMA_BUNDLED"
+LLAMA_BINARY="$LLAMA_BUNDLED/llama"
+LLAMA_ARCHS="$(lipo -archs "$LLAMA_BINARY")"
+if [[ "$LLAMA_ARCHS" != "arm64" ]]; then
+  LLAMA_THIN="$(mktemp)"
+  lipo -thin arm64 "$LLAMA_BINARY" -output "$LLAMA_THIN"
+  # cp writes through the top-level symlink into Versions/A/llama.
+  cp "$LLAMA_THIN" "$LLAMA_BINARY"
+  rm -f "$LLAMA_THIN"
+fi
+LLAMA_ARCHS="$(lipo -archs "$LLAMA_BINARY")"
+if [[ "$LLAMA_ARCHS" != "arm64" ]]; then
+  echo "Bundled Cleanup runtime has architectures '$LLAMA_ARCHS', expected arm64 only" >&2
+  exit 1
+fi
 if ! otool -l "$APP_BINARY" | grep -q "@executable_path/../Frameworks"; then
   install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_BINARY"
 fi
