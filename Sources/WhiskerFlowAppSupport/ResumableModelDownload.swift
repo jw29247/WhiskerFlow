@@ -169,6 +169,9 @@ public final class ResumableModelDownload: @unchecked Sendable {
         if offset == 0 { discardPartial() }
         if offset == byteCount { progress(1); return }
         var request = URLRequest(url: source, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 60)
+        // Offsets and the pinned size count the stored bytes, so the server
+        // must not compress the body on the way.
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         if offset > 0 {
             request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range")
             // A strong ETag (or the date) makes a changed file come back whole.

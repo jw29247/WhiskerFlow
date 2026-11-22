@@ -240,7 +240,12 @@ final class CleanupService {
                                            progress: { [weak self] progress in
                                                Task { @MainActor in
                                                    guard let self, self.downloading else { return }
-                                                   self.downloadProgress = max(self.downloadProgress, progress)
+                                                   // A clear drop means the server no longer had the same
+                                                   // file and the download began again: show that.
+                                                   if progress + 0.01 < self.downloadProgress {
+                                                       self.status = "Starting the \(model.name) download again"
+                                                   }
+                                                   self.downloadProgress = progress
                                                }
                                            })
                 self.status = "Downloaded"

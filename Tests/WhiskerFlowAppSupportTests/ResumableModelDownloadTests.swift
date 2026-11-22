@@ -51,6 +51,7 @@ final class ResumableModelDownloadTests: XCTestCase {
         XCTAssertNil(transport.requests[0].value(forHTTPHeaderField: "Range"))
         XCTAssertEqual(transport.requests[1].value(forHTTPHeaderField: "Range"), "bytes=400-")
         XCTAssertEqual(transport.requests[1].value(forHTTPHeaderField: "If-Range"), "\"abc\"")
+        XCTAssertEqual(transport.requests.map { $0.value(forHTTPHeaderField: "Accept-Encoding") }, ["identity", "identity"])
         XCTAssertEqual(pauses.values, [1])
     }
 
