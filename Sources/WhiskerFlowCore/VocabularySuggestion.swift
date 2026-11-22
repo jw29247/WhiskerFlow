@@ -21,7 +21,7 @@ public enum VocabularyCorrectionDetector {
     private static let rewriteRatio = 0.4
     /// Longer runs are sentence surgery, not a term the user says repeatedly.
     private static let maxRunWords = 3
-    /// Trimmed from both ends of a token so "stella," and "stella" are the same
+    /// Trimmed from both ends of a token so "velia," and "velia" are the same
     /// word. Deliberately excludes characters that carry meaning inside terms
     /// such as "C++", "#tag" and "co-op".
     private static let boundaryPunctuation = CharacterSet(charactersIn: ".,;:!?…\"'“”‘’`()[]{}<>«»")
@@ -97,7 +97,7 @@ public enum VocabularyCorrectionDetector {
 
     /// Contiguous stretches where the two token streams disagree. A token pair
     /// the alignment treats as common still lands in a run when the raw spelling
-    /// differs, which is what makes case-only fixes ("firma" -> "Firma") visible.
+    /// differs, which is what makes case-only fixes ("terma" -> "Terma") visible.
     private static func changedRuns(_ original: [String], _ edited: [String]) -> [TokenRun] {
         var runs: [TokenRun] = []
         var current = TokenRun()

@@ -22,14 +22,14 @@ final class RecognizerBiasingEvaluationTests: XCTestCase {
     /// app builds the hint list (`DictionaryBiasing.terms`).
     static let terms = DictionaryBiasing.terms(
         personal: ["Siobhan", "Niamh", "WhiskerFlow", "Kubernetes", "Superlog", "Figma"].map { .word($0) },
-        readOnly: ["BPerfect", "Cleens", "Comfybedss", "Firma Stella", "Manukora", "Nuve", "Otty", "Travlfi",
-                   "Vivamn", "Water2"].map { VocabularyRule(find: $0.lowercased(), replaceWith: $0) })
+        readOnly: ["BReady", "Kwick", "Cosyroomss", "Terma Velia", "Lumarova", "Juvo", "Itty", "Hotlfi",
+                   "Solamn", "Coffee2"].map { VocabularyRule(find: $0.lowercased(), replaceWith: $0) })
 
     static let spoken: [(name: String, voice: String, text: String)] = [
-        ("clients-1", "Daniel", "Send the Manukora and Otty reports to Siobhan before Friday."),
-        ("clients-2", "Samantha", "The Travlfi launch moved, so Niamh will update the Firma Stella brief."),
-        ("clients-3", "Daniel", "Comfybedss and Cleens both asked about the BPerfect bundle."),
-        ("clients-4", "Samantha", "Vivamn wants the Nuve landing page in Figma by Tuesday."),
+        ("clients-1", "Daniel", "Send the Lumarova and Itty reports to Siobhan before Friday."),
+        ("clients-2", "Samantha", "The Hotlfi launch moved, so Niamh will update the Terma Velia brief."),
+        ("clients-3", "Daniel", "Cosyroomss and Kwick both asked about the BReady bundle."),
+        ("clients-4", "Samantha", "Solamn wants the Juvo landing page in Figma by Tuesday."),
         ("tech", "Daniel", "Deploy WhiskerFlow to Kubernetes and log it in Superlog."),
         ("control-prose", "Samantha", "The weather was lovely so we walked into town and bought some bread."),
         ("control-short", "Daniel", "Yes.")

@@ -17,6 +17,13 @@ the Mac. Do not add any service, SDK or upload step that sends them without the
 owner's explicit decision (decided 21 November 2026). This overrides the
 tracked `otel-*` and `superlog-*` agent skills, which do not apply here.
 
+## Repository rule: no real client names
+
+This repository is public. Never commit the agency's real client names or
+glossary terms, in code, tests, fixtures, preview data, docs or commit and PR
+text. Tests, fixtures and sample data use invented names. The shared glossary
+lives in Atlas, not here.
+
 ## Delivery policy
 
 This is the canonical workflow policy for this repository. Read it for routine,

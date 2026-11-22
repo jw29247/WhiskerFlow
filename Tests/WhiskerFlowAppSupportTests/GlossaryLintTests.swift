@@ -12,37 +12,37 @@ final class GlossaryLintTests: XCTestCase {
     }
 
     func testSingleCommonWordIsFlagged() {
-        XCTAssertEqual(flags("cleans"), [.commonWord(find: "cleans")])
-        XCTAssertEqual(flags("water"), [.commonWord(find: "water")])
-        XCTAssertEqual(flags("Travel"), [.commonWord(find: "Travel")])
+        XCTAssertEqual(flags("quick"), [.commonWord(find: "quick")])
+        XCTAssertEqual(flags("coffee"), [.commonWord(find: "coffee")])
+        XCTAssertEqual(flags("Hotel"), [.commonWord(find: "Hotel")])
         XCTAssertEqual(flags("a"), [.commonWord(find: "a")])
     }
 
     func testInventedWordIsNotFlagged() {
-        XCTAssertTrue(flags("cleens").isEmpty)
-        XCTAssertTrue(flags("kleens").isEmpty)
-        XCTAssertTrue(flags("comfybedss").isEmpty)
-        XCTAssertTrue(flags("travlfi").isEmpty)
-        XCTAssertTrue(flags("water2").isEmpty)
+        XCTAssertTrue(flags("kwick").isEmpty)
+        XCTAssertTrue(flags("qwick").isEmpty)
+        XCTAssertTrue(flags("cosyroomss").isEmpty)
+        XCTAssertTrue(flags("hotlfi").isEmpty)
+        XCTAssertTrue(flags("coffee2").isEmpty)
     }
 
     func testPhraseOfCommonWordsIsFlagged() {
-        XCTAssertEqual(flags("be perfect"), [.commonPhrase(find: "be perfect")])
-        XCTAssertEqual(flags("comfy beds"), [.commonPhrase(find: "comfy beds")])
-        XCTAssertEqual(flags("travel fee"), [.commonPhrase(find: "travel fee")])
-        XCTAssertEqual(flags("travel wifi"), [.commonPhrase(find: "travel wifi")])
-        XCTAssertEqual(flags("water two"), [.commonPhrase(find: "water two")])
+        XCTAssertEqual(flags("be ready"), [.commonPhrase(find: "be ready")])
+        XCTAssertEqual(flags("cosy rooms"), [.commonPhrase(find: "cosy rooms")])
+        XCTAssertEqual(flags("hotel fee"), [.commonPhrase(find: "hotel fee")])
+        XCTAssertEqual(flags("hotel wifi"), [.commonPhrase(find: "hotel wifi")])
+        XCTAssertEqual(flags("coffee two"), [.commonPhrase(find: "coffee two")])
     }
 
     func testPhraseWithOneUncommonTokenIsNotFlagged() {
-        XCTAssertTrue(flags("travel fi").isEmpty)
-        XCTAssertTrue(flags("viva man").isEmpty)
-        XCTAssertTrue(flags("manuka ora").isEmpty)
-        XCTAssertTrue(flags("b perfect").isEmpty)
+        XCTAssertTrue(flags("hotel fi").isEmpty)
+        XCTAssertTrue(flags("sola man").isEmpty)
+        XCTAssertTrue(flags("lumara ova").isEmpty)
+        XCTAssertTrue(flags("b ready").isEmpty)
     }
 
     func testTokenWithDigitKeepsPhraseUnflagged() {
-        XCTAssertTrue(flags("water 2").isEmpty)
+        XCTAssertTrue(flags("coffee 2").isEmpty)
     }
 
     func testEmptyFindIsNotFlagged() {
@@ -71,8 +71,8 @@ final class GlossaryLintTests: XCTestCase {
     func testCascadeHazardRespectsWordBoundaries() {
         XCTAssertTrue(
             cascades([
-                VocabularyRule(find: "comfybedss", replaceWith: "Comfybedss"),
-                VocabularyRule(find: "comfybeds", replaceWith: "Comfybedss")
+                VocabularyRule(find: "cosyroomss", replaceWith: "Cosyroomss"),
+                VocabularyRule(find: "cosyrooms", replaceWith: "Cosyroomss")
             ]).isEmpty
         )
     }
@@ -80,10 +80,10 @@ final class GlossaryLintTests: XCTestCase {
     func testCascadeHazardFollowsSubstringRuleWithoutWholeWord() {
         XCTAssertEqual(
             cascades([
-                VocabularyRule(find: "otti", replaceWith: "Otty"),
+                VocabularyRule(find: "itti", replaceWith: "Itty"),
                 VocabularyRule(find: "tt", replaceWith: "TT", wholeWord: false)
             ]),
-            [.cascadeHazard(find: "otti", replaceWith: "Otty", matchedBy: "tt")]
+            [.cascadeHazard(find: "itti", replaceWith: "Itty", matchedBy: "tt")]
         )
     }
 
@@ -114,21 +114,21 @@ final class GlossaryLintTests: XCTestCase {
 
     func testVocabularyFlagsIncludePerRuleFlags() {
         let vocabulary = Vocabulary(rules: [
-            VocabularyRule(find: "cleens", replaceWith: "Cleens"),
-            VocabularyRule(find: "cleans", replaceWith: "Cleens")
+            VocabularyRule(find: "kwick", replaceWith: "Kwick"),
+            VocabularyRule(find: "quick", replaceWith: "Kwick")
         ])
-        XCTAssertEqual(GlossaryLint.flags(for: vocabulary), [.commonWord(find: "cleans")])
+        XCTAssertEqual(GlossaryLint.flags(for: vocabulary), [.commonWord(find: "quick")])
     }
 
     func testSanitizingDecodeDropsCommonWordRuleAndKeepsVariant() throws {
         let payload = try JSONEncoder().encode(Vocabulary(rules: [
-            VocabularyRule(find: "cleens", replaceWith: "Cleens"),
-            VocabularyRule(find: "cleans", replaceWith: "Cleens"),
-            VocabularyRule(find: "travel fee", replaceWith: "Travlfi")
+            VocabularyRule(find: "kwick", replaceWith: "Kwick"),
+            VocabularyRule(find: "quick", replaceWith: "Kwick"),
+            VocabularyRule(find: "hotel fee", replaceWith: "Hotlfi")
         ]))
         let report = try AgencyVocabularyPolicy.decodeReport(payload)
         XCTAssertEqual(report.droppedRuleCount, 2)
-        XCTAssertEqual(report.vocabulary.rules.map(\.find), ["cleens"])
-        XCTAssertEqual(try AgencyVocabularyPolicy.decode(payload).rules.map(\.find), ["cleens"])
+        XCTAssertEqual(report.vocabulary.rules.map(\.find), ["kwick"])
+        XCTAssertEqual(try AgencyVocabularyPolicy.decode(payload).rules.map(\.find), ["kwick"])
     }
 }

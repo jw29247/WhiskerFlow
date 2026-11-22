@@ -4,10 +4,10 @@ import XCTest
 final class VocabularySuggestionTests: XCTestCase {
     func testSingleWordCaseFixIsSuggested() {
         let suggestions = VocabularyCorrectionDetector.corrections(
-            original: "we onboarded stella as a client last week",
-            edited: "we onboarded Stella as a client last week"
+            original: "we onboarded velia as a client last week",
+            edited: "we onboarded Velia as a client last week"
         )
-        XCTAssertEqual(suggestions, [VocabularyCorrection(find: "stella", replaceWith: "Stella")])
+        XCTAssertEqual(suggestions, [VocabularyCorrection(find: "velia", replaceWith: "Velia")])
     }
 
     func testSingleWordMisrecognitionIsSuggested() {
@@ -20,23 +20,23 @@ final class VocabularySuggestionTests: XCTestCase {
 
     func testMultiWordPhraseReplacementIsSuggested() {
         let suggestions = VocabularyCorrectionDetector.corrections(
-            original: "we shipped the firma stella update last week",
-            edited: "we shipped the Firma Stella update last week"
+            original: "we shipped the terma velia update last week",
+            edited: "we shipped the Terma Velia update last week"
         )
         XCTAssertEqual(
             suggestions,
-            [VocabularyCorrection(find: "firma stella", replaceWith: "Firma Stella")]
+            [VocabularyCorrection(find: "terma velia", replaceWith: "Terma Velia")]
         )
     }
 
     func testPunctuationAdjacentTokenIsSuggestedWithoutPunctuation() {
         let suggestions = VocabularyCorrectionDetector.corrections(
-            original: "the invoice went to firma stella, then to legal for approval yesterday",
-            edited: "the invoice went to Firma Stella, then to legal for approval yesterday"
+            original: "the invoice went to terma velia, then to legal for approval yesterday",
+            edited: "the invoice went to Terma Velia, then to legal for approval yesterday"
         )
         XCTAssertEqual(
             suggestions,
-            [VocabularyCorrection(find: "firma stella", replaceWith: "Firma Stella")]
+            [VocabularyCorrection(find: "terma velia", replaceWith: "Terma Velia")]
         )
     }
 
@@ -50,23 +50,23 @@ final class VocabularySuggestionTests: XCTestCase {
 
     func testPureInsertionSuggestsNothing() {
         let suggestions = VocabularyCorrectionDetector.corrections(
-            original: "we shipped the firma stella update last week",
-            edited: "we shipped the firma stella update last week on time"
+            original: "we shipped the terma velia update last week",
+            edited: "we shipped the terma velia update last week on time"
         )
         XCTAssertEqual(suggestions, [])
     }
 
     func testPureDeletionSuggestsNothing() {
         let suggestions = VocabularyCorrectionDetector.corrections(
-            original: "we shipped the firma stella update last week",
-            edited: "we shipped the firma stella update"
+            original: "we shipped the terma velia update last week",
+            edited: "we shipped the terma velia update"
         )
         XCTAssertEqual(suggestions, [])
     }
 
     func testFullRewriteSuggestsNothing() {
         let suggestions = VocabularyCorrectionDetector.corrections(
-            original: "we shipped the firma stella update last week",
+            original: "we shipped the terma velia update last week",
             edited: "the client meeting has been moved to thursday morning"
         )
         XCTAssertEqual(suggestions, [])
@@ -87,11 +87,11 @@ final class VocabularySuggestionTests: XCTestCase {
 
     func testExistingRuleSuppressesDuplicateSuggestion() {
         let existing = Vocabulary(rules: [
-            VocabularyRule(find: "firma stella", replaceWith: "Firma Stella")
+            VocabularyRule(find: "terma velia", replaceWith: "Terma Velia")
         ])
         let suggestions = VocabularyCorrectionDetector.corrections(
-            original: "we shipped the firma stella update last week",
-            edited: "we shipped the Firma Stella update last week",
+            original: "we shipped the terma velia update last week",
+            edited: "we shipped the Terma Velia update last week",
             existingRules: existing
         )
         XCTAssertEqual(suggestions, [])
@@ -100,25 +100,25 @@ final class VocabularySuggestionTests: XCTestCase {
     func testExistingUnrelatedRuleDoesNotSuppressSuggestion() {
         let existing = Vocabulary(rules: [VocabularyRule(find: "clawd", replaceWith: "Claude")])
         let suggestions = VocabularyCorrectionDetector.corrections(
-            original: "we shipped the firma stella update last week",
-            edited: "we shipped the Firma Stella update last week",
+            original: "we shipped the terma velia update last week",
+            edited: "we shipped the Terma Velia update last week",
             existingRules: existing
         )
         XCTAssertEqual(
             suggestions,
-            [VocabularyCorrection(find: "firma stella", replaceWith: "Firma Stella")]
+            [VocabularyCorrection(find: "terma velia", replaceWith: "Terma Velia")]
         )
     }
 
     func testSuggestionsAreCappedAtMaxSuggestions() {
-        let original = "we asked clawd about stella and swyft and firma before the review meeting started on monday morning with the whole team"
-        let edited = "we asked Claude about Stella and Swyft and Firma before the review meeting started on monday morning with the whole team"
+        let original = "we asked clawd about velia and swyft and terma before the review meeting started on monday morning with the whole team"
+        let edited = "we asked Claude about Velia and Swyft and Terma before the review meeting started on monday morning with the whole team"
 
         XCTAssertEqual(
             VocabularyCorrectionDetector.corrections(original: original, edited: edited),
             [
                 VocabularyCorrection(find: "clawd", replaceWith: "Claude"),
-                VocabularyCorrection(find: "stella", replaceWith: "Stella"),
+                VocabularyCorrection(find: "velia", replaceWith: "Velia"),
                 VocabularyCorrection(find: "swyft", replaceWith: "Swyft")
             ]
         )
