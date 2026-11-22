@@ -80,6 +80,7 @@ struct DictationView: View {
                     if let receipt = appState.lastPasteReceipt {
                         HStack(spacing: 14) {
                             Image(systemName: receipt.state == .verified ? "checkmark.circle" : "doc.on.clipboard")
+                                .accessibilityHidden(true)
                             Text(receipt.message).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
                             if receipt.retrySelection != nil, receipt.state == .failed {
                                 Button("Retry paste") { Task { await appState.retryFailedPaste() } }
@@ -88,18 +89,21 @@ struct DictationView: View {
                             Button("Copy text") { appState.copy(receipt.text) }
                             Button { appState.lastPasteReceipt = nil } label: { Image(systemName: "xmark") }
                                 .buttonStyle(.plain).accessibilityLabel("Dismiss paste result")
+                                .help("Dismiss")
                         }.padding(16).background(FlowStyle.line.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
                             .padding(.bottom, 20)
                     }
                     if let notice = appState.autoStopNotice, !appState.isRecording {
                         HStack(spacing: 14) {
                             Image(systemName: "stop.circle")
+                                .accessibilityHidden(true)
                             Text(notice.message).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
                             if let record = appState.records.first(where: { $0.id == notice.recordID }) {
                                 Button("Open in History") { openHistory(record) }
                             }
                             Button { appState.autoStopNotice = nil } label: { Image(systemName: "xmark") }
                                 .buttonStyle(.plain).accessibilityLabel("Dismiss")
+                                .help("Dismiss")
                         }.padding(16).background(FlowStyle.line.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
                             .padding(.bottom, 20)
                     }
@@ -134,6 +138,7 @@ struct DictationView: View {
             if recent.isEmpty {
                 HStack(spacing: 12) {
                     Image(systemName: "text.alignleft").foregroundStyle(FlowStyle.muted)
+                        .accessibilityHidden(true)
                     Text("Your words will appear here after your first dictation.")
                         .font(.system(size: 13)).foregroundStyle(FlowStyle.muted)
                     Spacer()

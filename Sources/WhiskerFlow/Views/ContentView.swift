@@ -167,10 +167,12 @@ struct ContentView: View {
                     } label: {
                         HStack(spacing: 13) {
                             Image(systemName: item.symbol).font(.system(size: 18, weight: .regular)).frame(width: 23)
+                                .accessibilityHidden(true)
                             Text(item.rawValue).font(.system(size: 14, weight: destination == item ? .medium : .regular))
                             Spacer()
                             if item == .meetings && appState.isMeetingCapturing {
                                 Circle().fill(FlowStyle.recording).frame(width: 6, height: 6)
+                                    .accessibilityLabel("Recording")
                             }
                         }
                         .padding(.horizontal, 15).padding(.vertical, 14)
@@ -203,7 +205,7 @@ struct ContentView: View {
         }
         .frame(width: 210)
         .frame(maxHeight: .infinity)
-        .background(.ultraThinMaterial)
+        .flowSidebarBackground()
     }
 
     private func navigate(_ action: @escaping () -> Void) {

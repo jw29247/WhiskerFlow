@@ -31,6 +31,7 @@ struct KeyRecorderView: View {
                     Spacer()
                     Image(systemName: isRecording ? "record.circle" : "pencil")
                         .foregroundStyle(isRecording ? FlowStyle.recording : .secondary)
+                        .accessibilityHidden(true)
                 }
                 .contentShape(Rectangle())
             }

@@ -29,6 +29,7 @@ struct TranscriptDetailView: View {
                 } label: { Image(systemName: "ellipsis") }
                     .menuStyle(.borderlessButton).fixedSize().padding(.top, 10)
                     .help("Transcript actions")
+                    .accessibilityLabel("Transcript actions")
             }.padding(.bottom, 22)
 
             if !appState.records.contains(where: { $0.id == record.id }) {

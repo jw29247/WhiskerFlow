@@ -188,6 +188,7 @@ struct FlowEmptyState: View {
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: symbol).font(.system(size: 30, weight: .light)).foregroundStyle(FlowStyle.accent)
+                .accessibilityHidden(true)
             Text(title).font(.system(size: 21, weight: .semibold, design: .rounded)).foregroundStyle(FlowStyle.ink)
             Text(detail).font(.system(size: 13)).foregroundStyle(FlowStyle.muted)
                 .multilineTextAlignment(.center).frame(maxWidth: 330)

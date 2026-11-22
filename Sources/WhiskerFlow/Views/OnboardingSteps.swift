@@ -103,6 +103,7 @@ struct OnboardingPermissionsStep: View {
         OnboardingCard {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: symbol).font(.system(size: 20)).frame(width: 26).foregroundStyle(FlowStyle.accent)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
                     HStack {
                         Text(title).font(.system(size: 14, weight: .medium))
@@ -246,6 +247,7 @@ struct OnboardingLevelBars: View {
     let levels: [Float]
     let threshold: Float
     let heard: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
@@ -259,7 +261,7 @@ struct OnboardingLevelBars: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .animation(.easeOut(duration: 0.1), value: levels)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: levels)
         .accessibilityElement()
         .accessibilityLabel(heard ? "Input level: speech detected" : "Input level")
     }
@@ -296,6 +298,7 @@ struct OnboardingShortcutStep: View {
     @State private var sawPress = false
     @State private var recordingCustom = false
     @State private var globeUsage = GlobeKeyUsage.current()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let choices: [HotkeyTrigger] = [.fn, .rightCommand, .rightOption, .custom]
 
@@ -338,9 +341,9 @@ struct OnboardingShortcutStep: View {
             OnboardingCard {
                 HStack(spacing: 16) {
                     FlowKeycap(title: settings.hotkeyDisplayName, compact: false)
-                        .scaleEffect(isPressed ? 0.94 : 1)
+                        .scaleEffect(isPressed && !reduceMotion ? 0.94 : 1)
                         .overlay(RoundedRectangle(cornerRadius: 9).stroke(isPressed || passed ? FlowStyle.success : .clear, lineWidth: 2))
-                        .animation(.easeOut(duration: 0.1), value: isPressed)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: isPressed)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(passed ? "Your shortcut works." : (isPressed ? "Got it. Now let go." : "Press your shortcut now."))
                             .font(.system(size: 14, weight: .medium))
@@ -348,7 +351,10 @@ struct OnboardingShortcutStep: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
-                    if passed { Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(FlowStyle.success) }
+                    if passed {
+                        Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(FlowStyle.success)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
         }
@@ -385,6 +391,7 @@ struct OnboardingShortcutStep: View {
                     }
                 }
                 .font(.system(size: 20, weight: .medium, design: .rounded)).frame(height: 24)
+                .accessibilityHidden(true)
                 Text(choice == .fn ? "fn / Globe" : (choice == .custom ? "Custom" : choice.displayName))
                     .font(.system(size: 12, weight: selected ? .medium : .regular))
             }
@@ -490,6 +497,7 @@ struct OnboardingModelStep: View {
                     }
                     if appState.modelState == .ready {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(FlowStyle.success)
+                            .accessibilityLabel("Ready")
                     }
                 }
                 if appState.modelState.isFailure {

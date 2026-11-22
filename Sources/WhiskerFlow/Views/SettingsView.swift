@@ -26,7 +26,7 @@ struct SettingsView: View {
                     .accessibilityAddTraits(category == item ? .isSelected : [])
                 }
                 Spacer()
-            }.padding(.horizontal, 12).frame(width: 155).background(.ultraThinMaterial)
+            }.padding(.horizontal, 12).frame(width: 155).flowSidebarBackground()
             Divider()
             VStack(alignment: .leading, spacing: 0) {
                 Text(category.rawValue).font(.system(size: 25, weight: .semibold, design: .rounded))

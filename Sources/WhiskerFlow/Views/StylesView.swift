@@ -186,6 +186,7 @@ private struct AppStyleRow: View {
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             .accessibilityLabel("Style options for \(app.name)")
+            .help("Style options for \(app.name)")
         }
     }
 

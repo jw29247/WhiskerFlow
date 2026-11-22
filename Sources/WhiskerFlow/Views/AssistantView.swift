@@ -31,6 +31,7 @@ struct AssistantView: View {
                         Spacer()
                         Button { assistant.message = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain)
                             .accessibilityLabel("Dismiss assistant message")
+                            .help("Dismiss")
                     }.padding(14).background(FlowStyle.selection, in: RoundedRectangle(cornerRadius: 10))
                 }
                 if assistant.busy {

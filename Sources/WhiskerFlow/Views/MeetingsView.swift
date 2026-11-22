@@ -63,6 +63,7 @@ struct MeetingsView: View {
                     if appState.isMeetingCapturing {
                         HStack(spacing: 18) {
                             Image(systemName: "record.circle.fill").font(.system(size: 28)).foregroundStyle(FlowStyle.recording)
+                                .accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(appState.activeMeetingTitle ?? "Meeting in progress").font(.headline)
                                 Text(appState.meetingStatusDetail).font(.callout).foregroundStyle(FlowStyle.muted)
@@ -103,6 +104,7 @@ struct MeetingsView: View {
                     if !appState.isAtlasPaired {
                         VStack(alignment: .leading, spacing: 18) {
                             Image(systemName: "calendar.badge.plus").font(.system(size: 32, weight: .light)).foregroundStyle(FlowStyle.accent)
+                                .accessibilityHidden(true)
                             Text("Be in the conversation.").font(.system(size: 28, weight: .semibold, design: .rounded))
                             Text("Connect Atlas to see your meetings here and save their recordings and transcripts to your workspace.")
                                 .font(.system(size: 14)).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
@@ -166,6 +168,7 @@ struct MeetingsView: View {
             Divider()
             HStack {
                 Image(systemName: "calendar.badge.clock")
+                    .accessibilityHidden(true)
                 Text(appState.settings.meetingModeEnabled ? "Automatic recording is on" : "Automatic recording is off")
                 Spacer()
                 Button("Manage") { showSetup = true }.buttonStyle(.plain).foregroundStyle(FlowStyle.accent)
@@ -240,13 +243,13 @@ struct MeetingSetupView: View {
             HStack {
                 Label("Microphone", systemImage: "mic")
                 Spacer()
-                if appState.hasMicrophonePermission { Image(systemName: "checkmark.circle.fill").foregroundStyle(FlowStyle.success) }
+                if appState.hasMicrophonePermission { Image(systemName: "checkmark.circle.fill").foregroundStyle(FlowStyle.success).accessibilityLabel("Allowed") }
                 else { Button("Enable") { Task { await appState.requestMicrophonePermission() }; SystemSettingsLink.open(SystemSettingsLink.microphone) } }
             }
             HStack {
                 Label("Mac audio", systemImage: "speaker.wave.2")
                 Spacer()
-                if appState.hasScreenRecordingPermission { Image(systemName: "checkmark.circle.fill").foregroundStyle(FlowStyle.success) }
+                if appState.hasScreenRecordingPermission { Image(systemName: "checkmark.circle.fill").foregroundStyle(FlowStyle.success).accessibilityLabel("Allowed") }
                 else {
                     Button("Enable") {
                         appState.requestScreenRecordingPermission()

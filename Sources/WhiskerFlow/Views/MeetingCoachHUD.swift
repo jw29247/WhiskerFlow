@@ -87,6 +87,7 @@ private struct MeetingCoachHUDView: View {
                 Button { controller.isCoachVisible = false } label: {
                     Image(systemName: "xmark")
                 }.buttonStyle(.plain).accessibilityLabel("Hide coach")
+                    .help("Hide coach")
             }
             Text(controller.activeTitle ?? "Meeting").font(.subheadline).lineLimit(1)
             if appState.isRecordingReminderVisible {
