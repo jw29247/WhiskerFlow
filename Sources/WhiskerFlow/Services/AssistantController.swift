@@ -130,6 +130,18 @@ final class AssistantController {
         selection = nil; pendingSelection = nil; rewriteInput = ""; rewritePreview = ""; currentCoachID = nil
         return persisted
     }
+    /// Sign-out: forgets what came from Atlas (the client list, client
+    /// glossaries and any job in flight). Drafts, your own client words and
+    /// the connection they were saved under stay, so another connection
+    /// still can't submit them.
+    func signOut() {
+        update { state in
+            state.clients = []; state.clientVocabulary = [:]; state.clientUpdatedAt = [:]
+            state.selectedClient = nil; state.pendingJob = nil
+        }
+        selection = nil; pendingSelection = nil; rewriteInput = ""; rewritePreview = ""; currentCoachID = nil
+        message = nil
+    }
     func setCloudEnabled(_ value: Bool) { update { $0.cloudEnabled = value } }
     func setRecognizeCorrections(_ value: Bool) { update { $0.recognizeCorrections = value } }
     func selectClient(_ reference: String?) { update { $0.selectedClient = reference } }

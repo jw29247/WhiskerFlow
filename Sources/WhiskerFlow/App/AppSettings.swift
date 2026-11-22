@@ -104,9 +104,9 @@ final class AppSettings {
         didSet { defaults.set(meetingTranscriptRetention.rawValue, forKey: Keys.meetingTranscriptRetention) }
     }
 
-    /// Keychain reads are synchronous securityd IPC. Only this setter writes
-    /// the token, so a read-through cache of a definite answer (the token, or
-    /// none) stays authoritative.
+    /// Keychain reads are synchronous securityd IPC. Only this setter and
+    /// `removeAtlasDeviceToken()` write the token, so a read-through cache of a
+    /// definite answer (the token, or none) stays authoritative.
     @ObservationIgnored private var cachedAtlasDeviceToken: String?
 
     var atlasDeviceToken: String {
@@ -143,6 +143,21 @@ final class AppSettings {
                 reportPersistenceFailure(error)
             }
         }
+    }
+
+    /// The Keychain item behind `atlasDeviceToken`, for readers off the main actor.
+    var atlasTokenStore: MeetingCaptureTokenStore { meetingTokenStore }
+
+    /// Sign-out: deletes the token from the Keychain and caches its absence.
+    /// Unlike the setter, a Keychain failure throws and leaves the cache as it
+    /// was, so the caller can tell the user the sign-out did not happen.
+    func removeAtlasDeviceToken() throws {
+        try meetingTokenStore.delete()
+        cachedAtlasDeviceToken = ""
+    }
+
+    func removeCachedMeetingSchedule() {
+        defaults.removeObject(forKey: Keys.cachedMeetingSchedule)
     }
 
     func cachedMeetingSchedule() -> [AtlasCaptureScheduleIntent] {

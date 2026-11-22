@@ -177,9 +177,25 @@ final class MeetingCaptureCoordinator {
   /// Recordings saved on this Mac that wait for a manual Retry.
   var heldRecordingCount: Int { heldSessionIDs.count }
 
+  /// Recordings on this Mac that Atlas doesn't have yet, including one being
+  /// recorded: queued, uploading, transcribing or held for a manual Retry.
+  var unsentRecordingCount: Int {
+    var unsent = Set(library.entries.filter { $0.status.isInProgress || $0.awaitingManualRetry }.map(\.sessionID))
+    unsent.formUnion(heldSessionIDs)
+    if let activeSessionID { unsent.insert(activeSessionID) }
+    return unsent.count
+  }
+
+  /// True while the app needs an Atlas sign-in. Recording is then
+  /// unavailable: a recording made signed out would later be sent to
+  /// whichever account signs in next.
+  var requiresSignIn: () -> Bool = { false }
+
   var isCapturing: Bool { activeSessionID != nil }
   var isCaptureTransitioning: Bool { captureTransitionInProgress }
   var hasScheduledUploadRetry: Bool { retryTask != nil }
+  /// Whether the schedule poll and heartbeats run.
+  var isMonitoringAtlas: Bool { scheduleTask != nil || heartbeatTask != nil }
   var hasActiveRecoveryBatch: Bool { uploadTask != nil }
 
   func start() {
@@ -197,6 +213,40 @@ final class MeetingCaptureCoordinator {
       await self?.scheduleLoop()
     }
     Task { @MainActor [weak self] in await self?.updateUnpairedStatus() }
+  }
+
+  /// Sign-out, once nothing is recording or waiting to be sent. Stops the
+  /// schedule poll, heartbeats, upload retries and call prompts, and forgets
+  /// the schedule from Atlas.
+  func signOut() {
+    stopMonitoring()
+    stopTask?.cancel()
+    stopTask = nil
+    callPrompt = nil
+    promptedCallIDs.removeAll()
+    declinedCalls.removeAll()
+    suppressedEvents.removeAll()
+    updateCallDetection()
+    scheduleIntents = []
+    lastAtlasMeetingID = nil
+    lastFailureCode = nil
+    status = .uncovered
+    statusDetail = "Sign in with Atlas to record meetings."
+  }
+
+  /// Signed in again: restarts what `signOut()` stopped.
+  func resumeAfterSignIn() {
+    guard didStart else { return }
+    if recoveryTask == nil {
+      recoveryTask = Task { @MainActor [weak self] in await self?.recoverLocalSessions() }
+    }
+    if heartbeatTask == nil {
+      heartbeatTask = Task { @MainActor [weak self] in await self?.heartbeatLoop() }
+    }
+    if scheduleTask == nil {
+      scheduleTask = Task { @MainActor [weak self] in await self?.scheduleLoop() }
+    }
+    refreshConfiguration()
   }
 
   func stopMonitoring() {
@@ -335,7 +385,7 @@ final class MeetingCaptureCoordinator {
 
   private func updateCallDetection() {
     guard didStart else { return }
-    let asks = settings.askToRecordCalls && Self.isSupportedMac
+    let asks = settings.askToRecordCalls && Self.isSupportedMac && !requiresSignIn()
     if MeetingCallDetectionPolicy.shouldDetect(asksToRecordCalls: asks, followsDetectedCall: activeDetectedCallID != nil) {
       callDetector.start()
     } else {
@@ -353,7 +403,7 @@ final class MeetingCaptureCoordinator {
     switch event {
     case .started(let call):
       lifecycleLog("call_detected", call: call)
-      guard settings.askToRecordCalls, activeSessionID == nil, !captureTransitionInProgress,
+      guard settings.askToRecordCalls, !requiresSignIn(), activeSessionID == nil, !captureTransitionInProgress,
             canRecordDetectedCall(), promptedCallIDs.insert(call.id).inserted else { return }
       // One question at a time: a second call doesn't replace the one asked about.
       guard callPrompt == nil else { return }
@@ -433,6 +483,11 @@ final class MeetingCaptureCoordinator {
     if activeSessionID != nil, !captureTransitionInProgress, !boundaryCheckInProgress,
        let stopAt = activeCaptureStopAtMs, now >= stopAt {
       scheduleCaptureStop(atMs: now)
+    }
+    guard !requiresSignIn() else {
+      scheduleIntents = []
+      await updateUnpairedStatus()
+      return
     }
     let intents: [AtlasCaptureScheduleIntent]
     var scheduleFetchFailed = false
@@ -618,6 +673,11 @@ final class MeetingCaptureCoordinator {
       return
     }
     guard activeSessionID == nil, !captureTransitionInProgress else { return }
+    guard !requiresSignIn() else {
+      status = .uncovered
+      statusDetail = "Sign in with Atlas to record meetings."
+      return
+    }
     captureTransitionInProgress = true
     defer { captureTransitionInProgress = false }
     guard await localDiskState() == "ready" else {
@@ -1261,6 +1321,11 @@ final class MeetingCaptureCoordinator {
     guard Self.isSupportedMac else {
       status = .uncovered
       statusDetail = "Meeting Mode requires an Apple Silicon Mac."
+      return
+    }
+    guard !requiresSignIn() else {
+      status = .uncovered
+      statusDetail = "Sign in with Atlas to record meetings."
       return
     }
     guard client != nil else {

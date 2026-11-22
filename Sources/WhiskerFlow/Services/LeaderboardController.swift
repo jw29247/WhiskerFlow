@@ -25,6 +25,8 @@ final class LeaderboardController {
     @ObservationIgnored private var reporting: Task<Bool, Never>?
     @ObservationIgnored private var periodic: Task<Void, Never>?
     @ObservationIgnored private var showsPreview = false
+    /// Bumped by `signOut()`, so a board or report still in flight is dropped.
+    @ObservationIgnored private var accountGeneration = 0
 
     init(
         client: @escaping () -> LeaderboardAtlasClient?,
@@ -71,6 +73,8 @@ final class LeaderboardController {
 
     // MARK: - Reporting
 
+    var isReportingPeriodically: Bool { periodic != nil }
+
     func startPeriodicReporting() {
         guard periodic == nil else { return }
         periodic = Task { @MainActor [weak self] in
@@ -88,6 +92,7 @@ final class LeaderboardController {
         if let reporting { return await reporting.value }
         let task = Task { @MainActor [weak self] () -> Bool in
             guard let self, let client = self.client() else { return false }
+            let generation = self.accountGeneration
             let today = self.today
             let days = LeaderboardReport.daysToSend(self.usageDays(self.meetingTally), reportedThrough: self.reportedThrough, today: today)
             do {
@@ -95,6 +100,7 @@ final class LeaderboardController {
                     let end = min(start + LeaderboardReport.maximumDaysPerRequest, days.count)
                     _ = try await client.report(Array(days[start..<end]))
                 }
+                guard generation == self.accountGeneration else { return false }
                 self.reportedThrough = today
                 return true
             } catch {
@@ -103,7 +109,7 @@ final class LeaderboardController {
         }
         reporting = task
         let succeeded = await task.value
-        reporting = nil
+        if reporting == task { reporting = nil }
         return succeeded
     }
 
@@ -114,17 +120,38 @@ final class LeaderboardController {
             errorMessage = LeaderboardClientError.signedOut.errorDescription
             return
         }
+        let generation = accountGeneration
         isLoading = true
-        defer { isLoading = false }
+        defer { if generation == accountGeneration { isLoading = false } }
         await report()
         let today = self.today
         do {
-            board = try await client.board(today: today, since: window.since(today: today, firstWeekday: calendar().firstWeekday))
+            let board = try await client.board(today: today, since: window.since(today: today, firstWeekday: calendar().firstWeekday))
+            guard generation == accountGeneration else { return }
+            self.board = board
             updatedAt = now()
             errorMessage = nil
         } catch {
+            guard generation == accountGeneration else { return }
             errorMessage = (error as? LocalizedError)?.errorDescription ?? "Atlas couldn't load the leaderboard."
         }
+    }
+
+    /// Sign-out: stops reporting and forgets the board. Days not yet reported
+    /// stay unreported, and the next sign-in reports from today, so one
+    /// account's usage is never sent to another. The meeting tally is this
+    /// Mac's own count and stays.
+    func signOut() {
+        accountGeneration &+= 1
+        periodic?.cancel()
+        periodic = nil
+        reporting?.cancel()
+        reporting = nil
+        board = nil
+        errorMessage = nil
+        updatedAt = nil
+        isLoading = false
+        reportedThrough = today.adding(days: 1)
     }
 
     #if DEBUG
