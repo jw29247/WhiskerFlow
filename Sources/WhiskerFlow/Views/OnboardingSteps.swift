@@ -253,7 +253,7 @@ struct OnboardingLevelBars: View {
                 ForEach(levels.indices, id: \.self) { index in
                     let level = CGFloat(levels[index])
                     Capsule()
-                        .fill(levels[index] >= threshold ? (heard ? Color.green : FlowStyle.accent) : FlowStyle.accent.opacity(0.35))
+                        .fill(levels[index] >= threshold ? (heard ? FlowStyle.success : FlowStyle.accent) : FlowStyle.accent.opacity(0.35))
                         .frame(height: max(4, level * geometry.size.height))
                 }
             }
@@ -329,7 +329,7 @@ struct OnboardingShortcutStep: View {
             if settings.activeHotkeyCombo == HotkeyTrigger.fn.presetCombo, let explanation = globeUsage.conflictExplanation {
                 OnboardingCard {
                     Label("Your 🌐 key already does something", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange).font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(FlowStyle.warning).font(.system(size: 13, weight: .medium))
                     Text(explanation).font(.caption).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
                     Button("Open Keyboard Settings") { SystemSettingsLink.open(SystemSettingsLink.keyboard) }
                 }
@@ -339,7 +339,7 @@ struct OnboardingShortcutStep: View {
                 HStack(spacing: 16) {
                     FlowKeycap(title: settings.hotkeyDisplayName, compact: false)
                         .scaleEffect(isPressed ? 0.94 : 1)
-                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(isPressed || passed ? Color.green : .clear, lineWidth: 2))
+                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(isPressed || passed ? FlowStyle.success : .clear, lineWidth: 2))
                         .animation(.easeOut(duration: 0.1), value: isPressed)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(passed ? "Your shortcut works." : (isPressed ? "Got it. Now let go." : "Press your shortcut now."))
@@ -348,7 +348,7 @@ struct OnboardingShortcutStep: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
-                    if passed { Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(.green) }
+                    if passed { Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(FlowStyle.success) }
                 }
             }
         }
@@ -479,9 +479,9 @@ struct OnboardingModelStep: View {
                 }
                 ProgressView(value: progressValue)
                     .progressViewStyle(.linear)
-                    .tint(appState.modelState == .ready ? .green : FlowStyle.accent)
+                    .tint(appState.modelState == .ready ? FlowStyle.success : FlowStyle.accent)
                 HStack {
-                    Text(statusText).font(.callout).foregroundStyle(appState.modelState.isFailure ? .orange : FlowStyle.muted)
+                    Text(statusText).font(.callout).foregroundStyle(appState.modelState.isFailure ? FlowStyle.danger : FlowStyle.muted)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     if appState.modelState == .preparing, appState.modelDownload.tracker != nil {
@@ -489,7 +489,7 @@ struct OnboardingModelStep: View {
                             .font(.callout.monospacedDigit()).foregroundStyle(FlowStyle.muted)
                     }
                     if appState.modelState == .ready {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(FlowStyle.success)
                     }
                 }
                 if appState.modelState.isFailure {
@@ -657,7 +657,7 @@ struct OnboardingExtrasStep: View {
                 }
                 Text("Your agency workspace. Connecting unlocks meeting recordings and transcripts, the Assistant, and each client’s vocabulary, so names and jargon come out right.")
                     .font(.caption).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
-                if let error = appState.atlasSignInError { Text(error).font(.caption).foregroundStyle(.orange) }
+                if let error = appState.atlasSignInError { Text(error).font(.caption).foregroundStyle(FlowStyle.danger) }
                 if paired {
                     HStack {
                         Picker("Active client", selection: Binding(get: { assistant.saved.selectedClient ?? "" }, set: { reference in
