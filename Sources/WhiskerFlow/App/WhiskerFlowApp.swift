@@ -39,6 +39,7 @@ struct WhiskerFlowApp: App {
         .defaultSize(width: 1120, height: 760)
         .commands {
             TranscriptCommands()
+            ScreenCommands()
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesButton(updaterService: updaterService)
             }
@@ -78,8 +79,9 @@ struct WhiskerFlowApp: App {
             SettingsView(appState: appState, updaterService: updaterService)
                 .preferredColorScheme(UIPreview.colorScheme)
         }
-        // The window's size, title bar included: the content is 650 high.
-        .defaultSize(width: 760, height: 678)
+        // The window's size, including the title bar and the tab toolbar (about
+        // 80 points together): the content is 650 high.
+        .defaultSize(width: 760, height: 730)
 
         WhiskerFlowMenuBarScene(appState: appState, updaterService: updaterService)
     }

@@ -9,54 +9,47 @@ struct SettingsView: View {
     @ObservedObject var updaterService: UpdaterService
     @State private var category: SettingsCategory = UIPreview.settingsCategory.flatMap(SettingsCategory.init) ?? .dictation
 
+    /// Native Settings tabs: one toolbar button per category, which the
+    /// keyboard and VoiceOver reach like any other Mac app's Settings.
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 7) {
-                Text("Settings").font(FlowStyle.subheading)
-                    .padding(.horizontal, 12).padding(.top, 24).padding(.bottom, 24)
-                ForEach(SettingsCategory.allCases) { item in
-                    Button { category = item } label: {
-                        Label(item.rawValue, systemImage: item.symbol)
-                            .font(FlowStyle.callout).frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12).contentShape(RoundedRectangle(cornerRadius: 8))
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(category == item ? FlowStyle.accent : FlowStyle.ink)
-                    .background(category == item ? FlowStyle.selection : .clear, in: RoundedRectangle(cornerRadius: 8))
-                    .accessibilityAddTraits(category == item ? .isSelected : [])
-                }
-                Spacer()
-            }.padding(.horizontal, 12).frame(width: 155).flowSidebarBackground()
-            Divider()
-            VStack(alignment: .leading, spacing: 0) {
-                Text(category.rawValue).font(FlowStyle.heading)
-                    .padding(.horizontal, 25).padding(.top, 25).padding(.bottom, 5)
-                Group {
-                    switch category {
-                    case .dictation: dictationTab
-                    case .text: vocabularyTab
-                    case .cleanup: CleanupSettingsView(appState: appState)
-                    case .history: historyTab
-                    case .meetings: Form { MeetingSetupView(appState: appState) }.formStyle(.grouped)
-                    case .app: appTab
-                    case .advanced: engineTab
-                    }
-                }
-                if let error = appState.settings.persistenceError {
-                    Label(error, systemImage: "exclamationmark.triangle").font(.caption)
-                        .foregroundStyle(FlowStyle.danger).padding(20)
-                }
-            }.frame(maxWidth: .infinity).background(FlowStyle.canvas)
+        TabView(selection: $category) {
+            ForEach(SettingsCategory.allCases) { item in
+                page(item)
+                    .tabItem { Label(item.rawValue, systemImage: item.symbol) }
+                    .tag(item)
+            }
         }
-        // Each category is a scrolling form, so only the height is the user's call.
-        .frame(width: 760)
-        .frame(minHeight: 480, idealHeight: 650, maxHeight: .infinity)
         .foregroundStyle(FlowStyle.ink).tint(FlowStyle.accent)
         .onChange(of: appState.settings.cleanupEnabled) { _, _ in appState.configureCleanup() }
         .onAppear { appState.settings.launchAtLogin.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appState.settings.launchAtLogin.refresh()
         }
+    }
+
+    private func page(_ item: SettingsCategory) -> some View {
+        VStack(spacing: 0) {
+            Group {
+                switch item {
+                case .dictation: dictationTab
+                case .text: vocabularyTab
+                case .cleanup: CleanupSettingsView(appState: appState)
+                case .history: historyTab
+                case .meetings: Form { MeetingSetupView(appState: appState) }.formStyle(.grouped)
+                case .app: appTab
+                case .advanced: engineTab
+                }
+            }
+            if let error = appState.settings.persistenceError {
+                Label(error, systemImage: "exclamationmark.triangle").font(.caption)
+                    .foregroundStyle(FlowStyle.danger).padding(20)
+            }
+        }
+        .background(OpensAtTop())
+        .background(FlowStyle.canvas)
+        // Each category is a scrolling form, so only the height is the user's call.
+        .frame(width: 760)
+        .frame(minHeight: 480, idealHeight: 650, maxHeight: .infinity)
     }
 
     private var dictationTab: some View {
@@ -292,6 +285,74 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .meetings: return "calendar"
         case .app: return "macwindow"
         case .advanced: return "slider.horizontal.3"
+        }
+    }
+}
+
+/// Cleanup's "Try Cleanup" text box scrolls its caret into view when it is
+/// first laid out, and that scroll reaches the form around it, so the tab
+/// opened part-way down. For a moment after a tab opens, this puts back any
+/// scroll the person didn't make, so every tab opens at its first setting.
+private struct OpensAtTop: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    final class Probe: NSView {
+        private var observer: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopWatching()
+            guard window != nil else { return }
+            DispatchQueue.main.async { [weak self] in self?.watch() }
+        }
+
+        private func watch() {
+            guard let form = pageScrollView() else { return }
+            let clip = form.contentView
+            let top = NSPoint(x: 0, y: (form.documentView?.isFlipped ?? true) ? -form.contentInsets.top
+                : max(0, (form.documentView?.bounds.height ?? 0) - clip.bounds.height))
+            func reset() {
+                guard clip.bounds.origin != top else { return }
+                clip.scroll(to: top)
+                form.reflectScrolledClipView(clip)
+            }
+            reset()
+            let opened = ProcessInfo.processInfo.systemUptime
+            clip.postsBoundsChangedNotifications = true
+            observer = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip,
+                                                              queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    // A scroll, key or click since the tab opened is the person's own.
+                    if let event = NSApp.currentEvent, event.timestamp > opened,
+                       [.scrollWheel, .swipe, .keyDown, .leftMouseDown, .leftMouseDragged].contains(event.type) {
+                        self?.stopWatching()
+                    } else {
+                        reset()
+                    }
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.stopWatching() }
+        }
+
+        private func stopWatching() {
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = nil
+        }
+
+        /// The outermost scroll view beside this probe: the tab's form.
+        private func pageScrollView() -> NSScrollView? {
+            func outermost(in view: NSView) -> NSScrollView? {
+                if let scroll = view as? NSScrollView { return scroll }
+                for child in view.subviews { if let found = outermost(in: child) { return found } }
+                return nil
+            }
+            var ancestor = superview
+            while let current = ancestor {
+                if let found = outermost(in: current) { return found }
+                ancestor = current.superview
+            }
+            return nil
         }
     }
 }
