@@ -88,7 +88,7 @@ and downloads the `.zip` enclosure referenced there. There are two feeds:
   the `appcast.xml` asset of the latest published GitHub release. Every release
   must carry that asset: a published release without it leaves these builds
   with no feed until it is uploaded.
-- **Legacy feed.** Builds made before the switch (every release up to 2.1.0) read
+- **Legacy feed.** Builds made before the switch (every release up to 2.1.1) read
   `https://raw.githubusercontent.com/jw29247/WhiskerFlow/main/appcast.xml`.
   Every release must still commit `appcast.xml` to `main` through the release
   PR, because those installs know no other URL and only move to the release

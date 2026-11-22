@@ -226,7 +226,7 @@ builds read their updates from the latest release's appcast.xml asset.
     gh release edit "v$VERSION" --draft=false --latest --repo "$REPO"
     script/verify_release_feed.sh --published $VERSION
   4. Commit appcast.xml + the cask to the same release PR, push, wait for CI,
-     then merge (live for builds up to 2.1.0, which read appcast.xml on main):
+     then merge (live for builds up to 2.1.1, which read appcast.xml on main):
     git commit -am "release: $PRODUCT $VERSION" && git push
 
 Existing users on $PRODUCT 0.4.0+ receive this automatically via Sparkle.

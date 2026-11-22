@@ -121,7 +121,7 @@ git commit -am "release: WhiskerFlow 0.4.0" && git push
 The repo is **public** so the installer, Sparkle, and Homebrew can fetch
 `appcast.xml`, the cask, and the release binaries without authentication.
 Current builds read `appcast.xml` from the latest GitHub release's assets;
-builds up to 2.1.0 read it from `main`, so every release updates both.
+builds up to 2.1.1 read it from `main`, so every release updates both.
 
 **First install** (or anyone still on ≤ 0.3.0, which predates auto-update) — send
 the team the one-line installer; it grabs and installs the latest notarized DMG:
