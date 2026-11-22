@@ -65,6 +65,7 @@ enum UIPreview {
     /// Settings window beside the main snapshot as `-settings.png`.
     static func writeSettingsSnapshotIfRequested() {
         guard settingsCategory != nil, let path = argument("--ui-snapshot=") else { return }
+        resizeWindowIfRequested { $0.title.hasSuffix("Settings") }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             guard let window = NSApp.windows.first(where: { $0.isVisible && $0.title.hasSuffix("Settings") }),
                   let view = window.contentView?.superview ?? window.contentView,
@@ -72,6 +73,15 @@ enum UIPreview {
             view.cacheDisplay(in: view.bounds, to: bitmap)
             try? bitmap.representation(using: .png, properties: [:])?
                 .write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-settings.png")))
+        }
+    }
+    /// `--ui-window-height=<points>` resizes the Settings or setup window before
+    /// its snapshot; a height below the window's minimum shows that minimum.
+    private static func resizeWindowIfRequested(_ matches: @escaping (NSWindow) -> Bool) {
+        guard let height = argument("--ui-window-height=").flatMap(Double.init) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            guard let window = NSApp.windows.first(where: { $0.isVisible && matches($0) }) else { return }
+            window.setContentSize(NSSize(width: window.contentLayoutRect.width, height: max(height, window.contentMinSize.height)))
         }
     }
     static var isPaired: Bool { mode != "disconnected" && mode != "setup" && onboardingStep == nil }
@@ -348,6 +358,7 @@ enum UIPreview {
         guard isEnabled, onboardingStep != nil,
               let argument = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix("--ui-snapshot=") }) else { return }
         let path = String(argument.dropFirst("--ui-snapshot=".count))
+        resizeWindowIfRequested { $0.title == "Set Up WhiskerFlow" }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             writeSnapshot(to: URL(fileURLWithPath: path))
             // A preview holds no data; an open sheet would stall a normal terminate.

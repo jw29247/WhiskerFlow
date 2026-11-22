@@ -13,7 +13,8 @@ struct OnboardingView: View {
         let step = onboarding.current
         VStack(spacing: 0) {
             header(step: step, conditions: conditions)
-            Group {
+            // Scrolls rather than clips when the window is made shorter.
+            ScrollView {
                 switch step {
                 case .welcome: OnboardingWelcomeStep(appState: appState)
                 case .permissions: OnboardingPermissionsStep(appState: appState)
@@ -27,11 +28,14 @@ struct OnboardingView: View {
                 }
             }
             .id(step)
+            .contentMargins(.horizontal, 44, for: .scrollContent)
+            .scrollBounceBehavior(.basedOnSize)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.horizontal, 44)
             footer(step: step, conditions: conditions)
         }
-        .frame(width: 660, height: 640)
+        // Wider would only add empty space; taller or shorter is the user's call.
+        .frame(width: 660)
+        .frame(minHeight: 460, idealHeight: 640, maxHeight: .infinity)
         .background(FlowStyle.canvas).foregroundStyle(FlowStyle.ink).tint(FlowStyle.accent)
         .onDisappear {
             // Closing the window is "Set up later"; finishing clears the flag first.

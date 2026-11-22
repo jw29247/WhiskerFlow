@@ -48,7 +48,9 @@ struct SettingsView: View {
                 }
             }.frame(maxWidth: .infinity).background(FlowStyle.canvas)
         }
-        .frame(width: 760, height: 650)
+        // Each category is a scrolling form, so only the height is the user's call.
+        .frame(width: 760)
+        .frame(minHeight: 480, idealHeight: 650, maxHeight: .infinity)
         .foregroundStyle(FlowStyle.ink).tint(FlowStyle.accent)
         .onChange(of: appState.settings.cleanupEnabled) { _, _ in appState.configureCleanup() }
         .onAppear { appState.settings.launchAtLogin.refresh() }
