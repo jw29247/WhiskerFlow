@@ -312,7 +312,7 @@ final class AppState {
         }
         onboarding = OnboardingController(store: onboardingStore ?? UserDefaultsOnboardingStore())
         if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "coach" {
-            meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant)
+            meetingCoachHUD = MeetingCoachHUDController(controller: meetingCapture.assistant, appState: self)
         }
         if (store == nil && !UIPreview.isEnabled) || UIPreview.mode == "call-prompt" {
             callPromptHUD = CallPromptHUDController(appState: self)
