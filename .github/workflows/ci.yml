@@ -10,7 +10,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-test:
+  # Swift build and every test target.
+  tests:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -23,18 +24,52 @@ jobs:
           python3 -m json.tool shared-vocabulary.json > /dev/null
           python3 -m json.tool Sources/WhiskerFlow/Resources/shared-vocabulary.json > /dev/null
 
-      - name: Cache SwiftPM
-        uses: actions/cache@v4
+      # Restored on every run, saved only from main (below): each saved
+      # .build is about 1.6 GB, and pull requests saving their own copies
+      # filled the repository's 10 GB cache and evicted main's, so later runs
+      # rebuilt every dependency from scratch.
+      - name: Restore SwiftPM cache
+        id: cache
+        uses: actions/cache/restore@v4
         with:
           path: .build
-          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
-          restore-keys: spm-${{ runner.os }}-
+          key: spm-tests-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            spm-tests-${{ runner.os }}-
+            spm-${{ runner.os }}-
 
       - name: Build
         run: swift build
 
       - name: Test
         run: swift test
+
+      - name: Save SwiftPM cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .build
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  # The shell tests, in parallel with the tests job. test_bundle_app.sh
+  # makes its own optimised build, so this job does not need the one above.
+  packaging:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Restore SwiftPM cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .build
+          key: spm-packaging-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            spm-packaging-${{ runner.os }}-
+            spm-${{ runner.os }}-
 
       - name: Shell packaging tests
         run: |
@@ -43,6 +78,30 @@ jobs:
             echo "== $t"
             bash "$t"
           done
+
+      - name: Save SwiftPM cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .build
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  # The required check. It passes only when every job above passed: without
+  # this job a skipped dependant would count as success for branch
+  # protection. A run superseded by a newer push is cancelled as a whole and
+  # reports nothing here.
+  build-test:
+    needs: [tests, packaging]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require tests and packaging
+        env:
+          TESTS: ${{ needs.tests.result }}
+          PACKAGING: ${{ needs.packaging.result }}
+        run: |
+          echo "tests: $TESTS, packaging: $PACKAGING"
+          [[ "$TESTS" == success && "$PACKAGING" == success ]]
 
   lint:
     runs-on: macos-26
