@@ -25,13 +25,18 @@ final class CoreAudioMicrophoneActivity: MicrophoneActivitySource {
         guard self.onChange == nil else { return true }
         self.onChange = onChange
         let system = AudioObjectID(kAudioObjectSystemObject)
-        guard let processes = listen(system, kAudioHardwarePropertyProcessObjectList, onChange: { $0.processListChanged() }),
-              let devices = listen(system, kAudioHardwarePropertyDevices, onChange: { $0.deviceListChanged() })
-        else {
+        // Each listener is recorded as soon as it is registered, so `stop()`
+        // removes the first even when the second cannot be registered.
+        guard let processes = listen(system, kAudioHardwarePropertyProcessObjectList, onChange: { $0.processListChanged() }) else {
             stop()
             return false
         }
-        systemListeners = [processes, devices]
+        systemListeners.append(processes)
+        guard let devices = listen(system, kAudioHardwarePropertyDevices, onChange: { $0.deviceListChanged() }) else {
+            stop()
+            return false
+        }
+        systemListeners.append(devices)
         guard syncProcesses(), syncDevices() else {
             stop()
             return false
@@ -49,12 +54,16 @@ final class CoreAudioMicrophoneActivity: MicrophoneActivitySource {
         onChange = nil
     }
 
+    /// A change already queued for the main queue can arrive after `stop()`;
+    /// it must not register listeners again.
     private func processListChanged() {
+        guard onChange != nil else { return }
         _ = syncProcesses()
         onChange?()
     }
 
     private func deviceListChanged() {
+        guard onChange != nil else { return }
         _ = syncDevices()
         onChange?()
     }
