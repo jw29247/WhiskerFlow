@@ -21,7 +21,7 @@ enum AtlasSignOut {
     /// The confirmation: what goes, what stays, and what happens to notes and
     /// bookmarks that haven't reached Atlas.
     static func confirmation(unsyncedMeetingItems: Int) -> String {
-        var text = "Removed from this Mac: the Atlas connection, the team glossary, your meeting schedule, the leaderboard, meeting summaries from Atlas and the Assistant’s client list.\n\nKept on this Mac: dictation history, your dictionary and corrections, Insights, settings, meeting transcripts and notes, and Assistant drafts.\n\nWhiskerFlow won’t dictate until you sign in again."
+        var text = "Removed from this Mac: the Atlas connection, the team glossary, your meeting schedule, the leaderboard, meeting summaries from Atlas and the Assistant’s client list.\n\nKept on this Mac: dictation history, your dictionary and corrections, Insights, settings, meeting transcripts and notes, and Assistant drafts.\n\nWhiskerFlow won’t dictate or record meetings until you sign in again."
         if unsyncedMeetingItems > 0 {
             let items = unsyncedMeetingItems == 1 ? "1 meeting note or bookmark hasn’t" : "\(unsyncedMeetingItems) meeting notes and bookmarks haven’t"
             text += "\n\n\(items) reached Atlas. \(unsyncedMeetingItems == 1 ? "It stays" : "They stay") on this Mac and won’t be sent after you sign out."
@@ -31,8 +31,10 @@ enum AtlasSignOut {
 }
 
 /// Meetings recorded under an earlier Atlas sign-in. Their notes and
-/// bookmarks that haven't reached Atlas stay on this Mac, and their
-/// Atlas summaries aren't fetched again: the next sign-in may be someone else.
+/// bookmarks that haven't reached Atlas stay on this Mac: the next sign-in
+/// may be someone else. Reading is different: Atlas only returns a meeting's
+/// summary to the person who owns it, so summaries are fetched again after
+/// a sign-in.
 struct AtlasEarlierSignInMeetings {
     static let key = "atlasEarlierSignInMeetingSessions"
     let defaults: UserDefaults

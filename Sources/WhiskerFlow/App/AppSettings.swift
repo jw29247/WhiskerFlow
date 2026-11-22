@@ -145,6 +145,11 @@ final class AppSettings {
         }
     }
 
+    /// True from an explicit sign-out until the next sign-in. Unlike a missing
+    /// token it is never set by a Keychain that can't be read for a moment, so
+    /// it is what stops meeting recording after a sign-out.
+    var signedOutOfAtlas: Bool { didSet { defaults.set(signedOutOfAtlas, forKey: Keys.signedOutOfAtlas) } }
+
     /// The Keychain item behind `atlasDeviceToken`, for readers off the main actor.
     var atlasTokenStore: MeetingCaptureTokenStore { meetingTokenStore }
 
@@ -269,6 +274,7 @@ final class AppSettings {
         meetingModeEnabled = defaults.object(forKey: Keys.meetingModeEnabled) as? Bool ?? false
         meetingModeChoicePending = defaults.bool(forKey: Keys.meetingModeChoicePending)
         askToRecordCalls = defaults.object(forKey: Keys.askToRecordCalls) as? Bool ?? true
+        signedOutOfAtlas = defaults.bool(forKey: Keys.signedOutOfAtlas)
         coachEnabled = defaults.object(forKey: Keys.coachEnabled) as? Bool ?? true
         coachLiveAnalysis = defaults.object(forKey: Keys.coachLiveAnalysis) as? Bool ?? true
         coachAISuggestions = defaults.object(forKey: Keys.coachAISuggestions) as? Bool ?? true
@@ -463,6 +469,7 @@ final class AppSettings {
         static let meetingModeChoicePending = "meetingModeChoicePending"
         static let meetingTranscriptRetention = "meetingTranscriptRetention"
         static let askToRecordCalls = "askToRecordCalls"
+        static let signedOutOfAtlas = "signedOutOfAtlas"
         static let coachEnabled = "coachEnabled"
         static let coachLiveAnalysis = "coachLiveAnalysis"
         static let coachAISuggestions = "coachAISuggestions"

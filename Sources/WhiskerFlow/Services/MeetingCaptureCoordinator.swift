@@ -186,9 +186,10 @@ final class MeetingCaptureCoordinator {
     return unsent.count
   }
 
-  /// True while the app needs an Atlas sign-in. Recording is then
-  /// unavailable: a recording made signed out would later be sent to
-  /// whichever account signs in next.
+  /// True after an explicit sign-out, until the next sign-in. Recording is
+  /// then unavailable: a recording made signed out would later be sent to
+  /// whichever account signs in next. A token that can't be read for a
+  /// moment is not a sign-out and does not stop recording.
   var requiresSignIn: () -> Bool = { false }
 
   var isCapturing: Bool { activeSessionID != nil }

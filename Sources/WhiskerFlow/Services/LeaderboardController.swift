@@ -137,10 +137,10 @@ final class LeaderboardController {
         }
     }
 
-    /// Sign-out: stops reporting and forgets the board. Days not yet reported
-    /// stay unreported, and the next sign-in reports from today, so one
-    /// account's usage is never sent to another. The meeting tally is this
-    /// Mac's own count and stays.
+    /// Sign-out: stops reporting and forgets the board. Earlier days not yet
+    /// reported stay unreported; the next sign-in reports from today, whose
+    /// total can include use from before the sign-out. The meeting tally is
+    /// this Mac's own count and stays.
     func signOut() {
         accountGeneration &+= 1
         periodic?.cancel()

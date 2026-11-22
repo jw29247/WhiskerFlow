@@ -12,6 +12,8 @@ private final class MemoryKeychain: @unchecked Sendable {
     private let lock = NSLock()
     private var stored: Data?
     var deleteStatus: OSStatus = errSecSuccess
+    /// Anything but success makes every read fail, like a locked Keychain.
+    var readStatus: OSStatus = errSecSuccess
 
     init(token: String?) { stored = token.map { Data($0.utf8) } }
 
@@ -27,6 +29,7 @@ private final class MemoryKeychain: @unchecked Sendable {
             copyMatching: { [self] _, result in
                 lock.lock()
                 defer { lock.unlock() }
+                guard readStatus == errSecSuccess else { return readStatus }
                 guard let stored else { return errSecItemNotFound }
                 result?.pointee = stored as CFData
                 return errSecSuccess
@@ -123,6 +126,27 @@ final class AtlasSignOutTests: XCTestCase {
         XCTAssertNotNil(state.atlasSignOutError)
     }
 
+    func testOnlyAnExplicitSignOutStopsMeetingRecording() {
+        // A Keychain that can't be read looks like "no token" to the window,
+        // but it is not a sign-out and must not cost the user a meeting.
+        let locked = MemoryKeychain(token: Self.firstToken)
+        locked.readStatus = errSecInteractionNotAllowed
+        let (unreadable, _) = signedInApp(locked)
+        XCTAssertTrue(unreadable.requiresAtlasSignIn)
+        XCTAssertFalse(unreadable.meetingRecordingRequiresSignIn)
+
+        let (state, defaults) = signedInApp(MemoryKeychain(token: Self.firstToken))
+        XCTAssertFalse(state.meetingRecordingRequiresSignIn)
+
+        XCTAssertTrue(state.signOutOfAtlas())
+        XCTAssertTrue(state.meetingRecordingRequiresSignIn, "No recording after an explicit sign-out")
+        XCTAssertTrue(defaults.bool(forKey: "signedOutOfAtlas"), "and that survives a relaunch")
+
+        state.completeAtlasSignIn(token: Self.secondToken)
+        XCTAssertFalse(state.meetingRecordingRequiresSignIn)
+        XCTAssertFalse(defaults.bool(forKey: "signedOutOfAtlas"))
+    }
+
     func testSignOutWaitsForMeetingRecordingsThatHaveNotReachedAtlas() {
         let keychain = MemoryKeychain(token: Self.firstToken)
         let (state, _) = signedInApp(keychain)
@@ -160,8 +184,6 @@ final class AtlasSignOutTests: XCTestCase {
         } catch {
             XCTAssertEqual(error.localizedDescription, "Recorded under an earlier Atlas sign-in, so this stays on this Mac.")
         }
-        let refreshed = await state.refreshAtlasInsights(earlier)
-        XCTAssertFalse(refreshed, "Its Atlas summary isn't fetched under the new sign-in")
     }
 
     func testSigningBackInAsTheSameAccountKeepsItsDrafts() async {

@@ -331,7 +331,9 @@ final class AppState {
         refreshAtlasAccountCache()
         assistant.accountIdentityProvider = { [weak self] in self?.atlasAccountIdentity }
         meetingCapture.assistant.accountIdentityProvider = assistant.accountIdentityProvider
-        meetingCapture.requiresSignIn = { [weak self] in self?.requiresAtlasSignIn ?? false }
+        // After an explicit sign-out only: a token that merely can't be read
+        // (locked Keychain, busy securityd) must not cost the user a meeting.
+        meetingCapture.requiresSignIn = { [weak self] in self?.settings.signedOutOfAtlas ?? false }
         meetingCapture.library.onRecordingFinished = { [weak self] startedAt, durationMs in
             self?.leaderboard.recordMeeting(startedAt: startedAt, durationMs: durationMs)
         }
@@ -552,8 +554,7 @@ final class AppState {
   }
 
   func refreshAtlasInsights(_ sessionID: UUID) async -> Bool {
-    guard !earlierSignInMeetings.contains(sessionID) else { return false }
-    return await meetingCapture.refreshAtlasInsights(sessionID: sessionID)
+    await meetingCapture.refreshAtlasInsights(sessionID: sessionID)
   }
 
   func retryMeetingDelivery() {
@@ -607,6 +608,8 @@ final class AppState {
         // sign-out (`signOutOfAtlas()`) clears it, and a real account change always
         // arrives with a new token.
         guard !token.isEmpty else { return }
+        // A token is a sign-in, however it got here.
+        if settings.signedOutOfAtlas { settings.signedOutOfAtlas = false }
         let identity = Self.accountIdentity(forToken: token)
         if atlasAccountIdentity != identity { atlasAccountIdentity = identity }
     }
@@ -1146,6 +1149,7 @@ final class AppState {
     /// Stores a token Atlas returned and starts what needs it.
     func completeAtlasSignIn(token: String) {
         settings.atlasDeviceToken = token
+        settings.signedOutOfAtlas = false
         refreshMeetingConfiguration()
         resumeAtlasWork()
         atlasSignOutError = nil
@@ -1167,6 +1171,9 @@ final class AppState {
     private var earlierSignInMeetings: AtlasEarlierSignInMeetings {
         AtlasEarlierSignInMeetings(defaults: settings.userDefaults)
     }
+
+    /// Whether meeting recording is unavailable because of an explicit sign-out.
+    var meetingRecordingRequiresSignIn: Bool { meetingCapture.requiresSignIn() }
 
     /// Why signing out has to wait, or nil when it can go ahead.
     var atlasSignOutBlocker: String? {
@@ -1213,6 +1220,7 @@ final class AppState {
             return false
         }
         earlierSignInMeetings.add(meetings)
+        settings.signedOutOfAtlas = true
         atlasTokenAvailable = false
         atlasAccountIdentity = nil
         atlasSignOutError = nil
