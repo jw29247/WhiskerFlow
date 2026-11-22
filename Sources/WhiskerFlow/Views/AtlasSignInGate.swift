@@ -32,7 +32,7 @@ struct AtlasSignInGate: View {
             if let error = appState.atlasSignInError {
                 Text(error).font(.caption).foregroundStyle(.orange)
             }
-            Label("The leaderboard shows your name and daily counts (words, time saved, streak, meetings) to colleagues. Never any text.",
+            Label("The leaderboard shows your name, picture and daily counts (words, time saved, streak, meetings) to colleagues. Never any text.",
                   systemImage: "trophy")
                 .font(.system(size: 11))
                 .foregroundStyle(FlowStyle.muted)

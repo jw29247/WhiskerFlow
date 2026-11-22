@@ -42,7 +42,7 @@ struct InsightsView: View {
                             topAppsCard
                             correctionsCard.frame(width: 250)
                         }
-                        Label("Insights are counts only — no transcript text — and stay on this Mac.",
+                        Label("Insights are counts only — no transcript text — and stay on this Mac. Daily totals go to the team leaderboard.",
                               systemImage: "lock")
                             .font(.system(size: 11)).foregroundStyle(FlowStyle.muted)
                     }
