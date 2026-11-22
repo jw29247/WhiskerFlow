@@ -83,7 +83,8 @@ final class MeetingAssistantController {
     private var ownWordFragments: [String] = []
     private var newWordsSinceSuggestion = 0
     private var lastSuggestionElapsed: TimeInterval?
-    private var suggestionTask: Task<Void, Never>?
+    /// The on-device suggestion under way; readable so tests can await it.
+    private(set) var suggestionTask: Task<Void, Never>?
     private var pendingSuggestion: String?
     private var aiShown = 0
     private var aiHelpful = 0
