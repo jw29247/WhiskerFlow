@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
@@ -126,7 +127,13 @@ enum UIPreview {
             // An install that 2.0.0 to 2.1.0 left recording automatically: the
             // reset turns it off and the main window asks once.
             if mode == "auto-record-notice" { defaults.set(true, forKey: "meetingModeEnabled") }
-            let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: identifier))
+            // `login-approval` shows a login item macOS holds for approval;
+            // `login-failed` a registration the system refused.
+            let loginItem = PreviewLoginItemService(status: mode == "login-approval" ? .requiresApproval : .notRegistered,
+                                                    refuses: mode == "login-failed")
+            let settings = AppSettings(defaults: defaults, meetingTokenStore: MeetingCaptureTokenStore(service: identifier),
+                                       loginItemService: loginItem)
+            if mode == "login-failed" { settings.launchAtLogin.set(true) }
             settings.showMenuBarExtra = false
             if mode == "toggle" { settings.recordingMode = .toggle; settings.delivery = .copyOnly }
             if let language = argument("--ui-language=") { settings.language = language }
@@ -433,5 +440,19 @@ private final class PreviewMicrophone: MicrophoneAuthorizationProviding {
     var authorizationState: MicrophoneAuthorizationState
     init(granted: Bool) { authorizationState = granted ? .authorized : .notDetermined }
     func requestAccess() async { authorizationState = .authorized }
+}
+
+/// Never touches the real login item.
+@MainActor
+private final class PreviewLoginItemService: LoginItemService {
+    var status: SMAppService.Status
+    private let refuses: Bool
+    init(status: SMAppService.Status, refuses: Bool) { self.status = status; self.refuses = refuses }
+    func register() throws {
+        if refuses { throw NSError(domain: "WhiskerFlowPreview", code: 1, userInfo: [NSLocalizedDescriptionKey: "Operation not permitted."]) }
+        status = .enabled
+    }
+    func unregister() throws { status = .notRegistered }
+    func openSystemSettings() {}
 }
 #endif
