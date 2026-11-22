@@ -247,6 +247,7 @@ struct OnboardingLevelBars: View {
     let levels: [Float]
     let threshold: Float
     let heard: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
@@ -260,7 +261,7 @@ struct OnboardingLevelBars: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .animation(.easeOut(duration: 0.1), value: levels)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: levels)
         .accessibilityElement()
         .accessibilityLabel(heard ? "Input level: speech detected" : "Input level")
     }
@@ -297,6 +298,7 @@ struct OnboardingShortcutStep: View {
     @State private var sawPress = false
     @State private var recordingCustom = false
     @State private var globeUsage = GlobeKeyUsage.current()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let choices: [HotkeyTrigger] = [.fn, .rightCommand, .rightOption, .custom]
 
@@ -339,9 +341,9 @@ struct OnboardingShortcutStep: View {
             OnboardingCard {
                 HStack(spacing: 16) {
                     FlowKeycap(title: settings.hotkeyDisplayName, compact: false)
-                        .scaleEffect(isPressed ? 0.94 : 1)
+                        .scaleEffect(isPressed && !reduceMotion ? 0.94 : 1)
                         .overlay(RoundedRectangle(cornerRadius: 9).stroke(isPressed || passed ? Color.green : .clear, lineWidth: 2))
-                        .animation(.easeOut(duration: 0.1), value: isPressed)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: isPressed)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(passed ? "Your shortcut works." : (isPressed ? "Got it. Now let go." : "Press your shortcut now."))
                             .font(.system(size: 14, weight: .medium))

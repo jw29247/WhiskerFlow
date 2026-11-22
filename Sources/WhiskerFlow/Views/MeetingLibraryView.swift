@@ -179,6 +179,7 @@ struct MeetingDetailView: View {
     @State private var copied = false
     @State private var insightsState: InsightsState = .idle
     @FocusState private var searchFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum InsightsState { case idle, loading, unavailable }
 
@@ -516,7 +517,7 @@ struct MeetingDetailView: View {
 
     private func jump(to id: String?, proxy: ScrollViewProxy) {
         guard let id else { return }
-        withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
         highlightedID = id
     }
 
