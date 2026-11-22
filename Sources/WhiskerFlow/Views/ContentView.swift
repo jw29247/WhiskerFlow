@@ -153,7 +153,7 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 9) {
                 FlowWaveform(size: 25)
-                Text("WhiskerFlow").font(.system(size: 19, weight: .semibold, design: .rounded)).tracking(-0.6)
+                Text("WhiskerFlow").font(FlowStyle.subheading).tracking(-0.6)
             }
             .padding(.horizontal, 25).padding(.top, 32).padding(.bottom, 42)
 
@@ -168,7 +168,7 @@ struct ContentView: View {
                         HStack(spacing: 13) {
                             Image(systemName: item.symbol).font(.system(size: 18, weight: .regular)).frame(width: 23)
                                 .accessibilityHidden(true)
-                            Text(item.rawValue).font(.system(size: 14, weight: destination == item ? .medium : .regular))
+                            Text(item.rawValue).font(FlowStyle.body.weight(destination == item ? .medium : .regular))
                             Spacer()
                             if item == .meetings && appState.isMeetingCapturing {
                                 Circle().fill(FlowStyle.recording).frame(width: 6, height: 6)
@@ -193,13 +193,13 @@ struct ContentView: View {
                     .padding(.horizontal, 28).padding(.bottom, 20)
             }
             if UIPreview.isEnabled {
-                Text("UI PREVIEW · SAMPLE DATA").font(.system(size: 9, weight: .medium)).tracking(0.5)
+                Text("UI PREVIEW · SAMPLE DATA").font(FlowStyle.small.weight(.medium)).tracking(0.5)
                     .foregroundStyle(FlowStyle.muted).padding(.horizontal, 25).padding(.bottom, 16)
             }
             Divider()
             SettingsLink {
                 Label("Settings", systemImage: "gearshape")
-                    .font(.system(size: 14)).frame(maxWidth: .infinity, alignment: .leading)
+                    .font(FlowStyle.body).frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 27).padding(.vertical, 25).contentShape(Rectangle())
             }.buttonStyle(.plain)
         }

@@ -12,7 +12,7 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 19) {
             HStack(spacing: 10) {
                 LiveFlowWaveform(appState: appState, recording: appState.isRecording, size: 26)
-                Text("WhiskerFlow").font(.system(size: 17, weight: .semibold, design: .rounded))
+                Text("WhiskerFlow").font(FlowStyle.subheading)
                 Spacer()
                 FlowStatus(title: DictationPresentation(appState: appState).statusTitle,
                            color: DictationPresentation(appState: appState).statusColor)
@@ -22,25 +22,25 @@ struct MenuBarView: View {
                 FlowKeycap(title: appState.settings.hotkeyDisplayName, compact: true)
                 Text("to dictate")
                 Spacer()
-            }.font(.system(size: 13)).foregroundStyle(FlowStyle.muted)
+            }.font(FlowStyle.callout).foregroundStyle(FlowStyle.muted)
             if appState.isShortcutPausedBySecureInput {
                 SecureInputNotice()
             }
             Divider()
             if let record = appState.latestTranscript {
                 HStack {
-                    Text("Latest dictation").font(.system(size: 11, weight: .medium)).foregroundStyle(FlowStyle.muted)
+                    Text("Latest dictation").font(FlowStyle.small.weight(.medium)).foregroundStyle(FlowStyle.muted)
                     Spacer()
                     FlowCopyButton(text: record.text, compact: true, copy: appState.copy).buttonStyle(.plain)
                 }
-                Text(record.text).font(.system(size: 13)).lineLimit(2)
+                Text(record.text).font(FlowStyle.callout).lineLimit(2)
             } else {
                 Text("Your latest words will appear here.").font(.callout).foregroundStyle(FlowStyle.muted)
             }
             Divider()
             HStack {
                 Label(appState.isMeetingCapturing ? "Meeting is recording" : "Meeting recording", systemImage: "person.2.wave.2")
-                    .font(.system(size: 12))
+                    .font(FlowStyle.caption)
                 Spacer()
                 Button(appState.isMeetingCapturing ? "Stop" : "Record") { appState.toggleMeetingCapture() }
                     .disabled(appState.isMeetingCaptureTransitioning || (!appState.isAtlasPaired && !appState.isMeetingCapturing))

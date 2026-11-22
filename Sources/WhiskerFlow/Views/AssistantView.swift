@@ -16,7 +16,7 @@ struct AssistantView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                Text("Assistant").font(.system(size: 28, weight: .semibold, design: .rounded))
+                Text("Assistant").font(FlowStyle.title)
                 Text("Shape your words, save an idea, or make dictation feel at home in each app.")
                     .foregroundStyle(FlowStyle.muted)
                 Picker("Assistant tool", selection: $tab) {
