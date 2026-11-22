@@ -1396,7 +1396,7 @@ final class AudioCaptureService {
     }
 
     func stop(reason: CaptureStopReason) -> CapturedAudio {
-        stopEngine(reusable: reason == .userReleased)
+        stopEngine(reusable: reason.endsNormally)
         onLevel?(0, 0)
         // Render failures count only when nothing was captured at all: then,
         // like failed conversions, they explain an empty capture that is not

@@ -136,6 +136,7 @@ enum UIPreview {
             if mode == "login-failed" { settings.launchAtLogin.set(true) }
             settings.showMenuBarExtra = false
             if mode == "toggle" { settings.recordingMode = .toggle; settings.delivery = .copyOnly }
+            if mode == "toggle-auto-stopped" { settings.recordingMode = .toggle }
             if let language = argument("--ui-language=") { settings.language = language }
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(identifier, isDirectory: true)
             let store = TranscriptStore(fileURL: root.appendingPathComponent("transcripts.json"), removeAudioFile: { _ in })
@@ -180,6 +181,11 @@ enum UIPreview {
             if mode == "error" { state.status = .failure("The microphone disconnected. Choose an available microphone in Settings.") }
             if mode == "recording" { state.isRecording = true; state.status = .recording; state.audioLevel = 0.16; state.liveText = "This is a preview of your words as you speak." }
             if mode == "transcribing" { state.isTranscribing = true; state.status = .transcribing }
+            if mode == "toggle-auto-stopped" {
+                let message = ToggleAutoStop.silence.savedMessage(copiedToClipboard: false)
+                state.status = .success(message)
+                state.autoStopNotice = AutoStopNotice(message: message, recordID: store.records.first?.id)
+            }
             if screen == "dictate-style" {
                 state.lastWritingStyle = DictationStyleReceipt(
                     resolution: .init(category: .email, tone: .formal, source: .website), appName: "Safari")

@@ -80,6 +80,9 @@ final class AppState {
         /// also finds no words means nothing was said: discard it rather than
         /// file a failure that no retry can ever recover.
         var discardsWithoutSpeech = false
+        /// Set when a toggle recording stopped itself: nobody may be at the
+        /// keyboard, so the text goes to History and is never pasted.
+        var autoStop: ToggleAutoStop?
 
         /// Kept on the History record, so a retry finishes an assistant capture.
         var captureIntent: TranscriptCaptureIntent? {
@@ -232,6 +235,13 @@ final class AppState {
     private var activeRecordingConfiguration: TranscriptionJobConfiguration?
     /// Whether the most recent recording streamed live (vs. file-based capture).
     private var signalAssessor = AudioSignalAssessor()
+    /// Toggle recordings only. The level callback just sets the flag; a
+    /// once-a-second check reads it (see `startToggleLimits`).
+    @ObservationIgnored private var toggleLimits: ToggleRecordingLimits?
+    @ObservationIgnored private var toggleSpeechHeard = false
+    @ObservationIgnored private var toggleLimitsTask: Task<Void, Never>?
+    /// Why the latest toggle recording stopped by itself, for the Dictate screen.
+    var autoStopNotice: AutoStopNotice?
     /// Keeps App Nap off while the hotkey is armed. A menu-bar utility with no
     /// visible window is otherwise napped: its queues are throttled and its
     /// priority lowered, which delays the first hotkey press after idle.
@@ -365,6 +375,7 @@ final class AppState {
             audioLevel = level
             guard isRecording else { return }
             signalAssessor.ingest(level: level, peak: peak)
+            if toggleLimits != nil, level >= ToggleRecordingLimits.speechLevel { toggleSpeechHeard = true }
             // Per-buffer writes would re-run the HUD's show/layout on every buffer.
             if signalQuality != signalAssessor.quality { signalQuality = signalAssessor.quality }
         }
@@ -1738,6 +1749,7 @@ final class AppState {
             )
             recordingStartedAt = Date()
             lastError = nil
+            autoStopNotice = nil
             status = .recording
             meetingCapture.dictationStarted()
             if settings.playSounds { soundService.play(.recordingStarted) }
@@ -1745,6 +1757,8 @@ final class AppState {
             // Hold mode: if the key was already released while preparing, stop now.
             if settings.recordingMode == .holdToTalk, !recordingIntentActive {
                 await finishRecording()
+            } else if ToggleRecordingLimits.apply(to: settings.recordingMode, assistantShortcut: assistantShortcutActive) {
+                startToggleLimits(sessionID: sessionID)
             }
         } catch {
             _ = recordingCoordinator.fail(sessionID)
@@ -1783,6 +1797,9 @@ final class AppState {
         }
         dictationWarmUpTask?.cancel()
         dictationWarmUpTask = nil
+        toggleLimitsTask?.cancel()
+        toggleLimitsTask = nil
+        toggleLimits = nil
         let finishStarted = ProcessInfo.processInfo.systemUptime
         lifecycleLogger.info("Finishing recording", metadata: ["event": "finish_started", "session": "\(sessionID)"])
         defer { lifecycleLogger.info("Recording finish returned", metadata: ["event": "finish_returned", "session": "\(sessionID)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - finishStarted) * 1000)"]) }
@@ -1806,7 +1823,7 @@ final class AppState {
         status = .transcribing
         DiagnosticsService.breadcrumb(
             category: "recording",
-            metadata: ["phase": "finishing", "stop_reason": String(describing: reason)]
+            metadata: ["phase": "finishing", "stop_reason": reason.diagnosticName]
         )
         // A wedged CoreML decode never returns, so nothing below can unstick the
         // UI on its own — this watchdog is the only way back to idle.
@@ -1916,6 +1933,50 @@ final class AppState {
                 : "Disk full: the recording stopped early and later speech is missing")
         }
     }
+
+    /// Stops a forgotten toggle recording at `ToggleRecordingLimits`. Checks once
+    /// a second; the level callback only sets `toggleSpeechHeard`.
+    private func startToggleLimits(sessionID: UUID) {
+        toggleLimitsTask?.cancel()
+        toggleSpeechHeard = false
+        toggleLimits = ToggleRecordingLimits(startedAt: ProcessInfo.processInfo.systemUptime)
+        toggleLimitsTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled, let self, self.recordingCoordinator.phase == .recording(sessionID),
+                      var limits = self.toggleLimits else { return }
+                let now = ProcessInfo.processInfo.systemUptime
+                if self.toggleSpeechHeard {
+                    limits.noteSpeech(at: now)
+                    self.toggleSpeechHeard = false
+                    self.toggleLimits = limits
+                }
+                guard let limit = limits.autoStop(at: now) else { continue }
+                self.lifecycleLogger.notice("Toggle recording stopped automatically", metadata: [
+                    "event": "recording_auto_stopped", "session": "\(sessionID)", "auto_stop": "\(limit.rawValue)",
+                    "elapsed_ms": "\((now - limits.startedAt) * 1000)"
+                ])
+                // Its own task: the finish cancels this one.
+                Task { await self.finishRecording(reason: .autoStopped(limit)) }
+                return
+            }
+        }
+    }
+
+    #if DEBUG
+    /// Tests only: runs a stopped capture through transcription and delivery the
+    /// way `finishRecording` does, without a microphone.
+    func completeCaptureForTesting(samples: [Float], totalSampleCount: Int? = nil, audioURL: URL,
+                                   stopReason: CaptureStopReason) async {
+        let sessionID = UUID()
+        latestRecordingSessionID = sessionID
+        await transcribeCapturedSamples(
+            samples, conversionFailures: 0, capturedAudioURL: audioURL,
+            totalSampleCount: totalSampleCount ?? samples.count, stopReason: stopReason,
+            pasteTarget: nil, configuration: makeTranscriptionConfiguration(), sessionID: sessionID
+        )
+    }
+    #endif
 
     /// Off the release-to-paste path: confirm the microphone grant the press
     /// trusted, then ready the engine for the next press.
@@ -2080,6 +2141,12 @@ final class AppState {
         configuration.discardsWithoutSpeech = conversionFailures == 0
             && totalSampleCount == samples.count
             && !BoundedDecodeWindowPolicy.containsAudibleActivity(samples)
+        if case .autoStopped(let limit) = stopReason {
+            configuration.autoStop = limit
+            // Nothing reached the speech line: if the recognizer agrees, it is an
+            // ordinary empty recording, not a failure to retry.
+            if limit == .noSpeech { configuration.discardsWithoutSpeech = true }
+        }
         let record = TranscriptRecord(
             text: "",
             audioFilePath: url.path,
@@ -2263,6 +2330,11 @@ final class AppState {
                 }
                 return
             }
+            if let autoStop = configuration.autoStop, configuration.purpose == .dictation {
+                deliverAutoStopped(finalText, autoStop: autoStop, configuration: configuration,
+                                   recordID: historySaved ? record.id : nil, mayUpdateUI: mayUpdateUI)
+                return
+            }
             await deliver(
                 finalText,
                 pasteTarget: pasteTarget,
@@ -2291,7 +2363,12 @@ final class AppState {
                 selectedRecordID = records.first?.id
             }
             if canUpdateLifecycleUI(for: sessionID) {
-                status = .failure("No speech detected")
+                if let autoStop = configuration.autoStop {
+                    status = .success(autoStop.nothingSaidMessage)
+                    autoStopNotice = AutoStopNotice(message: autoStop.nothingSaidMessage, recordID: nil)
+                } else {
+                    status = .failure("No speech detected")
+                }
             }
         } catch {
             do {
@@ -2419,6 +2496,22 @@ final class AppState {
                 if status != final { status = final }
             }
         }
+    }
+
+    /// A toggle recording that stopped itself: never pasted, since nobody may be
+    /// at the keyboard. "Copy only" still copies, as it always does. When History
+    /// did not keep the text ("Don't save history", or the save failed), the
+    /// clipboard is the only way back to it, so it is copied there instead of
+    /// being lost.
+    private func deliverAutoStopped(_ text: String, autoStop: ToggleAutoStop, configuration: TranscriptionJobConfiguration,
+                                    recordID: UUID?, mayUpdateUI: Bool) {
+        let savedID = recordID.flatMap { id in records.contains { $0.id == id } ? id : nil }
+        let copies = configuration.delivery == .copyOnly || savedID == nil
+        if copies { pasteService.copy(text) }
+        guard mayUpdateUI else { return }
+        let message = autoStop.savedMessage(inHistory: savedID != nil, copiedToClipboard: copies)
+        status = .success(message)
+        autoStopNotice = AutoStopNotice(message: message, recordID: savedID)
     }
 
     func retryFailedPaste() async {
