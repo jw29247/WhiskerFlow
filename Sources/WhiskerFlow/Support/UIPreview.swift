@@ -305,10 +305,10 @@ enum UIPreview {
             entry(.replacement("sequel server", "SQL Server", addedAt: hours(400)), uses: 3, lastUsed: hours(70)),
             entry(.replacement("CX", "customer experience", caseSensitive: true, addedAt: hours(800)), uses: 2, lastUsed: hours(200))
         ]
-        var demoted = DictionaryEntry.replacement("vivim", "Vivamn", origin: .learned, addedAt: hours(2600))
+        var demoted = DictionaryEntry.replacement("solim", "Solamn", origin: .learned, addedAt: hours(2600))
         demoted.useCount = 1
         dictionary.demoted = [DemotedEntry(entry: demoted, demotedAt: hours(20))]
-        dictionary.readOnlyUsage[DictionaryPair(heard: "manukora", written: "Manukora").key] = DictionaryUsageStat(count: 4, lastUsedAt: hours(26))
+        dictionary.readOnlyUsage[DictionaryPair(heard: "lumarova", written: "Lumarova").key] = DictionaryUsageStat(count: 4, lastUsedAt: hours(26))
         let store = DictionaryStore()
         store.update { $0 = dictionary }
         return store
