@@ -286,7 +286,14 @@ struct PasteService: TextDeliveryService {
 final class ClipboardRestorer {
     private var saved: [[NSPasteboard.PasteboardType: Data]]?
     private var ownedChangeCount: Int?
-    private var pendingRestore: Task<Void, Never>?
+    /// The delayed restore, readable so tests can await it.
+    private(set) var pendingRestore: Task<Void, Never>?
+    /// Waits out the restore delay; tests end it on demand.
+    private let sleep: DeadlineSleep
+
+    init(sleep: @escaping DeadlineSleep = systemDeadlineSleep) {
+        self.sleep = sleep
+    }
 
     func begin(on pasteboard: NSPasteboard) {
         pendingRestore?.cancel()
@@ -314,8 +321,9 @@ final class ClipboardRestorer {
     func finish(on pasteboard: NSPasteboard, changeCount: Int, after delay: TimeInterval) {
         guard delay > 0 else { restore(on: pasteboard, changeCount: changeCount); return }
         pendingRestore?.cancel()
+        let sleep = sleep
         pendingRestore = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            await sleep(UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
             self?.restore(on: pasteboard, changeCount: changeCount)
         }
