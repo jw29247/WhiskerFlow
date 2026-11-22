@@ -77,16 +77,17 @@ final class OnboardingIntegrationTests: XCTestCase {
         let controller = OnboardingController(store: store)
         XCTAssertTrue(controller.presentIfNeeded(hasHistory: false, hadPreviousLaunch: false, permissionsReady: false))
         XCTAssertTrue(controller.isPresented)
-        XCTAssertEqual(store.stored?.current, .welcome)
+        XCTAssertEqual(store.stored?.current, .permissions)
 
-        controller.advance(OnboardingConditions())
-        XCTAssertEqual(store.stored?.current, .permissions, "saved on every step so a quit resumes here")
-        XCTAssertEqual(store.stored?.completed, [.welcome])
+        let granted = OnboardingConditions(microphoneGranted: true, accessibilityGranted: true)
+        controller.advance(granted)
+        XCTAssertEqual(store.stored?.current, .microphone, "saved on every step so a quit resumes here")
+        XCTAssertEqual(store.stored?.completed, [.permissions])
 
         // A relaunch reads the same store and resumes.
         let relaunched = OnboardingController(store: store)
         XCTAssertTrue(relaunched.presentIfNeeded(hasHistory: false, hadPreviousLaunch: true, permissionsReady: false))
-        XCTAssertEqual(relaunched.current, .permissions)
+        XCTAssertEqual(relaunched.current, .microphone)
         XCTAssertTrue(store.stored?.isInProgress == true)
     }
 
@@ -110,7 +111,7 @@ final class OnboardingIntegrationTests: XCTestCase {
 
         controller.restart()
         XCTAssertTrue(controller.isPresented)
-        XCTAssertEqual(controller.current, .welcome)
+        XCTAssertEqual(controller.current, .permissions)
         XCTAssertFalse(store.stored?.isFinished == true)
     }
 
@@ -119,12 +120,48 @@ final class OnboardingIntegrationTests: XCTestCase {
         let store = MemoryOnboardingStore()
         let controller = OnboardingController(store: store)
         controller.present()
-        controller.advance(OnboardingConditions())
+        controller.advance(OnboardingConditions(microphoneGranted: true, accessibilityGranted: true))
         controller.dismiss()
         XCTAssertFalse(controller.isPresented)
-        XCTAssertEqual(store.stored?.current, .permissions)
+        XCTAssertEqual(store.stored?.current, .microphone)
         XCTAssertFalse(OnboardingController(store: store)
             .presentIfNeeded(hasHistory: false, hadPreviousLaunch: true, permissionsReady: true))
+    }
+
+    @MainActor
+    func testSomeoneMidwayOnARemovedScreenResumesOnTheNextRemainingOne() throws {
+        let name = "WhiskerFlow.onboarding-tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        // As a nine-screen build saved it, part-way through on the shortcut screen.
+        let saved: [String: Any] = ["current": "shortcut", "furthest": "language", "completed": ["welcome", "permissions", "microphone"],
+                                    "skipped": [String](), "startedAt": 100.0]
+        defaults.set(try JSONSerialization.data(withJSONObject: saved), forKey: UserDefaultsOnboardingStore.key)
+
+        let controller = OnboardingController(store: UserDefaultsOnboardingStore(defaults: defaults))
+        XCTAssertTrue(controller.presentIfNeeded(hasHistory: true, hadPreviousLaunch: true, permissionsReady: true))
+        XCTAssertEqual(controller.current, .practice)
+        XCTAssertEqual(controller.flow.progress.completed, [.permissions, .microphone])
+        controller.advance(OnboardingConditions(microphoneGranted: true, accessibilityGranted: true))
+        XCTAssertEqual(controller.current, .done)
+        controller.advance(OnboardingConditions(microphoneGranted: true, accessibilityGranted: true))
+        XCTAssertFalse(controller.isPresented)
+        XCTAssertTrue(UserDefaultsOnboardingStore(defaults: defaults).load()?.isFinished == true)
+    }
+
+    @MainActor
+    func testSomeoneWhoFinishedOnAnOldBuildIsNotShownSetupAgain() throws {
+        let name = "WhiskerFlow.onboarding-tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let saved: [String: Any] = ["current": "extras", "furthest": "done", "completed": ["welcome", "shortcut", "extras"],
+                                    "skipped": ["model"], "startedAt": 100.0, "finishedAt": 200.0]
+        defaults.set(try JSONSerialization.data(withJSONObject: saved), forKey: UserDefaultsOnboardingStore.key)
+
+        let controller = OnboardingController(store: UserDefaultsOnboardingStore(defaults: defaults))
+        XCTAssertFalse(controller.presentIfNeeded(hasHistory: false, hadPreviousLaunch: true, permissionsReady: false))
+        XCTAssertFalse(controller.isPresented)
+        XCTAssertTrue(controller.flow.progress.isFinished)
     }
 
     @MainActor

@@ -4,42 +4,7 @@ import SwiftUI
 import WhiskerFlowAppSupport
 import WhiskerFlowCore
 
-// MARK: - 1. Welcome
-
-struct OnboardingWelcomeStep: View {
-    let appState: AppState
-
-    var body: some View {
-        VStack(spacing: 20) {
-            Spacer(minLength: 8)
-            FlowWaveform(size: 60)
-            Text("Speak. It’s written.")
-                .font(FlowStyle.display).tracking(-0.8)
-                .accessibilityAddTraits(.isHeader)
-            Text("Hold one key, say what you mean, and WhiskerFlow types it wherever your cursor is, in any app.")
-                .font(FlowStyle.body).foregroundStyle(FlowStyle.muted)
-                .multilineTextAlignment(.center).frame(maxWidth: 440)
-            HStack(spacing: 12) {
-                Text(DictationPresentation(appState: appState).gesture)
-                FlowKeycap(title: appState.settings.hotkeyDisplayName)
-                Text("to dictate")
-            }
-            .font(FlowStyle.subheading.weight(.regular)).fontDesign(.default)
-            .padding(.vertical, 6)
-            OnboardingCard {
-                Label("Private by design", systemImage: "lock.shield").font(FlowStyle.body.weight(.medium))
-                Text("Dictation runs entirely on this Mac. Your voice and your words aren’t sent anywhere. Meeting recording is separate: it starts only when you choose Record or turn on automatic recording, and recordings are uploaded to Atlas.")
-                    .font(FlowStyle.callout).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: 470)
-            Text("Setup takes about two minutes. The speech model is already downloading in the background.")
-                .font(.caption).foregroundStyle(FlowStyle.muted)
-            Spacer(minLength: 0)
-        }
-    }
-}
-
-// MARK: - 2. Permissions
+// MARK: - 1. Permissions
 
 struct OnboardingPermissionsStep: View {
     @Bindable var appState: AppState
@@ -49,8 +14,8 @@ struct OnboardingPermissionsStep: View {
         let micGranted = appState.hasMicrophonePermission
         let axGranted = appState.hasAccessibilityPermission
         VStack(spacing: 12) {
-            OnboardingHeading(symbol: nil, title: "Two permissions.",
-                              detail: "WhiskerFlow needs these to hear you and to type for you. This screen updates on its own as you change them.")
+            OnboardingHeading(symbol: nil, title: "Welcome to WhiskerFlow.",
+                              detail: "Hold a key, speak, and it types for you in any app. First, allow these two so it can hear you and type. This screen updates as you go.")
             permissionCard(
                 title: "Microphone", symbol: "mic", granted: micGranted,
                 why: "To hear you while you hold your shortcut. What it hears is transcribed on this Mac.",
@@ -123,7 +88,7 @@ struct OnboardingPermissionsStep: View {
     }
 }
 
-// MARK: - 3. Microphone
+// MARK: - 2. Microphone
 
 struct OnboardingMicrophoneStep: View {
     @Bindable var appState: AppState
@@ -267,179 +232,7 @@ struct OnboardingLevelBars: View {
     }
 }
 
-// MARK: - 4. Shortcut
-
-struct OnboardingLanguageStep: View {
-    @Bindable var appState: AppState
-
-    var body: some View {
-        VStack(spacing: 12) {
-            OnboardingHeading(symbol: nil, title: "Which language will you speak?",
-                              detail: "Tell WhiskerFlow once. It's faster than working it out every time, and you can change it in Settings.")
-            OnboardingCard {
-                DictationLanguageControls(appState: appState)
-            }
-            .frame(maxWidth: 520)
-        }
-        .onAppear {
-            // Start from the Mac's own language the first time.
-            if !appState.onboarding.flow.progress.completed.contains(.language), appState.settings.language == "en" {
-                let suggested = DictationLanguageCatalog.suggested()
-                if suggested != "en" { appState.settings.language = suggested }
-            }
-        }
-    }
-}
-
-struct OnboardingShortcutStep: View {
-    @Bindable var appState: AppState
-    @State private var monitor: HotkeyMonitor?
-    @State private var isPressed = false
-    @State private var sawPress = false
-    @State private var recordingCustom = false
-    @State private var globeUsage = GlobeKeyUsage.current()
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private static let choices: [HotkeyTrigger] = [.fn, .rightCommand, .rightOption, .custom]
-
-    var body: some View {
-        let settings = appState.settings
-        let passed = appState.onboarding.flow.isSatisfied(.shortcut, appState.onboardingConditions)
-        VStack(spacing: 12) {
-            OnboardingHeading(symbol: nil, title: "Choose your shortcut.",
-                              detail: "Pick the key you’ll hold to talk. It works in every app.")
-            HStack(spacing: 10) {
-                ForEach(Self.choices) { choice in choiceCard(choice, selected: settings.hotkey == choice) }
-            }
-            if settings.hotkey == .custom {
-                KeyRecorderView(combo: $appState.settings.customHotkey,
-                                onChange: { appState.reloadHotkey() },
-                                onRecordingChange: { recordingCustom = $0 })
-                    .frame(maxWidth: 320)
-            }
-            Picker("Mode", selection: $appState.settings.recordingMode) {
-                Text("Hold to talk").tag(RecordingMode.holdToTalk)
-                Text("Tap to start/stop").tag(RecordingMode.toggle)
-            }
-            .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 320)
-
-            if settings.activeHotkeyCombo == HotkeyTrigger.fn.presetCombo {
-                Text(GlobeKeyUsage.shortcutOverrideExplanation)
-                    .font(.caption).foregroundStyle(FlowStyle.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if settings.activeHotkeyCombo == HotkeyTrigger.fn.presetCombo, let explanation = globeUsage.conflictExplanation {
-                OnboardingCard {
-                    Label("Your 🌐 key already does something", systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(FlowStyle.warning).font(FlowStyle.callout.weight(.medium))
-                    Text(explanation).font(.caption).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
-                    Button("Open Keyboard Settings") { SystemSettingsLink.open(SystemSettingsLink.keyboard) }
-                }
-            }
-
-            OnboardingCard {
-                HStack(spacing: 16) {
-                    FlowKeycap(title: settings.hotkeyDisplayName, compact: false)
-                        .scaleEffect(isPressed && !reduceMotion ? 0.94 : 1)
-                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(isPressed || passed ? FlowStyle.success : .clear, lineWidth: 2))
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.1), value: isPressed)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(passed ? "Your shortcut works." : (isPressed ? "Got it. Now let go." : "Press your shortcut now."))
-                            .font(FlowStyle.body.weight(.medium))
-                        Text(testDetail(passed: passed)).font(.caption).foregroundStyle(FlowStyle.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer()
-                    if passed {
-                        Image(systemName: "checkmark.circle.fill").font(.title2).foregroundStyle(FlowStyle.success)
-                            .accessibilityHidden(true)
-                    }
-                }
-            }
-        }
-        .onAppear {
-            // While this screen tests the key, it must not start a real dictation.
-            appState.setHotkeyCaptureActive(true)
-            startMonitor()
-        }
-        .onDisappear {
-            monitor?.stop()
-            monitor = nil
-            appState.setHotkeyCaptureActive(false)
-        }
-        .onChange(of: appState.settings.hotkey) { _, _ in shortcutChanged() }
-        .onChange(of: appState.settings.customHotkey) { _, _ in shortcutChanged() }
-        .task {
-            while !Task.isCancelled {
-                let usage = GlobeKeyUsage.current()
-                if usage != globeUsage { globeUsage = usage }
-                try? await Task.sleep(for: .seconds(1.5))
-            }
-        }
-    }
-
-    private func choiceCard(_ choice: HotkeyTrigger, selected: Bool) -> some View {
-        Button { appState.settings.hotkey = choice } label: {
-            VStack(spacing: 8) {
-                Group {
-                    switch choice {
-                    case .fn: Image(systemName: "globe")
-                    case .rightCommand: Text("⌘")
-                    case .rightOption: Text("⌥")
-                    default: Image(systemName: "keyboard")
-                    }
-                }
-                .font(FlowStyle.subheading.weight(.medium)).frame(height: 24)
-                .accessibilityHidden(true)
-                Text(choice == .fn ? "fn / Globe" : (choice == .custom ? "Custom" : choice.displayName))
-                    .font(FlowStyle.caption.weight(selected ? .medium : .regular))
-            }
-            .frame(maxWidth: .infinity).padding(.vertical, 14)
-            .background(selected ? FlowStyle.selection : FlowStyle.surface, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(selected ? FlowStyle.accent : FlowStyle.line, lineWidth: selected ? 1.5 : 1))
-            .contentShape(RoundedRectangle(cornerRadius: 10))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(selected ? FlowStyle.accent : FlowStyle.ink)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func testDetail(passed: Bool) -> String {
-        let mode = appState.settings.recordingMode == .holdToTalk
-            ? "Hold it to talk and let go to paste."
-            : "Tap it to start, and tap again to stop and paste."
-        if passed && !appState.hasAccessibilityPermission {
-            return "It fires here. Allow Accessibility so it also works in other apps."
-        }
-        return passed ? mode : "Nothing will be recorded. This only checks that WhiskerFlow sees the key."
-    }
-
-    private func startMonitor() {
-        guard !UIPreview.isEnabled else { return }
-        let monitor = HotkeyMonitor(combo: appState.settings.activeHotkeyCombo) { pressed in
-            guard !recordingCustom else { return }
-            isPressed = pressed
-            if pressed {
-                sawPress = true
-            } else if sawPress {
-                appState.onboarding.markPassed(.shortcut)
-            }
-        }
-        monitor.start()
-        self.monitor = monitor
-    }
-
-    private func shortcutChanged() {
-        appState.reloadHotkey()
-        monitor?.update(combo: appState.settings.activeHotkeyCombo)
-        isPressed = false
-        sawPress = false
-        appState.onboarding.invalidate(.shortcut)
-    }
-}
-
-// MARK: - 5. Model
+// MARK: - Network
 
 @MainActor
 @Observable
@@ -466,104 +259,28 @@ final class NetworkReachability {
     }
 }
 
-struct OnboardingModelStep: View {
-    @Bindable var appState: AppState
-    @State private var network = NetworkReachability()
-
-    var body: some View {
-        let engine = appState.settings.engine
-        VStack(spacing: 12) {
-            OnboardingHeading(symbol: nil, title: engine == .parakeetTDTv3 ? "Getting your speech model ready." : "Your speech engine.",
-                              detail: engine == .parakeetTDTv3
-                                ? "WhiskerFlow transcribes on this Mac with Parakeet, a speech model that downloads once. Once it’s ready, your first dictation is instant."
-                                : "You’re using \(engine.displayName). It doesn’t need the Parakeet download.")
-            OnboardingCard {
-                HStack {
-                    Label(engine == .parakeetTDTv3 ? "Parakeet TDT v3" : engine.displayName, systemImage: "cpu")
-                        .font(FlowStyle.body.weight(.medium))
-                    Spacer()
-                    Text(sizeText).font(.caption).foregroundStyle(FlowStyle.muted)
-                }
-                ProgressView(value: progressValue)
-                    .progressViewStyle(.linear)
-                    .tint(appState.modelState == .ready ? FlowStyle.success : FlowStyle.accent)
-                HStack {
-                    Text(statusText).font(.callout).foregroundStyle(appState.modelState.isFailure ? FlowStyle.danger : FlowStyle.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer()
-                    if appState.modelState == .preparing, appState.modelDownload.tracker != nil {
-                        Text(appState.modelDownload.fraction, format: .percent.precision(.fractionLength(0)))
-                            .font(.callout.monospacedDigit()).foregroundStyle(FlowStyle.muted)
-                    }
-                    if appState.modelState == .ready {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(FlowStyle.success)
-                            .accessibilityLabel("Ready")
-                    }
-                }
-                if appState.modelState.isFailure {
-                    Button("Retry") { appState.warmUpEngine() }
-                }
-            }
-            if !network.isOnline && appState.modelState != .ready && appState.modelDownload.needsDownload {
-                OnboardingNotice(tone: .warning, text: "You’re offline. The download starts again as soon as you reconnect."
-                                 + (appState.settings.allowAppleFallback ? " Until then, dictation uses Apple Speech." : ""))
-            } else if appState.modelState.isFailure && appState.settings.allowAppleFallback {
-                OnboardingNotice(tone: .info, text: "You can still dictate with Apple Speech while this is sorted out.")
-            }
-            if appState.modelState != .ready {
-                Text("You can keep going. It finishes in the background.").font(.caption).foregroundStyle(FlowStyle.muted)
-            }
-        }
-        .onAppear { network.start() }
-        .onDisappear { network.stop() }
-        .onChange(of: network.isOnline) { _, online in
-            if online && appState.modelState.isFailure { appState.warmUpEngine() }
-        }
-    }
-
-    private var progressValue: Double {
-        switch appState.modelState {
-        case .ready: return 1
-        case .preparing: return appState.modelDownload.fraction
-        case .failed, .unloaded: return appState.modelDownload.fraction
-        }
-    }
-
-    private var sizeText: String {
-        guard appState.settings.engine == .parakeetTDTv3 else { return "No download" }
-        let size = ByteCountFormatter.string(fromByteCount: StagedDownloadProgress.parakeetDownloadBytes, countStyle: .file)
-        if appState.modelDownload.needsDownload && appState.modelState != .ready { return "About \(size) · one-time download" }
-        return "\(size) · stored on this Mac"
-    }
-
-    private var statusText: String {
-        switch appState.modelState {
-        case .ready: return "Ready. Dictation will be instant."
-        case .unloaded: return "Waiting to start…"
-        case .failed(let message): return message
-        case .preparing:
-            guard appState.settings.engine == .parakeetTDTv3 else { return "Preparing…" }
-            if appState.modelDownload.isCompiling { return "Optimizing for your Mac’s Neural Engine…" }
-            return appState.modelDownload.needsDownload ? "Downloading…" : "Loading the model…"
-        }
-    }
-}
-
-// MARK: - 6. Practice
+// MARK: - 3. Practice
 
 struct OnboardingPracticeStep: View {
     @Bindable var appState: AppState
+    let model: OnboardingModelWatch
     @State private var prompt: PracticePrompt = .sample
     @State private var text = ""
     @State private var results: [PracticePrompt: String] = [:]
     @FocusState private var fieldFocused: Bool
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
+        let presentation = DictationPresentation(appState: appState)
+        let readiness = OnboardingPracticeReadiness(phase: model.phase(of: appState),
+                                                    fallbackAllowed: appState.settings.allowAppleFallback)
         VStack(spacing: 12) {
             OnboardingHeading(symbol: nil, title: prompt == .sample ? "Try it out." : "Change your mind.",
-                              detail: "Click in the box, then \(DictationPresentation(appState: appState).gesture.lowercased()) \(appState.settings.hotkeySpokenName) and read the sentence. \(DictationPresentation(appState: appState).finish) when you’re done.")
+                              detail: "Click in the box, \(presentation.gesture.lowercased()) \(appState.settings.hotkeySpokenName) and read the sentence aloud. \(presentation.finish) when you’re done.")
+            shortcutCard
+            if readiness.headline != nil { modelCard(readiness) }
             OnboardingCard {
-                Text(prompt.instruction).font(.caption).foregroundStyle(FlowStyle.muted)
+                Text(prompt.instruction).font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
                 Text("“\(prompt.sentence)”").font(FlowStyle.subheading.weight(.medium))
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -573,14 +290,18 @@ struct OnboardingPracticeStep: View {
                     .focused($fieldFocused)
                     .scrollContentBackground(.hidden)
                     .padding(8)
+                    .disabled(!readiness.canPractise)
+                    .accessibilityLabel("Practice box")
                 if text.isEmpty {
-                    Text(placeholder).font(FlowStyle.body).foregroundStyle(FlowStyle.muted)
+                    Text(placeholder(readiness)).font(FlowStyle.body).foregroundStyle(FlowStyle.muted)
                         .padding(.horizontal, 13).padding(.vertical, 8).allowsHitTesting(false)
+                        .accessibilityHidden(true)
                 }
             }
             .frame(height: 78)
             .background(FlowStyle.surface, in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(fieldFocused ? FlowStyle.accent : FlowStyle.line, lineWidth: 1))
+            .opacity(readiness.canPractise ? 1 : 0.6)
 
             if let result = results[prompt] {
                 outcome(for: prompt, transcript: result)
@@ -593,13 +314,6 @@ struct OnboardingPracticeStep: View {
                     .buttonStyle(FlowPrimaryButtonStyle())
                 }
             }
-            if results[.selfCorrection] != nil {
-                OnboardingCard {
-                    Label("Now try it anywhere", systemImage: "sparkles").font(FlowStyle.callout.weight(.medium))
-                    Text("Open Notes, Mail or Slack, click where you’d type, and \(DictationPresentation(appState: appState).gesture.lowercased()) \(appState.settings.hotkeySpokenName).")
-                        .font(.caption).foregroundStyle(FlowStyle.muted)
-                }
-            }
         }
         .onAppear {
             appState.practiceDelivery?.practiceField = { insert($0) }
@@ -609,12 +323,71 @@ struct OnboardingPracticeStep: View {
                 text = preview.results[preview.prompt] ?? ""
                 appState.onboarding.markPassed(.practice)
             }
-            fieldFocused = true
+            if readiness.canPractise { fieldFocused = true }
         }
         .onDisappear { appState.practiceDelivery?.practiceField = nil }
+        // Practice opens by itself as soon as the model is ready.
+        .onChange(of: readiness.canPractise) { _, canPractise in if canPractise { fieldFocused = true } }
     }
 
-    private var placeholder: String {
+    private var shortcutCard: some View {
+        OnboardingCard {
+            HStack(spacing: 14) {
+                FlowKeycap(title: appState.settings.hotkeyDisplayName, compact: true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Your shortcut").font(FlowStyle.callout.weight(.medium))
+                    Text(appState.settings.recordingMode == .holdToTalk
+                         ? "Hold it to talk, then let go to paste. It works in every app."
+                         : "Press it to start, then press again to paste. It works in every app.")
+                        .font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button("Change shortcut…") { openSettings() }
+                    .accessibilityHint("Opens Settings, where you can choose another key.")
+            }
+            .accessibilityElement(children: .contain)
+            if appState.settings.hotkey == .fn && appState.hasGlobeKeyConflict {
+                OnboardingNotice(tone: .warning, text: "Your 🌐 key also does something of its own. In Keyboard settings, set “Press 🌐 key to” to Do Nothing, or change the shortcut.")
+                Button("Open Keyboard Settings") { SystemSettingsLink.open(SystemSettingsLink.keyboard) }
+            }
+        }
+    }
+
+    private func modelCard(_ readiness: OnboardingPracticeReadiness) -> some View {
+        OnboardingCard {
+            if let headline = readiness.headline {
+                Text(headline).font(FlowStyle.callout.weight(.medium))
+                    .foregroundStyle(readiness.offersRetry ? FlowStyle.danger : FlowStyle.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if readiness.showsProgress {
+                if let fraction = readiness.progressFraction {
+                    ProgressView(value: fraction) {
+                        EmptyView()
+                    } currentValueLabel: {
+                        Text(fraction, format: .percent.precision(.fractionLength(0)))
+                            .font(FlowStyle.caption.monospacedDigit()).foregroundStyle(FlowStyle.muted)
+                    }
+                    .progressViewStyle(.linear)
+                    .accessibilityLabel("Speech model download")
+                } else {
+                    ProgressView().progressViewStyle(.linear)
+                        .accessibilityLabel("Speech model")
+                }
+            }
+            if let detail = readiness.detail {
+                Text(detail).font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if readiness.offersRetry {
+                Button("Retry") { model.start(.retry, appState: appState) }
+            }
+        }
+    }
+
+    private func placeholder(_ readiness: OnboardingPracticeReadiness) -> String {
+        if !readiness.canPractise { return "Ready when the speech model is." }
         if appState.isRecording { return "Listening…" }
         if appState.isTranscribing { return "Writing it down…" }
         return "Your words will appear here."
@@ -629,112 +402,30 @@ struct OnboardingPracticeStep: View {
     @ViewBuilder private func outcome(for prompt: PracticePrompt, transcript: String) -> some View {
         switch PracticeEvaluation.evaluate(prompt, transcript: transcript) {
         case .matched:
-            OnboardingNotice(tone: .success, text: "Nicely done. That’s what you said, typed for you.")
+            OnboardingNotice(tone: .success, text: "That’s it. What you said, typed for you.")
         case .corrected:
             OnboardingNotice(tone: .success, text: "WhiskerFlow kept only what you meant: “\(transcript)”")
         case .notCorrected:
-            OnboardingNotice(tone: .warning, text: "The correction stayed in. Turn on “Recognize clear spoken corrections” in Assistant to have WhiskerFlow tidy these up.")
+            OnboardingNotice(tone: .warning, text: "The correction stayed in. To have WhiskerFlow tidy these up, turn on “Recognize clear spoken corrections” in Assistant.")
         case .different:
             OnboardingNotice(tone: .info, text: "That’s what WhiskerFlow heard. Try the sentence again if you like.")
         }
     }
 }
 
-// MARK: - 7. Extras
-
-struct OnboardingExtrasStep: View {
-    @Bindable var appState: AppState
-    @State private var screenRecordingRequestedAt: Date?
-
-    var body: some View {
-        let paired = appState.isAtlasPaired
-        let assistant = appState.assistant
-        VStack(spacing: 12) {
-            OnboardingHeading(symbol: nil, title: "Optional extras.",
-                              detail: "Skip these now if you like. They live in Meetings, Assistant and Settings.")
-            OnboardingCard {
-                HStack {
-                    Label("Connect Atlas", systemImage: "person.crop.circle.badge.checkmark").font(FlowStyle.body.weight(.medium))
-                    Spacer()
-                    if paired {
-                        OnboardingStatusBadge(granted: true, grantedText: "Connected")
-                    } else {
-                        Button(appState.isSigningInToAtlas ? "Connecting…" : "Connect") { appState.signInToAtlas() }
-                            .disabled(appState.isSigningInToAtlas)
-                    }
-                }
-                Text("Your agency workspace. Connecting unlocks meeting recordings and transcripts, the Assistant, and each client’s vocabulary, so names and jargon come out right.")
-                    .font(.caption).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
-                if let error = appState.atlasSignInError { Text(error).font(.caption).foregroundStyle(FlowStyle.danger) }
-                if paired {
-                    HStack {
-                        Picker("Active client", selection: Binding(get: { assistant.saved.selectedClient ?? "" }, set: { reference in
-                            assistant.selectClient(reference.isEmpty ? nil : reference)
-                            Task { await assistant.refreshSelectedVocabulary() }
-                        })) {
-                            Text("No client").tag("")
-                            ForEach(assistant.saved.clients) { Text($0.name).tag($0.reference) }
-                        }
-                        .disabled(assistant.busy)
-                        Button("Refresh") { Task { await assistant.refreshClients() } }.disabled(assistant.busy)
-                    }
-                }
-            }
-            OnboardingCard {
-                HStack {
-                    Label("Meeting recording", systemImage: "person.2.wave.2").font(FlowStyle.body.weight(.medium))
-                    Spacer()
-                    Toggle("Record scheduled meetings automatically", isOn: $appState.settings.meetingModeEnabled)
-                        .labelsHidden().toggleStyle(.switch)
-                        .disabled(!paired)
-                        .onChange(of: appState.settings.meetingModeEnabled) { _, _ in appState.refreshMeetingConfiguration() }
-                }
-                Text(paired
-                     ? "When on, scheduled Google Meet calls are recorded as soon as you join, without asking, and uploaded to Atlas. When off, WhiskerFlow asks first."
-                     : "Connect Atlas first. Meetings are saved to your Atlas workspace.")
-                    .font(.caption).foregroundStyle(FlowStyle.muted)
-                Divider()
-                HStack {
-                    Text("Screen Recording").font(FlowStyle.callout)
-                    Spacer()
-                    OnboardingStatusBadge(granted: appState.hasScreenRecordingPermission)
-                    if !appState.hasScreenRecordingPermission {
-                        Button("Allow") {
-                            screenRecordingRequestedAt = Date()
-                            appState.requestScreenRecordingPermission()
-                            SystemSettingsLink.open(SystemSettingsLink.screenRecording)
-                        }
-                    }
-                }
-                Text("macOS calls meeting audio access Screen Recording. WhiskerFlow uses it to capture the meeting’s sound and see who’s speaking. Screen images are never saved or uploaded.")
-                    .font(.caption).foregroundStyle(FlowStyle.muted).fixedSize(horizontal: false, vertical: true)
-                if screenRecordingRequestedAt != nil && !appState.hasScreenRecordingPermission {
-                    HStack {
-                        Text("macOS applies this after WhiskerFlow restarts.").font(.caption).foregroundStyle(FlowStyle.muted)
-                        Spacer()
-                        Button("Relaunch WhiskerFlow") { AppRelauncher.relaunch() }
-                    }
-                }
-            }
-        }
-        .task(id: paired) {
-            if paired && assistant.saved.clients.isEmpty && !UIPreview.isEnabled { await assistant.refreshClients() }
-        }
-    }
-}
-
-// MARK: - 8. Done
+// MARK: - 4. Done
 
 struct OnboardingDoneStep: View {
     let appState: AppState
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         let presentation = DictationPresentation(appState: appState)
         VStack(spacing: 12) {
             OnboardingHeading(symbol: "checkmark.seal", title: "You’re all set.",
-                              detail: "Here’s everything you can do from the keyboard.")
+                              detail: "Click where you’d type in any app and \(presentation.gesture.lowercased()) \(appState.settings.hotkeySpokenName).")
             OnboardingCard {
-                shortcutRow(keys: appState.settings.hotkeyDisplayName, action: "Dictate", detail: presentation.gesture == "Hold" ? "Hold, speak, let go" : "Tap to start, tap to stop")
+                shortcutRow(keys: appState.settings.hotkeyDisplayName, action: "Dictate", detail: presentation.gesture == "Hold" ? "Hold, speak, let go" : "Press to start, press to stop")
                 shortcutRow(keys: "⎋ Esc", action: "Discard the dictation", detail: "Press while dictating")
                 Divider()
                 shortcutRow(keys: "⌥⇧⌘E", action: "Voice edit a selection", detail: "Hold and say how to change it")
@@ -744,8 +435,21 @@ struct OnboardingDoneStep: View {
                 Divider()
                 shortcutRow(keys: FlowDestination.shortcutRangeLabel, action: "Switch screens", detail: "In the WhiskerFlow window")
             }
-            Text("Change your dictation shortcut in Settings → Dictation. The ⌥⇧⌘ shortcuts are fixed. You can run this setup again from Help → Run Setup Again, the menu bar, or Settings → App.")
-                .font(.caption).foregroundStyle(FlowStyle.muted)
+            OnboardingCard {
+                Text("When you want them").font(FlowStyle.callout.weight(.medium))
+                    .accessibilityAddTraits(.isHeader)
+                extraRow(symbol: "person.2.wave.2", title: "Meeting recording",
+                         detail: "Record meetings to Atlas. Set it up in Settings → Meetings.",
+                         action: "Open Settings")
+                extraRow(symbol: "building.2", title: "Client vocabulary",
+                         detail: "Choose the client you’re working for in Assistant, so their names come out right.",
+                         action: nil)
+                extraRow(symbol: "keyboard", title: "Shortcut and language",
+                         detail: "Change them in Settings → Dictation.",
+                         action: "Open Settings")
+            }
+            Text("You can run setup again from Help → Run Setup Again, the menu bar or Settings → App.")
+                .font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 480)
         }
@@ -756,7 +460,26 @@ struct OnboardingDoneStep: View {
             FlowKeycap(title: keys, compact: true).frame(minWidth: 96, alignment: .leading)
             Text(action).font(FlowStyle.callout)
             Spacer()
-            Text(detail).font(.caption).foregroundStyle(FlowStyle.muted)
+            Text(detail).font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func extraRow(symbol: String, title: String, detail: String, action: String?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: symbol).foregroundStyle(FlowStyle.accent).frame(width: 20)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(FlowStyle.callout)
+                Text(detail).font(FlowStyle.caption).foregroundStyle(FlowStyle.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            Spacer()
+            if let action {
+                Button(action) { openSettings() }
+                    .accessibilityLabel("\(action.replacingOccurrences(of: "…", with: "")) for \(title.lowercased())")
+            }
         }
     }
 }
@@ -782,7 +505,7 @@ enum OnboardingPreview {
     }
 
     static var practice: (prompt: PracticePrompt, results: [PracticePrompt: String])? {
-        guard UIPreview.mode == "onboarding-practice" else { return nil }
+        guard UIPreview.mode == "onboarding-practice", UIPreview.onboardingModelPhase == nil else { return nil }
         return (.selfCorrection, [
             .sample: "WhiskerFlow turns what I say into text, right where my cursor is.",
             .selfCorrection: "Let’s meet at 3."
