@@ -1694,7 +1694,10 @@ final class AppState {
     private func beginRecording(sessionID: UUID) async {
         // Esc while the microphone opened holds the session until this start
         // has cleaned up, so its cleanup can never touch a newer dictation.
-        defer { recordingCoordinator.completeDiscard(sessionID) }
+        // Declared first, so it runs after the activity update below, which
+        // still saw the session finishing: update it again once it is released,
+        // or the latency-critical activity would be held with nothing recording.
+        defer { if recordingCoordinator.completeDiscard(sessionID) { updateDictationActivity() } }
         // Before the microphone: the warm-up runs on the Neural Engine while
         // capture starts on the main actor.
         startDictationWarmUp(sessionID: sessionID)
