@@ -73,6 +73,7 @@ final class AppState {
         var writing = WritingStyleResolution(category: .other, tone: .formal, source: .fallback)
         var recognizeCorrections = false
         var cleanupModel: CleanupModel?
+        var cleanupVariety: CleanupEnglishVariety = .british
         var hints: RecognizerHints = .none
         var purpose: AssistantController.CapturePurpose = .dictation
         var quickKind: AssistantRecordKind = .note
@@ -100,14 +101,9 @@ final class AppState {
         }
     }
 
-    /// How long a `.finishing` session may take before the UI is force-recovered.
-    /// Derived from the decode budget it backstops — a release can serially await
-    /// several live decodes — plus a margin, so only a genuine wedge trips it and a
-    /// merely slow decode is never reported as a timeout.
-    private static let finishWatchdogSeconds = Int(DecodeTimeoutPolicy.liveFinishBudget) + 15
     /// Upper bound on how long quitting waits for a transcript to finish saving.
-    /// A release-time live decode can take far longer on a slow Mac, so anything
-    /// still in flight when it runs out is filed for retry rather than waited on.
+    /// A release-time decode can take far longer on a slow Mac; its record is
+    /// already saved as transcribing, and the next launch marks it for retry.
     private static let shutdownDrainSeconds: TimeInterval = 5
     /// How often the Meetings view's free-space verdict is re-measured off-main.
     private static let meetingStorageRefreshSeconds: UInt64 = 60
@@ -222,22 +218,9 @@ final class AppState {
     private var activeTranscriptionIDs: Set<UUID> = []
     private var latestRecordingSessionID: UUID?
     private var latestDeliveryID: UUID?
-    /// The shutdown-drain token each in-flight finish holds, so the watchdog can
-    /// release it when it gives up on that finish instead of leaking it for the rest
-    /// of the process's life.
+    /// The shutdown-drain token each in-flight finish holds. Non-empty while a
+    /// dictation is still finishing, which keeps background retries off the status.
     private var finishWorkTokens: [UUID: UUID] = [:]
-    /// Sessions the finish watchdog gave up on. A finish that returns after its
-    /// session was abandoned must not paste, must not touch lifecycle UI a newer
-    /// session owns, and must not play sounds — it only files the transcript.
-    private var abandonedSessionIDs: Set<UUID> = []
-    /// The spooled audio of each finish still in flight. The streaming path only
-    /// files its record after the live decode and the paste, so a quit that
-    /// outlasts the drain would otherwise leave that audio referenced by nothing.
-    private var inFlightFinishAudio: [UUID: (url: URL, configuration: TranscriptionJobConfiguration)] = [:]
-    /// Sessions whose audio shutdown already filed as a retryable record, keyed
-    /// to that record, so a finish landing afterwards completes it instead of
-    /// adding a duplicate.
-    private var recoveryRecordIDs: [UUID: UUID] = [:]
     private var retryAllTask: Task<Void, Never>?
     private var meetingStorageTask: Task<Void, Never>?
     private var meetingStoragePollTask: Task<Void, Never>?
@@ -824,37 +807,7 @@ final class AppState {
             break
         }
 
-        guard await !pendingPersistWork.waitUntilIdle(timeout: Self.shutdownDrainSeconds) else { return }
-        fileInFlightFinishesForRecovery()
-    }
-
-    /// A release whose live decode outlasted the quit drain has no record yet.
-    /// File its audio as a failed record so it is in the retry queue on the next
-    /// launch instead of becoming an orphan the sweep deletes. A finish that lands
-    /// before the process exits completes that record rather than adding another.
-    private func fileInFlightFinishesForRecovery() {
-        for (sessionID, pending) in inFlightFinishAudio {
-            let record = TranscriptRecord(
-                text: "",
-                audioFilePath: pending.url.path,
-                createdAt: Date(),
-                status: .failed(errorMessage: "WhiskerFlow quit before transcription finished. Retry this recording."),
-                model: pending.configuration.engine.modelIdentifier,
-                engine: pending.configuration.engine.rawValue,
-                language: pending.configuration.language,
-                appCategory: pending.configuration.writing.category,
-                captureIntent: pending.configuration.captureIntent
-            )
-            do {
-                try store.add(record)
-            } catch {
-                noteHistoryFailure(error)
-            }
-            recoveryRecordIDs[sessionID] = record.id
-            abandonedSessionIDs.insert(sessionID)
-        }
-        inFlightFinishAudio = [:]
-        records = store.records
+        _ = await pendingPersistWork.waitUntilIdle(timeout: Self.shutdownDrainSeconds)
     }
 
     func warmUpEngine() {
@@ -2066,14 +2019,11 @@ final class AppState {
         defer { lifecycleLogger.info("Recording finish returned", metadata: ["event": "finish_returned", "session": "\(sessionID)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - finishStarted) * 1000)"]) }
 
         // Registered for the whole finish, so a quit landing mid-finish waits for
-        // the transcript instead of racing the store write. The watchdog needs to be
-        // able to release it too, or a finish it gave up on would keep every later
-        // quit waiting out the full drain budget for work that will never land.
+        // the transcript instead of racing the store write.
         let workToken = pendingPersistWork.begin()
         finishWorkTokens[sessionID] = workToken
         defer {
             finishWorkTokens[sessionID] = nil
-            inFlightFinishAudio[sessionID] = nil
             pendingPersistWork.end(workToken)
         }
 
@@ -2086,13 +2036,6 @@ final class AppState {
             category: "recording",
             metadata: ["phase": "finishing", "stop_reason": reason.diagnosticName]
         )
-        // A wedged CoreML decode never returns, so nothing below can unstick the
-        // UI on its own — this watchdog is the only way back to idle.
-        let watchdog = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(Self.finishWatchdogSeconds) * 1_000_000_000)
-            guard !Task.isCancelled else { return }
-            self?.abandonStuckFinish(sessionID: sessionID)
-        }
 
         var configuration = activeRecordingConfiguration ?? makeTranscriptionConfiguration()
         activeRecordingConfiguration = nil
@@ -2107,40 +2050,14 @@ final class AppState {
         if configuration.purpose == .dictation {
             lastWritingStyle = DictationStyleReceipt(resolution: configuration.writing, appName: pasteTarget?.localizedName)
         }
-        if let url = live.currentAudioURL {
-            inFlightFinishAudio[sessionID] = (url, configuration)
-        }
         let result = live.finish(reason: reason)
         lifecycleLogger.info("Capture stopped", metadata: ["event": "decode_returned", "session": "\(sessionID)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - finishStarted) * 1000)", "samples": "\(result.totalSampleCount)"])
-        watchdog.cancel()
-        let wasAbandoned = abandonedSessionIDs.remove(sessionID) != nil
         _ = recordingCoordinator.didFinish(sessionID)
-
-        if wasAbandoned {
-            // The watchdog already reported this session as timed out and released
-            // the coordinator, so the HUD text, the status and the paste target may
-            // all belong to a newer session by now. Deliver nothing and touch no
-            // lifecycle UI; the audio must still reach the retry queue.
-            logger.error("Finish returned after the watchdog")
-            DiagnosticsService.breadcrumb(
-                category: "recording",
-                metadata: ["phase": "finish_late", "recovered": "false"]
-            )
-            inFlightFinishAudio[sessionID] = nil
-            // Shutdown may already have filed this audio for retry.
-            if recoveryRecordIDs.removeValue(forKey: sessionID) == nil,
-               let url = result.audioURL, result.totalSampleCount > 0 {
-                fileTimedOutRecording(url: url, totalSampleCount: result.totalSampleCount,
-                                      configuration: configuration)
-            }
-            return
-        }
 
         if configuration.playSounds { soundService.play(.recordingStopped) }
         liveText = ""
 
         // Transcribe the captured samples (includes the Apple Speech fallback).
-        inFlightFinishAudio[sessionID] = nil
         if canUpdateLifecycleUI(for: sessionID) { status = .transcribing }
         await transcribeCapturedSamples(
             result.samples,
@@ -2250,36 +2167,6 @@ final class AppState {
         }
     }
 
-    private func abandonStuckFinish(sessionID: UUID) {
-        guard recordingCoordinator.phase == .finishing(sessionID) else { return }
-        lifecycleLogger.warning("Recording finish timed out", metadata: ["event": "finish_timeout", "session": "\(sessionID)"])
-        recordingCoordinator.forceIdle()
-        // Releasing the coordinator lets a new session start on top of this one, so
-        // stamp the abandoned session: whatever its finish eventually returns must
-        // not reach the pasteboard or the UI. Its drain token goes now too, or every
-        // later quit waits out the full budget for work that never lands.
-        abandonedSessionIDs.insert(sessionID)
-        if let token = finishWorkTokens.removeValue(forKey: sessionID) {
-            pendingPersistWork.end(token)
-        }
-        isRecording = false
-        isTranscribing = false
-        activeRecordingConfiguration = nil
-        logger.error(
-            "Finish watchdog fired",
-            metadata: ["timeout.seconds": "\(Self.finishWatchdogSeconds)"]
-        )
-        DiagnosticsService.breadcrumb(
-            category: "recording",
-            metadata: ["phase": "finish_timeout"]
-        )
-        DiagnosticsService.capture(
-            error: TranscriptionError.timedOut(seconds: Self.finishWatchdogSeconds),
-            category: "recording"
-        )
-        status = .failure("Transcription timed out")
-    }
-
     private func handleAudioConfigurationChange() {
         guard case .recording = recordingCoordinator.phase else { return }
         logger.error("Active microphone configuration changed")
@@ -2303,29 +2190,6 @@ final class AppState {
             refreshDevices()
             prepareNextCapture()
         }
-    }
-
-    /// Files a late finish that produced no usable transcript as a retryable
-    /// failure, so its audio stays in the retry queue instead of being orphaned.
-    private func fileTimedOutRecording(url: URL, totalSampleCount: Int, configuration: TranscriptionJobConfiguration) {
-        let record = TranscriptRecord(
-            text: "",
-            audioFilePath: url.path,
-            createdAt: Date(),
-            status: .failed(errorMessage: "Transcription timed out. Retry this recording."),
-            durationSeconds: Double(totalSampleCount) / 16_000,
-            model: configuration.engine.modelIdentifier,
-            engine: configuration.engine.rawValue,
-            language: configuration.language,
-            appCategory: configuration.writing.category,
-            captureIntent: configuration.captureIntent
-        )
-        do {
-            try store.add(record)
-        } catch {
-            noteHistoryFailure(error)
-        }
-        records = store.records
     }
 
     /// Persist captured audio for interrupted-decode recovery, then let Parakeet
@@ -2840,6 +2704,7 @@ final class AppState {
             writing: writing,
             recognizeCorrections: assistant.saved.recognizeCorrections,
             cleanupModel: usesCleanup ? .gemma4E2B : nil,
+            cleanupVariety: settings.cleanupVariety,
             hints: recognizerHints,
             purpose: assistant.capturePurpose,
             quickKind: assistant.quickCaptureKind,
@@ -2857,7 +2722,7 @@ final class AppState {
     private func cleanupText(_ text: String, configuration: TranscriptionJobConfiguration) async -> CleanupResult {
         guard let model = configuration.cleanupModel, configuration.writing.tone != .literal,
               configuration.purpose != .selectionInstruction else { return CleanupResult(text: text, outcome: "skipped") }
-        return await cleanup.clean(text, model: model, vocabulary: configuration.vocabulary)
+        return await cleanup.clean(text, model: model, vocabulary: configuration.vocabulary, variety: configuration.cleanupVariety)
     }
 
     /// Apple's speech model for the chosen language, if it isn't Parakeet's.

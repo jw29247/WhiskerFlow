@@ -32,12 +32,17 @@ final class CleanupService {
     private(set) var downloading = false
     private(set) var running = false
     private(set) var downloadProgress: Double = 0
+    /// How much of an interrupted download is on disk, from 0 to 1.
+    private(set) var resumableFraction: Double = 0
     private(set) var configuredModel: CleanupModel?
     private(set) var needsShutdown = false
     @ObservationIgnored private let worker = CleanupWorker()
     @ObservationIgnored private let logger = Logging.Logger(label: "agency.thatworks.WhiskerFlow.Cleanup")
     @ObservationIgnored private var idleTask: Task<Void, Never>?
     @ObservationIgnored private var downloadTask: Task<Void, Never>?
+    @ObservationIgnored private var activeDownload: ResumableModelDownload?
+    @ObservationIgnored private var discardingDownload = false
+    @ObservationIgnored private let downloadTransport: ModelDownloadTransport
     @ObservationIgnored private var warmTask: Task<Void, Never>?
     @ObservationIgnored private var pressure: DispatchSourceMemoryPressure?
     @ObservationIgnored private var pressureUntil = Date.distantPast
@@ -47,7 +52,15 @@ final class CleanupService {
         ProcessInfo.processInfo.physicalMemory >= 8 * 1_073_741_824
     }
 
-    init() {
+    init(downloadTransport: ModelDownloadTransport = URLSessionModelDownloadTransport()) {
+        self.downloadTransport = downloadTransport
+        // Only looks for a partial file; a download never starts by itself.
+        resumableFraction = Self.modelDownload(.gemma4E2B, transport: downloadTransport).resumableFraction
+        #if DEBUG
+        // `--ui-state=cleanup-partial` and `cleanup-downloading` preview an interrupted download.
+        if UIPreview.mode == "cleanup-partial" { resumableFraction = 0.42 }
+        if UIPreview.mode == "cleanup-downloading" { downloading = true; downloadProgress = 0.42; status = "Resuming Gemma 4 E2B download" }
+        #endif
         let source = DispatchSource.makeMemoryPressureSource(eventMask: [.normal, .warning, .critical], queue: .main)
         source.setEventHandler { [weak self] in
             MainActor.assumeIsolated { self?.memoryPressureChanged() }
@@ -69,7 +82,7 @@ final class CleanupService {
 
     func installed(_ model: CleanupModel) -> Bool {
         // `--ui-state=cleanup-missing` previews Settings before the download.
-        if UIPreview.mode == "cleanup-missing" { return false }
+        if ["cleanup-missing", "cleanup-partial", "cleanup-downloading"].contains(UIPreview.mode) { return false }
         return CleanupWorker.isInstalled(model)
     }
 
@@ -96,7 +109,8 @@ final class CleanupService {
         }
     }
 
-    func clean(_ raw: String, model: CleanupModel, vocabulary: Vocabulary = Vocabulary()) async -> CleanupResult {
+    func clean(_ raw: String, model: CleanupModel, vocabulary: Vocabulary = Vocabulary(),
+               variety: CleanupEnglishVariety = .british) async -> CleanupResult {
         let original = configuredModel == model ? DictatedNumberFormatter.format(raw) : raw
         guard configuredModel == model, !running, !downloading, canRun(model), installed(model),
               !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -114,7 +128,7 @@ final class CleanupService {
         status = "Cleaning up"
         let identifier = configurationID
         let started = ProcessInfo.processInfo.systemUptime
-        let result = await runCleanup(original, raw: raw, model: model, vocabulary: vocabulary,
+        let result = await runCleanup(original, raw: raw, model: model, vocabulary: vocabulary, variety: variety,
                                       identifier: identifier, started: started)
         running = false
         lastRun = result.summary
@@ -128,7 +142,7 @@ final class CleanupService {
     }
 
     private func runCleanup(_ original: String, raw: String, model: CleanupModel, vocabulary: Vocabulary,
-                            identifier: UUID, started: TimeInterval) async -> CleanupResult {
+                            variety: CleanupEnglishVariety, identifier: UUID, started: TimeInterval) async -> CleanupResult {
         var outcome = "failed"
         defer {
             logger.info("Cleanup finished", metadata: ["event": "cleanup_finished", "cleanup_outcome": "\(outcome)", "elapsed_ms": "\((ProcessInfo.processInfo.systemUptime - started) * 1000)"])
@@ -137,7 +151,7 @@ final class CleanupService {
             let worker = self.worker
             let seconds: TimeInterval = original.count > 800 ? 8 : 3
             let attempt = try await withAbandoningDeadline(seconds: seconds) {
-                try await worker.cleanTranscript(original, model: model, seconds: seconds, vocabulary: vocabulary)
+                try await worker.cleanTranscript(original, model: model, seconds: seconds, vocabulary: vocabulary, variety: variety)
             }
             guard configurationID == identifier, !Task.isCancelled else {
                 outcome = "cancelled"
@@ -190,41 +204,77 @@ final class CleanupService {
         }
     }
 
+    static func modelDownload(_ model: CleanupModel, transport: ModelDownloadTransport) -> ResumableModelDownload {
+        ResumableModelDownload(source: model.downloadURL, byteCount: model.byteCount,
+                               destination: CleanupWorker.file(for: model), transport: transport)
+    }
+
+    /// Starts the download, or resumes an interrupted one from the bytes
+    /// already on disk. Only runs when the person asks for it.
     func download(_ model: CleanupModel, completion: @escaping @MainActor () -> Void) {
         guard !downloading else { return }
+        let download = Self.modelDownload(model, transport: downloadTransport)
+        let resumed = download.resumableFraction
         downloading = true
+        discardingDownload = false
         needsShutdown = true
-        downloadProgress = 0
-        status = "Downloading \(model.name)"
+        activeDownload = download
+        downloadProgress = resumed
+        status = resumed > 0 ? "Resuming \(model.name) download" : "Downloading \(model.name)"
         downloadTask = Task { [weak self] in
             guard let self else { return }
-            defer { self.downloading = false; self.downloadTask = nil }
+            defer {
+                self.downloading = false
+                self.downloadTask = nil
+                self.activeDownload = nil
+                self.resumableFraction = download.resumableFraction
+            }
             do {
-                let download = CleanupDownload { [weak self] progress in
-                    Task { @MainActor in self?.downloadProgress = progress }
-                }
-                let temporary = try await download.fetch(model.downloadURL)
-                defer { try? FileManager.default.removeItem(at: temporary) }
-                self.status = "Checking download"
-                let validation = Task.detached(priority: .utility) { try CleanupWorker.validate(temporary, model: model) }
-                try await withTaskCancellationHandler { try await validation.value } onCancel: { validation.cancel() }
-                try Task.checkCancellation()
-                try FileManager.default.createDirectory(at: CleanupWorker.directory, withIntermediateDirectories: true)
-                let destination = CleanupWorker.file(for: model)
-                if FileManager.default.fileExists(atPath: destination.path) {
-                    _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
-                } else {
-                    try FileManager.default.moveItem(at: temporary, to: destination)
-                }
+                // The finished file is checked against the pinned SHA-256
+                // before it replaces anything; a mismatch is deleted.
+                try await download.install(verify: { try CleanupWorker.validate($0, model: model) },
+                                           verifying: { @MainActor [weak self] in self?.status = "Checking download" },
+                                           progress: { [weak self] progress in
+                                               Task { @MainActor in
+                                                   guard let self, self.downloading else { return }
+                                                   // A clear drop means the server no longer had the same
+                                                   // file and the download began again: show that.
+                                                   if progress + 0.01 < self.downloadProgress {
+                                                       self.status = "Starting the \(model.name) download again"
+                                                   }
+                                                   self.downloadProgress = progress
+                                               }
+                                           })
                 self.status = "Downloaded"
                 completion()
             } catch {
-                self.status = Task.isCancelled ? "Download cancelled" : "Download failed. Try again."
+                if Task.isCancelled {
+                    self.status = self.discardingDownload ? "Download cancelled" : "Download paused"
+                } else if (error as? ResumableModelDownloadError) == .verificationFailed {
+                    self.status = "The download didn't match the expected file and was deleted. Try again."
+                } else {
+                    self.status = download.resumableBytes > 0 ? "Download stopped. Resume to carry on where it left off."
+                        : "Download failed. Try again."
+                }
             }
         }
     }
 
-    func cancelDownload() { downloadTask?.cancel() }
+    /// Stops the download and deletes what has downloaded so far.
+    func cancelDownload() {
+        discardingDownload = true
+        activeDownload?.requestDiscard()
+        downloadTask?.cancel()
+    }
+
+    /// Deletes an interrupted download that isn't running.
+    func discardPartialDownload(_ model: CleanupModel) {
+        guard !downloading else { return }
+        let download = Self.modelDownload(model, transport: downloadTransport)
+        download.discardPartial()
+        resumableFraction = download.resumableFraction
+        status = "Download cancelled"
+    }
 
     func shutdown() async {
         configure(model: nil, enabled: false)
@@ -276,21 +326,4 @@ final class CleanupService {
     }
 
     deinit { pressure?.cancel(); idleTask?.cancel(); downloadTask?.cancel(); warmTask?.cancel(); worker.unload() }
-}
-
-private final class CleanupDownload: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    private let progress: @Sendable (Double) -> Void
-    init(progress: @escaping @Sendable (Double) -> Void) { self.progress = progress }
-    func fetch(_ url: URL) async throws -> URL {
-        let session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
-        let (temporary, response) = try await session.download(from: url)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-        return temporary
-    }
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
-                    totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        if totalBytesExpectedToWrite > 0 { progress(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)) }
-    }
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
 }

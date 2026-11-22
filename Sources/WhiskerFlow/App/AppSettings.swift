@@ -28,6 +28,9 @@ final class AppSettings {
     /// Write dictation in another language in English (on-device translation).
     var translateToEnglish: Bool { didSet { defaults.set(translateToEnglish, forKey: Keys.translateToEnglish) } }
     var cleanupEnabled: Bool { didSet { defaults.set(cleanupEnabled, forKey: "cleanupEnabled") } }
+    /// The English spelling Cleanup writes. Set from the Mac's region the
+    /// first time it's read, then kept.
+    var cleanupVariety: CleanupEnglishVariety { didSet { defaults.set(cleanupVariety.rawValue, forKey: Keys.cleanupVariety) } }
     var hotkey: HotkeyTrigger { didSet { defaults.set(hotkey.rawValue, forKey: Keys.hotkey) } }
     /// The key combination used when `hotkey == .custom`.
     var customHotkey: KeyCombo { didSet { persist(customHotkey, key: Keys.customHotkey) } }
@@ -203,7 +206,7 @@ final class AppSettings {
     @ObservationIgnored let launchAtLogin: LaunchAtLoginController
 
     init(defaults: UserDefaults = .standard, meetingTokenStore: MeetingCaptureTokenStore = MeetingCaptureTokenStore(),
-         loginItemService: LoginItemService? = nil) {
+         loginItemService: LoginItemService? = nil, region: String? = Locale.current.region?.identifier) {
         self.defaults = defaults
         self.meetingTokenStore = meetingTokenStore
         hadPreviousLaunch = Keys.previousLaunchMarkers.contains { defaults.object(forKey: $0) != nil }
@@ -222,6 +225,13 @@ final class AppSettings {
         language = initialLanguage
         translateToEnglish = defaults.object(forKey: Keys.translateToEnglish) as? Bool ?? true
         cleanupEnabled = defaults.bool(forKey: "cleanupEnabled")
+        if let stored = defaults.string(forKey: Keys.cleanupVariety).flatMap(CleanupEnglishVariety.init) {
+            cleanupVariety = stored
+        } else {
+            let derived = CleanupEnglishVariety.default(forRegion: region)
+            cleanupVariety = derived
+            defaults.set(derived.rawValue, forKey: Keys.cleanupVariety)
+        }
         hotkey = defaults.string(forKey: Keys.hotkey).flatMap(HotkeyTrigger.init) ?? .fn
         customHotkey = Self.loadCustomHotkey(from: defaults) ?? .default
         recordingMode = defaults.string(forKey: Keys.recordingMode).flatMap(RecordingMode.init) ?? .holdToTalk
@@ -414,6 +424,7 @@ final class AppSettings {
             "model", "whisperCommand", "whisperArguments", "dictionaryBiasWhisperKit", "parakeetTDTv3DefaultMigrated",
         ]
         static let language = "language"
+        static let cleanupVariety = "cleanupEnglishVariety"
         static let languageAutoMigrated = "languageAutoMigrated"
         static let hotkey = "hotkey"
         static let customHotkey = "customHotkey"

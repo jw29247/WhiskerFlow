@@ -71,12 +71,14 @@ final class CleanupWorker: @unchecked Sendable {
         } onCancel: { control.cancel() }
     }
 
-    func generate(_ text: String, model: CleanupModel, seconds: TimeInterval, vocabulary: Vocabulary = Vocabulary()) async throws -> String {
-        try await generatePrompt(TranscriptCleanup.prompt(for: text, vocabulary: vocabulary, model: model), model: model,
+    func generate(_ text: String, model: CleanupModel, seconds: TimeInterval, vocabulary: Vocabulary = Vocabulary(),
+                  variety: CleanupEnglishVariety = .british) async throws -> String {
+        try await generatePrompt(TranscriptCleanup.prompt(for: text, vocabulary: vocabulary, model: model, variety: variety), model: model,
                                  tokenLimit: min(1800, max(80, text.utf8.count / 2 + 40)), seconds: seconds)
     }
 
-    func cleanTranscript(_ raw: String, model: CleanupModel, seconds: TimeInterval, vocabulary: Vocabulary) async throws -> CleanupAttempt {
+    func cleanTranscript(_ raw: String, model: CleanupModel, seconds: TimeInterval, vocabulary: Vocabulary,
+                         variety: CleanupEnglishVariety = .british) async throws -> CleanupAttempt {
         let text = DictatedNumberFormatter.format(raw)
         let started = ProcessInfo.processInfo.systemUptime
         var candidates = "", delivered = "", rejected = 0
@@ -87,7 +89,7 @@ final class CleanupWorker: @unchecked Sendable {
             let candidate: String
             do {
                 guard remaining > 0.15 else { throw CleanupFailure.interrupted }
-                candidate = try await generate(segment.text, model: model, seconds: remaining - 0.1, vocabulary: vocabulary)
+                candidate = try await generate(segment.text, model: model, seconds: remaining - 0.1, vocabulary: vocabulary, variety: variety)
             } catch CleanupFailure.interrupted {
                 try Task.checkCancellation()
                 let untouched = segments[index...].map { $0.text + $0.suffix }.joined()

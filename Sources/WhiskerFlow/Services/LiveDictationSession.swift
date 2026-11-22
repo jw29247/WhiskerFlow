@@ -28,9 +28,6 @@ final class LiveDictationSession {
     private var tone: WritingTone = .formal
     private var recognizeCorrections = false
     private var formatting = FormattingOptions()
-    /// Spool of the session in progress, known from `start()` so the caller can
-    /// file the audio for recovery before the release-time decode runs.
-    private(set) var currentAudioURL: URL?
     private var isRunning = false
     /// Bumped by every `start()`. A preview that was in flight when the session
     /// restarted belongs to the previous generation and must not reach the HUD.
@@ -68,11 +65,9 @@ final class LiveDictationSession {
         self.recognizeCorrections = recognizeCorrections
         self.formatting = formatting
         generation &+= 1
-        currentAudioURL = nil
         do {
             let audioURL = try AudioFileWriter.makeRecordingURL()
             try await audioCapture.start(selection: selection, spoolTo: audioURL)
-            currentAudioURL = audioURL
             isRunning = true
         } catch {
             isRunning = false
@@ -96,7 +91,6 @@ final class LiveDictationSession {
         // inside the model, never for the loop to wind down.
         previewLoop?.cancel()
         previewLoop = nil
-        currentAudioURL = nil
         let captured = audioCapture.stop(reason: reason)
         onLevel?(0, 0)
         return (captured.samples, captured.conversionFailureCount, captured.audioURL,
@@ -126,7 +120,6 @@ final class LiveDictationSession {
         previewLoop?.cancel()
         previewLoop = nil
         audioCapture.cancel()
-        currentAudioURL = nil
         onLevel?(0, 0)
     }
 

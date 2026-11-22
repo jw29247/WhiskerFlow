@@ -27,26 +27,6 @@ final class DecodeTimeoutPolicyTests: XCTestCase {
         XCTAssertEqual(DecodeTimeoutPolicy.timeout(forAudioSeconds: 5.001, scale: 1), 30.003, accuracy: 0.0001)
     }
 
-    func testLivePartialTimeoutIsShorterThanAnyFileDecodeBudget() {
-        XCTAssertEqual(DecodeTimeoutPolicy.baseLivePartialTimeout, 20)
-        XCTAssertEqual(
-            DecodeTimeoutPolicy.livePartialTimeout,
-            DecodeTimeoutPolicy.baseLivePartialTimeout * DecodeTimeoutPolicy.hardwareScale
-        )
-        XCTAssertLessThan(DecodeTimeoutPolicy.livePartialTimeout, DecodeTimeoutPolicy.timeout(forAudioSeconds: 0))
-    }
-
-    /// A release awaits several live decodes one after another, and the finish
-    /// watchdog is derived from this so a slow-but-healthy release is never reported
-    /// as a timeout.
-    func testFinishBudgetCoversEveryLiveDecodeAReleaseCanAwait() {
-        XCTAssertEqual(
-            DecodeTimeoutPolicy.liveFinishBudget,
-            DecodeTimeoutPolicy.livePartialTimeout * Double(DecodeTimeoutPolicy.livePartialsPerRelease)
-        )
-        XCTAssertGreaterThanOrEqual(DecodeTimeoutPolicy.livePartialsPerRelease, 3)
-    }
-
     /// Budgets are tuned on a 16 GB Apple Silicon Mac; a base 8 GB machine
     /// gets proportionally longer before a slow decode counts as wedged.
     func testSlowerHardwareGetsProportionallyLongerBudgets() {
