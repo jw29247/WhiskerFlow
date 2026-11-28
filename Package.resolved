@@ -1,13 +1,13 @@
 {
-  "originHash" : "f9e822abac65df8bfda33b720a84c7130868eb1dd9b7eff48a456c24b8e4de89",
+  "originHash" : "eb9c439a3701c0624e81dbc91e1789894843f552bbfbc97f0a2e1e9c23803097",
   "pins" : [
     {
       "identity" : "fluidaudio",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/FluidInference/FluidAudio.git",
       "state" : {
-        "revision" : "4dbf4f9f9a5ff3a53ade848d7ba4e3df13db859b",
-        "version" : "0.15.6"
+        "revision" : "e0c6103bc87a88d25276cad491c86e757f58c865",
+        "version" : "0.18.4"
       }
     },
     {
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sparkle-project/Sparkle",
       "state" : {
-        "revision" : "d46d456107feacc80711b21847b82b07bd9fb46e",
-        "version" : "2.9.3"
+        "revision" : "ab7d71291238df6e0492143b120c9b696a35f603",
+        "version" : "2.10.1"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "a878e7f8f46cfc0e1125e565b5c08e7d5272dc9a",
-        "version" : "1.14.0"
+        "revision" : "c7413d967b97aae67c46452bf7645bdb7b200e8e",
+        "version" : "1.17.2"
       }
     }
   ],

@@ -17,7 +17,7 @@ let package = Package(
     ],
     dependencies: [
         // Parakeet TDT v3 provides the fast, high-quality on-device default.
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.15.6"),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", exact: "0.18.4"),
         // In-app auto-updates (appcast + EdDSA-signed updates). Sparkle ships as a
         // binary XCFramework; `script/bundle_app.sh` embeds & re-signs it.
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
